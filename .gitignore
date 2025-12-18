@@ -22,3 +22,22 @@
 Homestead.json
 Homestead.yaml
 Thumbs.db
+
+# Claude/AI
+/.claude
+/.junie
+.mcp.json
+
+# Documentation (internal)
+API_DOCUMENTATION.md
+CLAUDE.md
+COMANDOS-CORRECTOS.md
+COMANDOS-PASO-A-PASO.md
+COMO-USAR-DOCKER.md
+CONFIGURACION-FRONTEND.md
+DOCKER-SETUP.md
+EJECUTAR-AHORA.md
+GUIA-COMPLETA-URLS.md
+SOLUCION-CORS.md
+TESTS-FLUJOS.md
+VERIFICACION-SISTEMA.md
