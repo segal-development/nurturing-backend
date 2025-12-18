@@ -1,0 +1,11 @@
+{
+    "mcpServers": {
+        "laravel-boost": {
+            "command": "/Users/marceloyvale/Library/Application Support/Herd/bin/php82",
+            "args": [
+                "/Users/marceloyvale/Desktop/Grupo-Segal/nurturing-backend/artisan",
+                "boost:mcp"
+            ]
+        }
+    }
+}

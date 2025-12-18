@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test CORS - Laravel Backend</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 30px;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            margin: 5px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        .success {
+            background: #28a745;
+        }
+        .success:hover {
+            background: #218838;
+        }
+        .warning {
+            background: #ffc107;
+        }
+        .warning:hover {
+            background: #e0a800;
+        }
+        #output {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 4px;
+            border-left: 4px solid #007bff;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+        }
+        .error {
+            border-left-color: #dc3545;
+            background: #f8d7da;
+            color: #721c24;
+        }
+        .success-msg {
+            border-left-color: #28a745;
+            background: #d4edda;
+            color: #155724;
+        }
+        .section {
+            margin: 20px 0;
+            padding: 15px;
+            background: #e9ecef;
+            border-radius: 4px;
+        }
+        .credentials {
+            background: #fff3cd;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🧪 Test de Autenticación - Laravel Backend</h1>
+
+        <div class="credentials">
+            <strong>📋 Credenciales de Prueba:</strong><br>
+            Email: <code>admin@test.com</code><br>
+            Password: <code>password123</code>
+        </div>
+
+        <div class="section">
+            <h3>1️⃣ Test CORS</h3>
+            <button onclick="testCsrf()">Test CSRF Cookie</button>
+            <button onclick="testCors()" class="success">Test CORS Headers</button>
+        </div>
+
+        <div class="section">
+            <h3>2️⃣ Test Autenticación</h3>
+            <button onclick="testLogin()">Login</button>
+            <button onclick="testMe()" class="warning">Get User</button>
+            <button onclick="testLogout()">Logout</button>
+        </div>
+
+        <div class="section">
+            <h3>3️⃣ Test Completo</h3>
+            <button onclick="testFullFlow()" class="success">Flujo Completo (CSRF → Login → Me → Logout)</button>
+        </div>
+
+        <div id="output"></div>
+    </div>
+
+    <script>
+        const API_URL = 'http://localhost:8080';
+        const outputDiv = document.getElementById('output');
+
+        function log(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            outputDiv.className = type === 'error' ? 'error' : type === 'success' ? 'success-msg' : '';
+            outputDiv.innerHTML += `[${timestamp}] ${message}\n\n`;
+        }
+
+        function clearOutput() {
+            outputDiv.innerHTML = '';
+            outputDiv.className = '';
+        }
+
+        async function testCors() {
+            clearOutput();
+            log('🔍 Testeando CORS headers...');
+
+            try {
+                const response = await fetch(`${API_URL}/api/me`, {
+                    method: 'GET',
+                    credentials: 'include',
+                    headers: {
+                        'Accept': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                });
+
+                log(`✅ CORS OK - Status: ${response.status}`);
+                log(`Headers recibidos:
+  Access-Control-Allow-Origin: ${response.headers.get('Access-Control-Allow-Origin')}
+  Access-Control-Allow-Credentials: ${response.headers.get('Access-Control-Allow-Credentials')}`, 'success');
+            } catch (error) {
+                log(`❌ Error CORS: ${error.message}`, 'error');
+            }
+        }
+
+        async function testCsrf() {
+            clearOutput();
+            log('🔐 Obteniendo CSRF token...');
+
+            try {
+                const response = await fetch(`${API_URL}/sanctum/csrf-cookie`, {
+                    method: 'GET',
+                    credentials: 'include',
+                    headers: {
+                        'Accept': 'application/json'
+                    }
+                });
+
+                if (response.ok) {
+                    log(`✅ CSRF token obtenido (Status: ${response.status})`, 'success');
+                    log('Cookies guardadas en el navegador. Revisa Application → Cookies en DevTools');
+                } else {
+                    log(`❌ Error: ${response.status} ${response.statusText}`, 'error');
+                }
+            } catch (error) {
+                log(`❌ Error: ${error.message}`, 'error');
+            }
+        }
+
+        async function testLogin() {
+            clearOutput();
+            log('1️⃣ Obteniendo CSRF token...');
+
+            try {
+                // 1. CSRF
+                await fetch(`${API_URL}/sanctum/csrf-cookie`, {
+                    method: 'GET',
+                    credentials: 'include',
+                    headers: { 'Accept': 'application/json' }
+                });
+                log('✅ CSRF token obtenido');
+
+                // 2. Login
+                log('\n2️⃣ Haciendo login...');
+                const response = await fetch(`${API_URL}/api/login`, {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: {
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    },
+                    body: JSON.stringify({
+                        email: 'admin@test.com',
+                        password: 'password123'
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    log(`✅ Login exitoso!`, 'success');
+                    log(`Usuario: ${JSON.stringify(data.user, null, 2)}`);
+                } else {
+                    log(`❌ Login fallido: ${JSON.stringify(data, null, 2)}`, 'error');
+                }
+            } catch (error) {
+                log(`❌ Error: ${error.message}`, 'error');
+            }
+        }
+
+        async function testMe() {
+            clearOutput();
+            log('👤 Obteniendo usuario actual...');
+
+            try {
+                const response = await fetch(`${API_URL}/api/me`, {
+                    method: 'GET',
+                    credentials: 'include',
+                    headers: {
+                        'Accept': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    log(`✅ Usuario autenticado:`, 'success');
+                    log(JSON.stringify(data, null, 2));
+                } else {
+                    log(`❌ No autenticado: ${JSON.stringify(data, null, 2)}`, 'error');
+                }
+            } catch (error) {
+                log(`❌ Error: ${error.message}`, 'error');
+            }
+        }
+
+        async function testLogout() {
+            clearOutput();
+            log('🚪 Cerrando sesión...');
+
+            try {
+                const response = await fetch(`${API_URL}/api/logout`, {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: {
+                        'Accept': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    log(`✅ Logout exitoso: ${data.message}`, 'success');
+                } else {
+                    log(`❌ Error: ${JSON.stringify(data, null, 2)}`, 'error');
+                }
+            } catch (error) {
+                log(`❌ Error: ${error.message}`, 'error');
+            }
+        }
+
+        async function testFullFlow() {
+            clearOutput();
+            log('🔄 Iniciando flujo completo de autenticación...\n');
+
+            try {
+                // 1. CSRF
+                log('1️⃣ Obteniendo CSRF token...');
+                await fetch(`${API_URL}/sanctum/csrf-cookie`, {
+                    credentials: 'include',
+                    headers: { 'Accept': 'application/json' }
+                });
+                log('   ✅ CSRF OK\n');
+
+                // 2. Login
+                log('2️⃣ Haciendo login...');
+                const loginResponse = await fetch(`${API_URL}/api/login`, {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: {
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    },
+                    body: JSON.stringify({
+                        email: 'admin@test.com',
+                        password: 'password123'
+                    })
+                });
+                const loginData = await loginResponse.json();
+                if (!loginResponse.ok) throw new Error('Login falló');
+                log(`   ✅ Login OK - Usuario: ${loginData.user.name}\n`);
+
+                // 3. Get User
+                log('3️⃣ Obteniendo usuario actual...');
+                const meResponse = await fetch(`${API_URL}/api/me`, {
+                    credentials: 'include',
+                    headers: {
+                        'Accept': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                });
+                const meData = await meResponse.json();
+                if (!meResponse.ok) throw new Error('Get user falló');
+                log(`   ✅ Usuario autenticado: ${meData.user.email}\n`);
+
+                // 4. Logout
+                log('4️⃣ Cerrando sesión...');
+                const logoutResponse = await fetch(`${API_URL}/api/logout`, {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: {
+                        'Accept': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                });
+                if (!logoutResponse.ok) throw new Error('Logout falló');
+                log('   ✅ Logout OK\n');
+
+                log('🎉 ¡FLUJO COMPLETO EXITOSO!\n\nEl backend está configurado correctamente.', 'success');
+            } catch (error) {
+                log(`\n❌ Error en el flujo: ${error.message}`, 'error');
+            }
+        }
+
+        // Auto-test al cargar
+        window.addEventListener('load', () => {
+            log('🚀 Página cargada. Haz click en los botones para probar.\n');
+            log('📍 Backend URL: ' + API_URL);
+            log('📍 Frontend URL: ' + window.location.origin + '\n');
+            log('⚠️  IMPORTANTE: Abre este archivo desde un servidor web (no file://)');
+            log('   Puedes usar: python3 -m http.server 5173\n');
+        });
+    </script>
+</body>
+</html>

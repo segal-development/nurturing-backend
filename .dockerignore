@@ -1,0 +1,47 @@
+# Git
+.git
+.gitignore
+
+# Node
+node_modules
+npm-debug.log
+
+# Composer
+vendor/
+# composer.lock - NECESARIO para Docker build
+
+# Laravel
+storage/framework/cache/*
+storage/framework/sessions/*
+storage/framework/testing/*
+storage/framework/views/*
+storage/logs/*
+bootstrap/cache/*
+.env.backup
+.env.production
+# .env - Docker usará .env.docker montado como volumen
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Tests
+tests/
+phpunit.xml
+
+# Documentation
+README.md
+CHANGELOG.md
+docs/
+
+# Docker
+docker-compose*.yml
+Dockerfile*
+.dockerignore
