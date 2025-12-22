@@ -23,11 +23,12 @@ class EnvioController extends Controller
         $estadisticasPorDia = Envio::whereBetween('fecha_enviado', [$fechaInicio, $fechaFin])
             ->select(
                 DB::raw('DATE(fecha_enviado) as fecha'),
-                DB::raw('COUNT(*) as total_envios'),
+                DB::raw('COUNT(*) as total'),
                 DB::raw("SUM(CASE WHEN estado = 'enviado' THEN 1 ELSE 0 END) as exitosos"),
                 DB::raw("SUM(CASE WHEN estado = 'fallido' THEN 1 ELSE 0 END) as fallidos"),
-                DB::raw("SUM(CASE WHEN canal = 'email' THEN 1 ELSE 0 END) as emails"),
-                DB::raw("SUM(CASE WHEN canal = 'sms' THEN 1 ELSE 0 END) as sms")
+                DB::raw("SUM(CASE WHEN estado = 'pendiente' THEN 1 ELSE 0 END) as pendientes"),
+                DB::raw("SUM(CASE WHEN canal = 'email' THEN 1 ELSE 0 END) as email_count"),
+                DB::raw("SUM(CASE WHEN canal = 'sms' THEN 1 ELSE 0 END) as sms_count")
             )
             ->groupBy('fecha')
             ->orderBy('fecha', 'desc')
@@ -36,23 +37,24 @@ class EnvioController extends Controller
         // Estadísticas totales del período
         $totales = Envio::whereBetween('fecha_enviado', [$fechaInicio, $fechaFin])
             ->selectRaw("
-                COUNT(*) as total_envios,
+                COUNT(*) as total,
                 SUM(CASE WHEN estado = 'enviado' THEN 1 ELSE 0 END) as exitosos,
                 SUM(CASE WHEN estado = 'fallido' THEN 1 ELSE 0 END) as fallidos,
-                SUM(CASE WHEN canal = 'email' THEN 1 ELSE 0 END) as emails,
-                SUM(CASE WHEN canal = 'sms' THEN 1 ELSE 0 END) as sms
+                SUM(CASE WHEN estado = 'pendiente' THEN 1 ELSE 0 END) as pendientes
             ")
             ->first();
 
         return response()->json([
-            'error' => false,
-            'data' => [
-                'por_dia' => $estadisticasPorDia,
-                'totales' => $totales,
-                'periodo' => [
-                    'fecha_inicio' => $fechaInicio,
-                    'fecha_fin' => $fechaFin,
-                ],
+            'periodo' => [
+                'fecha_inicio' => $fechaInicio,
+                'fecha_fin' => $fechaFin,
+            ],
+            'estadisticas' => $estadisticasPorDia,
+            'resumen' => [
+                'total' => (int) ($totales->total ?? 0),
+                'exitosos' => (int) ($totales->exitosos ?? 0),
+                'fallidos' => (int) ($totales->fallidos ?? 0),
+                'pendientes' => (int) ($totales->pendientes ?? 0),
             ],
         ]);
     }
