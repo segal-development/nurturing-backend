@@ -35,13 +35,13 @@ class EnvioController extends Controller
 
         // Estadísticas totales del período
         $totales = Envio::whereBetween('fecha_enviado', [$fechaInicio, $fechaFin])
-            ->selectRaw('
+            ->selectRaw("
                 COUNT(*) as total_envios,
-                SUM(CASE WHEN estado = "enviado" THEN 1 ELSE 0 END) as exitosos,
-                SUM(CASE WHEN estado = "fallido" THEN 1 ELSE 0 END) as fallidos,
-                SUM(CASE WHEN canal = "email" THEN 1 ELSE 0 END) as emails,
-                SUM(CASE WHEN canal = "sms" THEN 1 ELSE 0 END) as sms
-            ')
+                SUM(CASE WHEN estado = 'enviado' THEN 1 ELSE 0 END) as exitosos,
+                SUM(CASE WHEN estado = 'fallido' THEN 1 ELSE 0 END) as fallidos,
+                SUM(CASE WHEN canal = 'email' THEN 1 ELSE 0 END) as emails,
+                SUM(CASE WHEN canal = 'sms' THEN 1 ELSE 0 END) as sms
+            ")
             ->first();
 
         return response()->json([
@@ -67,13 +67,13 @@ class EnvioController extends Controller
         $hoy = now()->startOfDay();
 
         $estadisticas = Envio::whereDate('fecha_enviado', $hoy)
-            ->selectRaw('
+            ->selectRaw("
                 COUNT(*) as total_envios,
-                SUM(CASE WHEN estado = "enviado" THEN 1 ELSE 0 END) as exitosos,
-                SUM(CASE WHEN estado = "fallido" THEN 1 ELSE 0 END) as fallidos,
-                SUM(CASE WHEN canal = "email" THEN 1 ELSE 0 END) as emails,
-                SUM(CASE WHEN canal = "sms" THEN 1 ELSE 0 END) as sms
-            ')
+                SUM(CASE WHEN estado = 'enviado' THEN 1 ELSE 0 END) as exitosos,
+                SUM(CASE WHEN estado = 'fallido' THEN 1 ELSE 0 END) as fallidos,
+                SUM(CASE WHEN canal = 'email' THEN 1 ELSE 0 END) as emails,
+                SUM(CASE WHEN canal = 'sms' THEN 1 ELSE 0 END) as sms
+            ")
             ->first();
 
         return response()->json([
