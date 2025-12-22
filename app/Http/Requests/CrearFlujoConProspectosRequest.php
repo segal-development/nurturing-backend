@@ -28,7 +28,8 @@ class CrearFlujoConProspectosRequest extends FormRequest
             'flujo' => ['nullable', 'array'],
             'flujo.nombre' => ['nullable', 'string', 'max:255'],
             'flujo.descripcion' => ['nullable', 'string'],
-            'flujo.tipo_prospecto' => ['nullable', 'string', 'max:255'],
+            // Acepta ID numérico o nombre string
+            'flujo.tipo_prospecto' => ['nullable'],
             'flujo.activo' => ['nullable', 'boolean'],
 
             // Origen

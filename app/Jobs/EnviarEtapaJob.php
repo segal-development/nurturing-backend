@@ -7,6 +7,7 @@ use App\Models\FlujoEjecucionEtapa;
 use App\Models\FlujoEtapa;
 use App\Models\FlujoJob;
 use App\Models\ProspectoEnFlujo;
+use App\Services\Batching\EnvioBatchService;
 use App\Services\EnvioService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -16,6 +17,12 @@ use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
+/**
+ * Job para enviar mensajes de una etapa del flujo.
+ *
+ * Ahora soporta batching automático: si hay más de 20,000 prospectos,
+ * los divide en lotes y los encola con delays para evitar saturar el servidor.
+ */
 class EnviarEtapaJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
@@ -26,9 +33,6 @@ class EnviarEtapaJob implements ShouldQueue
 
     public $backoff = [60, 300, 900]; // Reintentos: 1min, 5min, 15min
 
-    /**
-     * Create a new job instance.
-     */
     public function __construct(
         public int $flujoEjecucionId,
         public int $etapaEjecucionId,
@@ -36,46 +40,146 @@ class EnviarEtapaJob implements ShouldQueue
         public array $prospectoIds,
         public array $branches = []
     ) {
-        // ✅ Indica que el job debe despacharse solo DESPUÉS del commit de la transacción
-        // Esto previene que el job falle antes de que los registros se guarden en la BD
         $this->afterCommit();
     }
 
     /**
-     * Execute the job.
+     * Ejecuta el job.
+     *
+     * Decide automáticamente si usar batching basándose en la cantidad de prospectos.
      */
-    public function handle(EnvioService $envioService): void
+    public function handle(EnvioService $envioService, EnvioBatchService $batchService): void
     {
         Log::info('EnviarEtapaJob: Iniciado', [
             'flujo_ejecucion_id' => $this->flujoEjecucionId,
             'etapa_ejecucion_id' => $this->etapaEjecucionId,
             'stage_label' => $this->stage['label'] ?? 'Unknown',
+            'total_prospectos' => count($this->prospectoIds),
+        ]);
+
+        // Verificar si necesita batching
+        if ($this->shouldUseBatching($batchService)) {
+            $this->handleWithBatching($batchService);
+            return;
+        }
+
+        // Envío directo (sin batching)
+        $this->handleDirectSend($envioService);
+    }
+
+    /**
+     * Determina si debe usar batching.
+     */
+    private function shouldUseBatching(EnvioBatchService $batchService): bool
+    {
+        $totalProspectos = count($this->prospectoIds);
+        $shouldBatch = $batchService->shouldUseBatching($totalProspectos);
+
+        Log::info('EnviarEtapaJob: Evaluando batching', [
+            'total_prospectos' => $totalProspectos,
+            'threshold' => $batchService->getConfig()['threshold'],
+            'requiere_batching' => $shouldBatch,
+        ]);
+
+        return $shouldBatch;
+    }
+
+    /**
+     * Maneja el envío usando batching.
+     */
+    private function handleWithBatching(EnvioBatchService $batchService): void
+    {
+        Log::info('EnviarEtapaJob: Usando batching', [
+            'prospectos' => count($this->prospectoIds),
+            'config' => $batchService->getConfig(),
         ]);
 
         DB::beginTransaction();
 
         try {
-            // 1. Obtener modelos
             $ejecucion = FlujoEjecucion::findOrFail($this->flujoEjecucionId);
             $etapaEjecucion = FlujoEjecucionEtapa::findOrFail($this->etapaEjecucionId);
 
-            // 2. Verificar que no esté ya ejecutada
+            // Early return: ya completada
             if ($etapaEjecucion->estado === 'completed') {
-                Log::warning('EnviarEtapaJob: Etapa ya completada', [
-                    'etapa_id' => $this->etapaEjecucionId,
-                ]);
-
+                Log::warning('EnviarEtapaJob: Etapa ya completada');
+                DB::commit();
                 return;
             }
 
-            // 3. Actualizar estados
+            // Actualizar estados
+            $etapaEjecucion->update(['estado' => 'batching']);
+            $ejecucion->update(['estado' => 'in_progress']);
+
+            // Dispatch de los lotes
+            $result = $batchService->dispatchBatches(
+                $this->flujoEjecucionId,
+                $this->etapaEjecucionId,
+                $this->prospectoIds,
+                $this->stage,
+                $this->branches
+            );
+
+            // Registrar job como completado (la orquestación)
+            FlujoJob::create([
+                'flujo_ejecucion_id' => $this->flujoEjecucionId,
+                'job_type' => 'enviar_etapa_batching',
+                'job_id' => $this->job?->uuid(),
+                'job_data' => [
+                    'etapa_id' => $this->etapaEjecucionId,
+                    'stage' => $this->stage,
+                    'prospectos_count' => count($this->prospectoIds),
+                    'batching' => $result->toArray(),
+                ],
+                'estado' => 'completed',
+                'fecha_queued' => now(),
+                'fecha_procesado' => now(),
+            ]);
+
+            DB::commit();
+
+            Log::info('EnviarEtapaJob: Batching iniciado exitosamente', [
+                'total_lotes' => $result->totalBatches,
+                'tiempo_estimado_minutos' => $result->getEstimatedCompletionMinutes(),
+            ]);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            $this->handleError($e);
+            throw $e;
+        }
+    }
+
+    /**
+     * Maneja el envío directo (sin batching).
+     */
+    private function handleDirectSend(EnvioService $envioService): void
+    {
+        Log::info('EnviarEtapaJob: Envío directo (sin batching)', [
+            'prospectos' => count($this->prospectoIds),
+        ]);
+
+        DB::beginTransaction();
+
+        try {
+            $ejecucion = FlujoEjecucion::findOrFail($this->flujoEjecucionId);
+            $etapaEjecucion = FlujoEjecucionEtapa::findOrFail($this->etapaEjecucionId);
+
+            // Early return: ya completada
+            if ($etapaEjecucion->estado === 'completed') {
+                Log::warning('EnviarEtapaJob: Etapa ya completada');
+                DB::commit();
+                return;
+            }
+
+            // Actualizar estados
             $etapaEjecucion->update(['estado' => 'executing']);
             $ejecucion->update(['estado' => 'in_progress']);
 
-            // 4. Obtener/crear ProspectoEnFlujo para cada prospecto
+            // Obtener prospectos
             $prospectosEnFlujo = $this->obtenerProspectosEnFlujo($ejecucion);
 
-            // 5. Obtener contenido del mensaje (desde plantilla o inline)
+            // Obtener contenido del mensaje
             $tipoMensaje = $this->stage['tipo_mensaje'] ?? 'email';
             $contenidoData = $this->obtenerContenidoMensaje($tipoMensaje);
 
@@ -83,9 +187,9 @@ class EnviarEtapaJob implements ShouldQueue
                 'tipo' => $tipoMensaje,
                 'prospectos' => count($this->prospectoIds),
                 'es_html' => $contenidoData['es_html'],
-                'tiene_asunto' => !empty($contenidoData['asunto']),
             ]);
 
+            // Enviar
             $response = $envioService->enviar(
                 tipoMensaje: $tipoMensaje,
                 prospectosEnFlujo: $prospectosEnFlujo,
@@ -98,19 +202,18 @@ class EnviarEtapaJob implements ShouldQueue
                 esHtml: $contenidoData['es_html']
             );
 
-            // 5. Obtener messageID de la respuesta
             $messageId = $response['mensaje']['messageID'] ?? null;
 
             if (! $messageId) {
-                throw new \Exception('No se recibió messageID de AthenaCampaign');
+                throw new \Exception('No se recibió messageID');
             }
 
-            Log::info('EnviarEtapaJob: Mensaje enviado exitosamente', [
+            Log::info('EnviarEtapaJob: Mensaje enviado', [
                 'message_id' => $messageId,
                 'destinatarios' => $response['mensaje']['Recipients'] ?? 0,
             ]);
 
-            // 6. Actualizar etapa con resultado
+            // Actualizar etapa
             $etapaEjecucion->update([
                 'message_id' => $messageId,
                 'response_athenacampaign' => $response,
@@ -118,11 +221,11 @@ class EnviarEtapaJob implements ShouldQueue
                 'fecha_ejecucion' => now(),
             ]);
 
-            // 7. Registrar job como completado
+            // Registrar job
             FlujoJob::create([
                 'flujo_ejecucion_id' => $this->flujoEjecucionId,
                 'job_type' => 'enviar_etapa',
-                'job_id' => $this->job->uuid() ?? null,
+                'job_id' => $this->job?->uuid(),
                 'job_data' => [
                     'etapa_id' => $this->etapaEjecucionId,
                     'stage' => $this->stage,
@@ -133,81 +236,74 @@ class EnviarEtapaJob implements ShouldQueue
                 'fecha_procesado' => now(),
             ]);
 
-            // 8. Determinar siguiente paso
+            // Procesar siguiente paso
             $this->procesarSiguientePaso($ejecucion, $etapaEjecucion, $messageId);
 
             DB::commit();
 
-            Log::info('EnviarEtapaJob: Completado exitosamente', [
-                'etapa_id' => $this->etapaEjecucionId,
-            ]);
+            Log::info('EnviarEtapaJob: Completado exitosamente');
 
         } catch (\Exception $e) {
             DB::rollBack();
-
-            Log::error('EnviarEtapaJob: Error', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
-
-            // Actualizar estado de error
-            if (isset($etapaEjecucion)) {
-                $etapaEjecucion->update([
-                    'estado' => 'failed',
-                    'error_mensaje' => $e->getMessage(),
-                ]);
-            }
-
-            // Registrar job como fallido
-            FlujoJob::create([
-                'flujo_ejecucion_id' => $this->flujoEjecucionId,
-                'job_type' => 'enviar_etapa',
-                'job_id' => $this->job->uuid() ?? null,
-                'job_data' => [
-                    'etapa_id' => $this->etapaEjecucionId,
-                    'stage' => $this->stage,
-                ],
-                'estado' => 'failed',
-                'fecha_queued' => now(),
-                'error_details' => $e->getMessage(),
-                'intentos' => $this->attempts(),
-            ]);
-
+            $this->handleError($e);
             throw $e;
         }
     }
 
     /**
-     * Obtiene el contenido del mensaje a enviar.
-     * Prioriza plantilla de referencia sobre contenido inline.
-     * 
-     * @param string $tipoMensaje 'email' o 'sms'
-     * @return array{contenido: string, asunto: string|null, es_html: bool}
+     * Maneja errores del job.
+     */
+    private function handleError(\Exception $e): void
+    {
+        Log::error('EnviarEtapaJob: Error', [
+            'error' => $e->getMessage(),
+            'trace' => $e->getTraceAsString(),
+        ]);
+
+        $etapaEjecucion = FlujoEjecucionEtapa::find($this->etapaEjecucionId);
+
+        if ($etapaEjecucion) {
+            $etapaEjecucion->update([
+                'estado' => 'failed',
+                'error_mensaje' => $e->getMessage(),
+            ]);
+        }
+
+        FlujoJob::create([
+            'flujo_ejecucion_id' => $this->flujoEjecucionId,
+            'job_type' => 'enviar_etapa',
+            'job_id' => $this->job?->uuid(),
+            'job_data' => [
+                'etapa_id' => $this->etapaEjecucionId,
+                'stage' => $this->stage,
+            ],
+            'estado' => 'failed',
+            'fecha_queued' => now(),
+            'error_details' => $e->getMessage(),
+            'intentos' => $this->attempts(),
+        ]);
+    }
+
+    /**
+     * Obtiene el contenido del mensaje.
      */
     private function obtenerContenidoMensaje(string $tipoMensaje): array
     {
-        // Intentar buscar la FlujoEtapa para usar plantilla de referencia
         $stageId = $this->stage['id'] ?? null;
-        
+
         if ($stageId) {
             $flujoEtapa = FlujoEtapa::find($stageId);
-            
+
             if ($flujoEtapa && $flujoEtapa->usaPlantillaReferencia()) {
                 Log::info('EnviarEtapaJob: Usando plantilla de referencia', [
                     'stage_id' => $stageId,
                     'plantilla_id' => $flujoEtapa->plantilla_id,
-                    'plantilla_type' => $flujoEtapa->plantilla_type,
                 ]);
-                
+
                 return $flujoEtapa->obtenerContenidoParaEnvio($tipoMensaje);
             }
         }
-        
-        // Fallback: usar contenido inline del stage
-        Log::info('EnviarEtapaJob: Usando contenido inline', [
-            'stage_id' => $stageId,
-        ]);
-        
+
         return [
             'contenido' => $this->stage['plantilla_mensaje'] ?? '',
             'asunto' => $this->stage['template']['asunto'] ?? null,
@@ -216,16 +312,14 @@ class EnviarEtapaJob implements ShouldQueue
     }
 
     /**
-     * Obtiene o crea registros de ProspectoEnFlujo para los prospectos
+     * Obtiene o crea ProspectoEnFlujo para los prospectos.
      */
     private function obtenerProspectosEnFlujo(FlujoEjecucion $ejecucion): \Illuminate\Support\Collection
     {
         $tipoMensaje = $this->stage['tipo_mensaje'] ?? 'email';
-
         $prospectosEnFlujo = collect();
 
         foreach ($this->prospectoIds as $prospectoId) {
-            // Buscar o crear ProspectoEnFlujo
             $prospectoEnFlujo = ProspectoEnFlujo::firstOrCreate(
                 [
                     'prospecto_id' => $prospectoId,
@@ -247,48 +341,41 @@ class EnviarEtapaJob implements ShouldQueue
     }
 
     /**
-     * Determina el siguiente paso después de enviar la etapa
+     * Procesa el siguiente paso del flujo.
      */
     private function procesarSiguientePaso(
         FlujoEjecucion $ejecucion,
         FlujoEjecucionEtapa $etapaEjecucion,
         int $messageId
     ): void {
-        // Buscar todas las conexiones desde esta etapa
         $conexionesDesdeEsta = collect($this->branches)->filter(function ($branch) {
             return $branch['source_node_id'] === $this->stage['id'];
         });
 
+        // Early return: no hay siguiente paso
         if ($conexionesDesdeEsta->isEmpty()) {
             Log::info('EnviarEtapaJob: No hay siguiente paso (fin del flujo)');
-            // Marcar ejecución como completada si no hay más etapas
             $ejecucion->update([
                 'estado' => 'completed',
                 'fecha_fin' => now(),
             ]);
-
             return;
         }
 
-        // Obtener el target de la primera conexión
         $primeraConexion = $conexionesDesdeEsta->first();
         $targetNodeId = $primeraConexion['target_node_id'];
 
-        // ✅ VERIFICAR SI ES UN NODO FINAL (end-*)
+        // Early return: nodo final (end-*)
         if (str_starts_with($targetNodeId, 'end-')) {
-            Log::info('EnviarEtapaJob: Nodo final alcanzado, completando ejecución', [
-                'end_node_id' => $targetNodeId,
-            ]);
-
+            Log::info('EnviarEtapaJob: Nodo final alcanzado');
             $ejecucion->update([
                 'estado' => 'completed',
                 'fecha_fin' => now(),
             ]);
-
             return;
         }
 
-        // Buscar el nodo destino
+        // Buscar nodo destino
         $flujoData = $ejecucion->flujo->flujo_data;
         $stages = $flujoData['stages'] ?? [];
         $targetNode = collect($stages)->firstWhere('id', $targetNodeId);
@@ -297,90 +384,16 @@ class EnviarEtapaJob implements ShouldQueue
             Log::warning('EnviarEtapaJob: Nodo destino no encontrado', [
                 'target_node_id' => $targetNodeId,
             ]);
-
             return;
         }
 
-        // Determinar el tipo de nodo siguiente
         $tipoNodoSiguiente = $targetNode['type'] ?? 'stage';
 
         if ($tipoNodoSiguiente === 'condition') {
-            // Es un nodo de condición: Programar verificación
-            $tiempoVerificacion = $this->stage['tiempo_verificacion_condicion'] ?? 24; // horas
-            $fechaVerificacion = now()->addHours($tiempoVerificacion);
-
-            Log::info('EnviarEtapaJob: Programando verificación de condición', [
-                'en_horas' => $tiempoVerificacion,
-                'condition_node_id' => $targetNodeId,
-            ]);
-
-            VerificarCondicionJob::dispatch(
-                $this->flujoEjecucionId,
-                $etapaEjecucion->id,
-                $primeraConexion,
-                $messageId
-            )->delay($fechaVerificacion);
-
-            // ✅ ACTUALIZAR EJECUCIÓN: Mantener como in_progress con próxima verificación programada
-            $ejecucion->update([
-                'estado' => 'in_progress',
-                'proximo_nodo' => $targetNodeId,
-                'fecha_proximo_nodo' => $fechaVerificacion,
-            ]);
-
-            Log::info('EnviarEtapaJob: Condición programada', [
-                'condition_node_id' => $targetNodeId,
-                'fecha_verificacion' => $fechaVerificacion,
-                'estado_ejecucion' => 'in_progress',
-            ]);
-
+            $this->programarVerificacionCondicion($ejecucion, $etapaEjecucion, $primeraConexion, $messageId, $targetNodeId);
         } elseif ($tipoNodoSiguiente === 'stage') {
-            // Es una etapa normal: Calcular fecha de ejecución y encolar
-            $tiempoEspera = $targetNode['tiempo_espera'] ?? 0; // días desde ahora
-            $fechaProgramada = now()->addDays($tiempoEspera);
-
-            Log::info('EnviarEtapaJob: Programando siguiente etapa', [
-                'siguiente_node_id' => $targetNodeId,
-                'tiempo_espera_dias' => $tiempoEspera,
-                'fecha_programada' => $fechaProgramada,
-            ]);
-
-            // Crear registro de la siguiente etapa
-            $siguienteEtapaEjecucion = FlujoEjecucionEtapa::create([
-                'flujo_ejecucion_id' => $this->flujoEjecucionId,
-                'etapa_id' => null,
-                'node_id' => $targetNodeId,
-                'fecha_programada' => $fechaProgramada,
-                'estado' => 'pending',
-            ]);
-
-            // Encolar job para enviar esta etapa con delay
-            EnviarEtapaJob::dispatch(
-                $this->flujoEjecucionId,
-                $siguienteEtapaEjecucion->id,
-                $targetNode,
-                $this->prospectoIds,
-                $this->branches
-            )->delay($fechaProgramada);
-
-            // ✅ ACTUALIZAR EJECUCIÓN: Mantener como in_progress con próximo nodo programado
-            $ejecucion->update([
-                'estado' => 'in_progress',
-                'proximo_nodo' => $targetNodeId,
-                'fecha_proximo_nodo' => $fechaProgramada,
-            ]);
-
-            Log::info('EnviarEtapaJob: Siguiente etapa encolada', [
-                'etapa_ejecucion_id' => $siguienteEtapaEjecucion->id,
-                'delay_dias' => $tiempoEspera,
-                'estado_ejecucion' => 'in_progress',
-                'proximo_nodo' => $targetNodeId,
-            ]);
-
+            $this->programarSiguienteEtapa($ejecucion, $targetNode, $targetNodeId);
         } elseif ($tipoNodoSiguiente === 'end') {
-            // Es un nodo final: Marcar ejecución como completada
-            Log::info('EnviarEtapaJob: Nodo final alcanzado, completando ejecución');
-
             $ejecucion->update([
                 'estado' => 'completed',
                 'fecha_fin' => now(),
@@ -388,13 +401,83 @@ class EnviarEtapaJob implements ShouldQueue
         } else {
             Log::warning('EnviarEtapaJob: Tipo de nodo desconocido', [
                 'tipo' => $tipoNodoSiguiente,
-                'node_id' => $targetNodeId,
             ]);
         }
     }
 
     /**
-     * Handle a job failure.
+     * Programa verificación de condición.
+     */
+    private function programarVerificacionCondicion(
+        FlujoEjecucion $ejecucion,
+        FlujoEjecucionEtapa $etapaEjecucion,
+        array $conexion,
+        int $messageId,
+        string $targetNodeId
+    ): void {
+        $tiempoVerificacion = $this->stage['tiempo_verificacion_condicion'] ?? 24;
+        $fechaVerificacion = now()->addHours($tiempoVerificacion);
+
+        Log::info('EnviarEtapaJob: Programando verificación de condición', [
+            'en_horas' => $tiempoVerificacion,
+            'condition_node_id' => $targetNodeId,
+        ]);
+
+        VerificarCondicionJob::dispatch(
+            $this->flujoEjecucionId,
+            $etapaEjecucion->id,
+            $conexion,
+            $messageId
+        )->delay($fechaVerificacion);
+
+        $ejecucion->update([
+            'estado' => 'in_progress',
+            'proximo_nodo' => $targetNodeId,
+            'fecha_proximo_nodo' => $fechaVerificacion,
+        ]);
+    }
+
+    /**
+     * Programa siguiente etapa.
+     */
+    private function programarSiguienteEtapa(
+        FlujoEjecucion $ejecucion,
+        array $targetNode,
+        string $targetNodeId
+    ): void {
+        $tiempoEspera = $targetNode['tiempo_espera'] ?? 0;
+        $fechaProgramada = now()->addDays($tiempoEspera);
+
+        Log::info('EnviarEtapaJob: Programando siguiente etapa', [
+            'siguiente_node_id' => $targetNodeId,
+            'tiempo_espera_dias' => $tiempoEspera,
+        ]);
+
+        $siguienteEtapaEjecucion = FlujoEjecucionEtapa::create([
+            'flujo_ejecucion_id' => $this->flujoEjecucionId,
+            'etapa_id' => null,
+            'node_id' => $targetNodeId,
+            'fecha_programada' => $fechaProgramada,
+            'estado' => 'pending',
+        ]);
+
+        EnviarEtapaJob::dispatch(
+            $this->flujoEjecucionId,
+            $siguienteEtapaEjecucion->id,
+            $targetNode,
+            $this->prospectoIds,
+            $this->branches
+        )->delay($fechaProgramada);
+
+        $ejecucion->update([
+            'estado' => 'in_progress',
+            'proximo_nodo' => $targetNodeId,
+            'fecha_proximo_nodo' => $fechaProgramada,
+        ]);
+    }
+
+    /**
+     * Maneja fallo permanente.
      */
     public function failed(\Exception $exception): void
     {
@@ -404,8 +487,8 @@ class EnviarEtapaJob implements ShouldQueue
             'error' => $exception->getMessage(),
         ]);
 
-        // Marcar etapa como fallida
         $etapaEjecucion = FlujoEjecucionEtapa::find($this->etapaEjecucionId);
+
         if ($etapaEjecucion) {
             $etapaEjecucion->update([
                 'estado' => 'failed',

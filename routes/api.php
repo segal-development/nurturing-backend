@@ -11,6 +11,7 @@ use App\Http\Controllers\ImportacionController;
 use App\Http\Controllers\PlantillaController;
 use App\Http\Controllers\ProspectoController;
 use App\Http\Controllers\TestingController;
+use App\Http\Controllers\TipoProspectoController;
 use App\Http\Controllers\TrackingController;
 use Illuminate\Support\Facades\Route;
 
@@ -26,6 +27,9 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Dashboard
     Route::get('/dashboard/stats', [DashboardController::class, 'stats']);
+
+    // Rutas de Tipos de Prospecto
+    Route::get('/tipos-prospecto', [TipoProspectoController::class, 'index']);
 
     // Rutas de Prospectos
     Route::get('/prospectos/estadisticas', [ProspectoController::class, 'estadisticas']);
