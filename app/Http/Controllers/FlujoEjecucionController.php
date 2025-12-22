@@ -638,6 +638,207 @@ class FlujoEjecucionController extends Controller
     }
 
     /**
+     * Obtiene el estado del batching de una ejecución
+     *
+     * GET /api/flujos/{flujo}/ejecuciones/{ejecucion}/batching-status
+     *
+     * Retorna información detallada sobre el progreso de envíos en lotes:
+     * - Si hay batching activo
+     * - Progreso de lotes completados
+     * - Tiempo estimado de finalización
+     * - Detalle de cada lote
+     */
+    public function batchingStatus(Flujo $flujo, FlujoEjecucion $ejecucion): JsonResponse
+    {
+        // Validar que la ejecución pertenece al flujo
+        if ($ejecucion->flujo_id !== $flujo->id) {
+            return response()->json([
+                'error' => true,
+                'mensaje' => 'La ejecución no pertenece a este flujo',
+            ], 404);
+        }
+
+        // Obtener etapas con batching activo
+        $etapasConBatching = $ejecucion->etapas()
+            ->whereNotNull('response_athenacampaign->batching')
+            ->get();
+
+        // Early return: no hay batching
+        if ($etapasConBatching->isEmpty()) {
+            return response()->json([
+                'error' => false,
+                'data' => [
+                    'has_batching' => false,
+                    'mensaje' => 'Esta ejecución no tiene envíos en lotes',
+                ],
+            ]);
+        }
+
+        // Procesar cada etapa con batching
+        $batchingInfo = $etapasConBatching->map(function ($etapa) {
+            return $this->buildBatchingInfo($etapa);
+        });
+
+        // Calcular resumen general
+        $resumen = $this->buildBatchingSummary($batchingInfo);
+
+        return response()->json([
+            'error' => false,
+            'data' => [
+                'has_batching' => true,
+                'resumen' => $resumen,
+                'etapas' => $batchingInfo,
+            ],
+        ]);
+    }
+
+    /**
+     * Construye la información de batching para una etapa.
+     */
+    private function buildBatchingInfo(FlujoEjecucionEtapa $etapa): array
+    {
+        $response = $etapa->response_athenacampaign ?? [];
+        $batching = $response['batching'] ?? [];
+
+        // Early return: sin info de batching
+        if (empty($batching)) {
+            return [
+                'etapa_id' => $etapa->id,
+                'node_id' => $etapa->node_id,
+                'has_batching' => false,
+            ];
+        }
+
+        $totalBatches = $batching['total_batches'] ?? 0;
+        $batchesCompleted = $batching['batches_completed'] ?? 0;
+        $totalProspectos = $batching['total_prospectos'] ?? 0;
+        $startedAt = $batching['started_at'] ?? null;
+        $completedAt = $batching['completed_at'] ?? null;
+        $status = $batching['status'] ?? ($batchesCompleted >= $totalBatches ? 'completed' : 'in_progress');
+
+        // Calcular prospectos enviados
+        $batchesDetail = $batching['batches'] ?? [];
+        $prospectosEnviados = collect($batchesDetail)->sum('prospectos_count');
+
+        // Calcular tiempo estimado de finalización
+        $estimatedCompletion = $this->calculateEstimatedCompletion(
+            $batchesCompleted,
+            $totalBatches,
+            $startedAt
+        );
+
+        return [
+            'etapa_id' => $etapa->id,
+            'node_id' => $etapa->node_id,
+            'estado_etapa' => $etapa->estado,
+            'has_batching' => true,
+            'status' => $status,
+            'progress' => [
+                'total_batches' => $totalBatches,
+                'batches_completed' => $batchesCompleted,
+                'batches_pending' => $totalBatches - $batchesCompleted,
+                'percentage' => $totalBatches > 0 ? round(($batchesCompleted / $totalBatches) * 100, 2) : 0,
+            ],
+            'prospectos' => [
+                'total' => $totalProspectos,
+                'enviados' => $prospectosEnviados,
+                'pendientes' => $totalProspectos - $prospectosEnviados,
+            ],
+            'timing' => [
+                'started_at' => $startedAt,
+                'completed_at' => $completedAt,
+                'estimated_completion' => $estimatedCompletion,
+            ],
+            'batches' => $this->formatBatchesDetail($batchesDetail),
+        ];
+    }
+
+    /**
+     * Calcula el tiempo estimado de finalización.
+     */
+    private function calculateEstimatedCompletion(
+        int $batchesCompleted,
+        int $totalBatches,
+        ?string $startedAt
+    ): ?string {
+        // Early return: ya completado
+        if ($batchesCompleted >= $totalBatches) {
+            return null;
+        }
+
+        // Early return: sin fecha de inicio
+        if (!$startedAt) {
+            return null;
+        }
+
+        $delayMinutes = (int) config('batching.delay_between_batches_minutes', 10);
+        $batchesPendientes = $totalBatches - $batchesCompleted;
+        $minutosRestantes = $batchesPendientes * $delayMinutes;
+
+        return now()->addMinutes($minutosRestantes)->toIso8601String();
+    }
+
+    /**
+     * Formatea el detalle de los lotes.
+     */
+    private function formatBatchesDetail(array $batches): array
+    {
+        return collect($batches)->map(function ($batch, $number) {
+            return [
+                'batch_number' => (int) $number,
+                'prospectos_count' => $batch['prospectos_count'] ?? 0,
+                'completed_at' => $batch['completed_at'] ?? null,
+                'failed_at' => $batch['failed_at'] ?? null,
+                'error' => $batch['error'] ?? null,
+                'response' => $batch['response'] ?? null,
+                'status' => isset($batch['failed_at']) ? 'failed' : (isset($batch['completed_at']) ? 'completed' : 'pending'),
+            ];
+        })->sortBy('batch_number')->values()->toArray();
+    }
+
+    /**
+     * Construye el resumen general de batching.
+     */
+    private function buildBatchingSummary(\Illuminate\Support\Collection $batchingInfo): array
+    {
+        $etapasConBatching = $batchingInfo->filter(fn($info) => $info['has_batching'] ?? false);
+
+        // Early return: sin etapas con batching
+        if ($etapasConBatching->isEmpty()) {
+            return [
+                'total_etapas_con_batching' => 0,
+                'status' => 'none',
+            ];
+        }
+
+        $totalBatches = $etapasConBatching->sum('progress.total_batches');
+        $completedBatches = $etapasConBatching->sum('progress.batches_completed');
+        $totalProspectos = $etapasConBatching->sum('prospectos.total');
+        $prospectosEnviados = $etapasConBatching->sum('prospectos.enviados');
+
+        // Determinar estado global
+        $allCompleted = $etapasConBatching->every(fn($info) => $info['status'] === 'completed');
+        $anyFailed = $etapasConBatching->contains(fn($info) => $info['status'] === 'failed');
+        $status = $allCompleted ? 'completed' : ($anyFailed ? 'partial_failure' : 'in_progress');
+
+        return [
+            'total_etapas_con_batching' => $etapasConBatching->count(),
+            'status' => $status,
+            'batches' => [
+                'total' => $totalBatches,
+                'completed' => $completedBatches,
+                'pending' => $totalBatches - $completedBatches,
+                'percentage' => $totalBatches > 0 ? round(($completedBatches / $totalBatches) * 100, 2) : 0,
+            ],
+            'prospectos' => [
+                'total' => $totalProspectos,
+                'enviados' => $prospectosEnviados,
+                'pendientes' => $totalProspectos - $prospectosEnviados,
+            ],
+        ];
+    }
+
+    /**
      * Cancela una ejecución
      *
      * DELETE /api/flujos/{flujo}/ejecuciones/{ejecucion}

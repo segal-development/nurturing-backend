@@ -93,11 +93,13 @@ final readonly class BatchResult
      */
     public function getEstimatedCompletionMinutes(): int
     {
-        if (! $this->requiresBatching) {
+        if (! $this->requiresBatching || empty($this->batches)) {
             return 0;
         }
 
-        $lastBatch = end($this->batches);
+        // Crear copia para evitar modificar readonly property con end()
+        $batches = $this->batches;
+        $lastBatch = end($batches);
 
         return $lastBatch ? $lastBatch['delay_minutes'] : 0;
     }
