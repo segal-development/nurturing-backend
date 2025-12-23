@@ -32,11 +32,17 @@ WORKDIR /app
 
 COPY package*.json ./
 
-RUN if [ -f package.json ]; then npm ci --only=production || true; fi
+# Instalar TODAS las dependencias (incluyendo devDependencies para el build)
+RUN if [ -f package.json ]; then npm ci; fi
 
 COPY . .
 
-RUN if [ -f vite.config.js ]; then npm run build || true; fi
+# Crear directorio de build vacío si no hay vite, o buildear si existe
+RUN if [ -f vite.config.js ]; then \
+        npm run build; \
+    else \
+        mkdir -p public/build; \
+    fi
 
 # -----------------------------------------------------------------------------
 # Stage 3: Production image
