@@ -67,24 +67,24 @@ RUN apk add --no-cache \
 RUN mv "$PHP_INI_DIR/php.ini-production" "$PHP_INI_DIR/php.ini"
 
 # Opcache configuration for better performance
-COPY <<EOF /usr/local/etc/php/conf.d/opcache.ini
-opcache.enable=1
-opcache.memory_consumption=128
-opcache.interned_strings_buffer=8
-opcache.max_accelerated_files=10000
-opcache.validate_timestamps=0
-opcache.save_comments=1
-opcache.fast_shutdown=1
-EOF
+RUN printf '%s\n' \
+    'opcache.enable=1' \
+    'opcache.memory_consumption=128' \
+    'opcache.interned_strings_buffer=8' \
+    'opcache.max_accelerated_files=10000' \
+    'opcache.validate_timestamps=0' \
+    'opcache.save_comments=1' \
+    'opcache.fast_shutdown=1' \
+    > /usr/local/etc/php/conf.d/opcache.ini
 
 # PHP configuration tweaks
-COPY <<EOF /usr/local/etc/php/conf.d/custom.ini
-memory_limit=256M
-max_execution_time=60
-upload_max_filesize=64M
-post_max_size=64M
-expose_php=Off
-EOF
+RUN printf '%s\n' \
+    'memory_limit=256M' \
+    'max_execution_time=60' \
+    'upload_max_filesize=64M' \
+    'post_max_size=64M' \
+    'expose_php=Off' \
+    > /usr/local/etc/php/conf.d/custom.ini
 
 WORKDIR /var/www
 
@@ -115,30 +115,29 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD php artisan health:check || exit 1
 
 # Start script
-COPY <<'EOF' /usr/local/bin/start.sh
-#!/bin/sh
-set -e
-
-echo "🚀 Starting Laravel application..."
-
-# Run migrations if AUTO_MIGRATE is set
-if [ "$AUTO_MIGRATE" = "true" ]; then
-    echo "📦 Running migrations..."
-    php artisan migrate --force
-fi
-
-# Cache configuration
-echo "⚡ Caching configuration..."
-php artisan config:cache
-php artisan route:cache
-php artisan view:cache
-
-# Start PHP built-in server (suitable for Cloud Run)
-echo "🌐 Starting server on port $PORT..."
-exec php artisan serve --host=0.0.0.0 --port=$PORT
-EOF
-
-RUN chmod +x /usr/local/bin/start.sh
+RUN printf '%s\n' \
+    '#!/bin/sh' \
+    'set -e' \
+    '' \
+    'echo "Starting Laravel application..."' \
+    '' \
+    '# Run migrations if AUTO_MIGRATE is set' \
+    'if [ "$AUTO_MIGRATE" = "true" ]; then' \
+    '    echo "Running migrations..."' \
+    '    php artisan migrate --force' \
+    'fi' \
+    '' \
+    '# Cache configuration' \
+    'echo "Caching configuration..."' \
+    'php artisan config:cache' \
+    'php artisan route:cache' \
+    'php artisan view:cache' \
+    '' \
+    '# Start PHP built-in server (suitable for Cloud Run)' \
+    'echo "Starting server on port $PORT..."' \
+    'exec php artisan serve --host=0.0.0.0 --port=$PORT' \
+    > /usr/local/bin/start.sh \
+    && chmod +x /usr/local/bin/start.sh
 
 USER www-data
 
