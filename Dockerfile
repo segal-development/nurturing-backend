@@ -24,28 +24,7 @@ COPY . .
 RUN composer dump-autoload --optimize --no-dev
 
 # -----------------------------------------------------------------------------
-# Stage 2: Frontend assets (si hay)
-# -----------------------------------------------------------------------------
-FROM node:20-alpine AS frontend
-
-WORKDIR /app
-
-COPY package*.json ./
-
-# Instalar TODAS las dependencias (incluyendo devDependencies para el build)
-RUN if [ -f package.json ]; then npm ci; fi
-
-COPY . .
-
-# Crear directorio de build vacío si no hay vite, o buildear si existe
-RUN if [ -f vite.config.js ]; then \
-        npm run build; \
-    else \
-        mkdir -p public/build; \
-    fi
-
-# -----------------------------------------------------------------------------
-# Stage 3: Production image
+# Stage 2: Production image
 # -----------------------------------------------------------------------------
 FROM php:8.2-cli-alpine
 
@@ -97,7 +76,6 @@ WORKDIR /var/www
 # Copy application
 COPY --chown=www-data:www-data . .
 COPY --from=vendor --chown=www-data:www-data /app/vendor ./vendor
-COPY --from=frontend --chown=www-data:www-data /app/public/build ./public/build
 
 # Create necessary directories and set permissions
 RUN mkdir -p \
