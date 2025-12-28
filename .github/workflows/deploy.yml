@@ -123,12 +123,14 @@ jobs:
         run: |
           if [ "${{ env.ENVIRONMENT }}" == "production" ]; then
             echo "SERVICE_NAME=nurturing-api-prod" >> $GITHUB_OUTPUT
-            echo "CLOUD_SQL_INSTANCE=${{ secrets.GCP_PROJECT_ID }}:${{ secrets.GCP_REGION }}:nurturing-db-prod" >> $GITHUB_OUTPUT
+            echo "CLOUD_SQL_INSTANCE=${{ secrets.GCP_PROJECT_ID }}:${{ secrets.GCP_REGION }}:nurturing-db" >> $GITHUB_OUTPUT
             echo "ENV_SUFFIX=prod" >> $GITHUB_OUTPUT
+            echo "DB_NAME=nurturing" >> $GITHUB_OUTPUT
           else
             echo "SERVICE_NAME=nurturing-api-qa" >> $GITHUB_OUTPUT
-            echo "CLOUD_SQL_INSTANCE=${{ secrets.GCP_PROJECT_ID }}:${{ secrets.GCP_REGION }}:nurturing-db-qa" >> $GITHUB_OUTPUT
+            echo "CLOUD_SQL_INSTANCE=${{ secrets.GCP_PROJECT_ID }}:${{ secrets.GCP_REGION }}:nurturing-db" >> $GITHUB_OUTPUT
             echo "ENV_SUFFIX=qa" >> $GITHUB_OUTPUT
+            echo "DB_NAME=nurturing" >> $GITHUB_OUTPUT
           fi
 
       - name: Authenticate to Google Cloud
@@ -165,10 +167,12 @@ jobs:
             echo "STATEFUL_DOMAINS=app.nurturing.segal.cl,api.nurturing.segal.cl" >> $GITHUB_OUTPUT
             echo "FRONTEND_URL=https://app.nurturing.segal.cl" >> $GITHUB_OUTPUT
             echo "SESSION_DOMAIN=.nurturing.segal.cl" >> $GITHUB_OUTPUT
+            echo "CORS_ORIGINS=https://app.nurturing.segal.cl" >> $GITHUB_OUTPUT
           else
-            echo "STATEFUL_DOMAINS=qa.nurturing.segal.cl,api-qa.nurturing.segal.cl" >> $GITHUB_OUTPUT
+            echo "STATEFUL_DOMAINS=qa.nurturing.segal.cl,api-qa.nurturing.segal.cl,nurturing-api-qa-751446065129.us-central1.run.app" >> $GITHUB_OUTPUT
             echo "FRONTEND_URL=https://qa.nurturing.segal.cl" >> $GITHUB_OUTPUT
             echo "SESSION_DOMAIN=.nurturing.segal.cl" >> $GITHUB_OUTPUT
+            echo "CORS_ORIGINS=https://qa.nurturing.segal.cl,https://nurturing-frontend-qa-751446065129.us-central1.run.app" >> $GITHUB_OUTPUT
           fi
 
       - name: Deploy to Cloud Run
@@ -194,11 +198,13 @@ jobs:
             --set-env-vars "DB_CONNECTION=pgsql" \
             --set-env-vars "DB_HOST=/cloudsql/${{ steps.env.outputs.CLOUD_SQL_INSTANCE }}" \
             --set-env-vars "DB_PORT=5432" \
-            --set-env-vars "DB_DATABASE=nurturing_${{ steps.env.outputs.ENV_SUFFIX }}" \
-            --set-env-vars "DB_USERNAME=nurturing_user" \
+            --set-env-vars "DB_DATABASE=${{ steps.env.outputs.DB_NAME }}" \
+            --set-env-vars "DB_USERNAME=postgres" \
             --set-env-vars "SANCTUM_STATEFUL_DOMAINS=${{ steps.sanctum.outputs.STATEFUL_DOMAINS }}" \
             --set-env-vars "SESSION_DOMAIN=${{ steps.sanctum.outputs.SESSION_DOMAIN }}" \
             --set-env-vars "SESSION_DRIVER=cookie" \
+            --set-env-vars "CORS_ALLOWED_ORIGINS=${{ steps.sanctum.outputs.CORS_ORIGINS }}" \
+            --set-env-vars "FRONTEND_URL=${{ steps.sanctum.outputs.FRONTEND_URL }}" \
             --add-cloudsql-instances ${{ steps.env.outputs.CLOUD_SQL_INSTANCE }}
 
       - name: Get Cloud Run URL

@@ -51,6 +51,7 @@ RUN apk add --no-cache \
     libjpeg-turbo-dev \
     freetype-dev \
     oniguruma-dev \
+    wget \
     && docker-php-ext-configure gd --with-freetype --with-jpeg \
     && docker-php-ext-install \
         pdo_pgsql \
@@ -110,9 +111,9 @@ ENV PORT=8080
 # Expose port
 EXPOSE 8080
 
-# Health check
+# Health check (Cloud Run maneja esto automáticamente, pero lo dejamos por si acaso)
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD php artisan health:check || exit 1
+    CMD wget --no-verbose --tries=1 --spider http://localhost:${PORT:-8080}/ || exit 1
 
 # Start script
 COPY <<'EOF' /usr/local/bin/start.sh
