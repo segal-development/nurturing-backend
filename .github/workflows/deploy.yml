@@ -100,7 +100,7 @@ jobs:
           DB_DATABASE: testing
           DB_USERNAME: testing
           DB_PASSWORD: testing
-        run: php artisan test --parallel
+        run: php artisan test
 
   # ===========================================================================
   # Job: Build and Deploy
