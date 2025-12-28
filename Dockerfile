@@ -1,5 +1,5 @@
 # =============================================================================
-# Dockerfile para Laravel en Google Cloud Run
+# Dockerfile para Laravel API en Google Cloud Run
 # Multi-stage build optimizado para producción
 # =============================================================================
 
@@ -24,22 +24,7 @@ COPY . .
 RUN composer dump-autoload --optimize --no-dev
 
 # -----------------------------------------------------------------------------
-# Stage 2: Frontend assets (si hay)
-# -----------------------------------------------------------------------------
-FROM node:20-alpine AS frontend
-
-WORKDIR /app
-
-COPY package*.json ./
-
-RUN if [ -f package.json ]; then npm ci --only=production || true; fi
-
-COPY . .
-
-RUN if [ -f vite.config.js ]; then npm run build || true; fi
-
-# -----------------------------------------------------------------------------
-# Stage 3: Production image
+# Stage 2: Production image
 # -----------------------------------------------------------------------------
 FROM php:8.2-cli-alpine
 
@@ -51,7 +36,6 @@ RUN apk add --no-cache \
     libjpeg-turbo-dev \
     freetype-dev \
     oniguruma-dev \
-    wget \
     && docker-php-ext-configure gd --with-freetype --with-jpeg \
     && docker-php-ext-install \
         pdo_pgsql \
@@ -92,7 +76,6 @@ WORKDIR /var/www
 # Copy application
 COPY --chown=www-data:www-data . .
 COPY --from=vendor --chown=www-data:www-data /app/vendor ./vendor
-COPY --from=frontend --chown=www-data:www-data /app/public/build ./public/build
 
 # Create necessary directories and set permissions
 RUN mkdir -p \
@@ -111,31 +94,27 @@ ENV PORT=8080
 # Expose port
 EXPOSE 8080
 
-# Health check (Cloud Run maneja esto automáticamente, pero lo dejamos por si acaso)
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:${PORT:-8080}/ || exit 1
-
 # Start script
 COPY <<'EOF' /usr/local/bin/start.sh
 #!/bin/sh
 set -e
 
-echo "🚀 Starting Laravel application..."
+echo "Starting Laravel application..."
 
 # Run migrations if AUTO_MIGRATE is set
 if [ "$AUTO_MIGRATE" = "true" ]; then
-    echo "📦 Running migrations..."
+    echo "Running migrations..."
     php artisan migrate --force
 fi
 
 # Cache configuration
-echo "⚡ Caching configuration..."
+echo "Caching configuration..."
 php artisan config:cache
 php artisan route:cache
 php artisan view:cache
 
 # Start PHP built-in server (suitable for Cloud Run)
-echo "🌐 Starting server on port $PORT..."
+echo "Starting server on port $PORT..."
 exec php artisan serve --host=0.0.0.0 --port=$PORT
 EOF
 
