@@ -114,10 +114,10 @@ jobs:
             echo "SESSION_DOMAIN=.nurturing.segal.cl" >> $GITHUB_OUTPUT
             echo "CORS_ORIGINS=https://app.nurturing.segal.cl" >> $GITHUB_OUTPUT
           else
-            echo "STATEFUL_DOMAINS=qa.nurturing.segal.cl,api-qa.nurturing.segal.cl,nurturing-api-qa-751446065129.us-central1.run.app" >> $GITHUB_OUTPUT
-            echo "FRONTEND_URL=https://qa.nurturing.segal.cl" >> $GITHUB_OUTPUT
-            echo "SESSION_DOMAIN=.nurturing.segal.cl" >> $GITHUB_OUTPUT
-            echo "CORS_ORIGINS=https://qa.nurturing.segal.cl,https://nurturing-frontend-qa-751446065129.us-central1.run.app" >> $GITHUB_OUTPUT
+            echo "STATEFUL_DOMAINS=qa.nurturing.segal.cl,api-qa.nurturing.segal.cl,nurturing-api-qa-751446065129.us-central1.run.app,storage.googleapis.com" >> $GITHUB_OUTPUT
+            echo "FRONTEND_URL=https://storage.googleapis.com" >> $GITHUB_OUTPUT
+            echo "SESSION_DOMAIN=" >> $GITHUB_OUTPUT
+            echo "CORS_ORIGINS=https://qa.nurturing.segal.cl,https://storage.googleapis.com" >> $GITHUB_OUTPUT
           fi
 
       - name: Deploy to Cloud Run
