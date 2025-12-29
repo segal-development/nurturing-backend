@@ -133,23 +133,8 @@ jobs:
             --min-instances 0 \
             --max-instances 10 \
             --timeout 300 \
-            --set-env-vars "APP_ENV=${{ env.ENVIRONMENT }}" \
-            --set-env-vars "APP_DEBUG=${{ env.ENVIRONMENT == 'qa' && 'true' || 'false' }}" \
-            --set-env-vars "APP_URL=${{ steps.sanctum.outputs.FRONTEND_URL }}" \
-            --set-env-vars "LOG_CHANNEL=stderr" \
-            --set-env-vars "AUTO_MIGRATE=true" \
-            --set-secrets "APP_KEY=nurturing-${{ steps.env.outputs.ENV_SUFFIX }}-app-key:latest" \
-            --set-secrets "DB_PASSWORD=nurturing-${{ steps.env.outputs.ENV_SUFFIX }}-db-password:latest" \
-            --set-env-vars "DB_CONNECTION=pgsql" \
-            --set-env-vars "DB_HOST=/cloudsql/${{ steps.env.outputs.CLOUD_SQL_INSTANCE }}" \
-            --set-env-vars "DB_PORT=5432" \
-            --set-env-vars "DB_DATABASE=${{ steps.env.outputs.DB_NAME }}" \
-            --set-env-vars "DB_USERNAME=postgres" \
-            --set-env-vars "SANCTUM_STATEFUL_DOMAINS=${{ steps.sanctum.outputs.STATEFUL_DOMAINS }}" \
-            --set-env-vars "SESSION_DOMAIN=${{ steps.sanctum.outputs.SESSION_DOMAIN }}" \
-            --set-env-vars "SESSION_DRIVER=cookie" \
-            --set-env-vars "CORS_ALLOWED_ORIGINS=${{ steps.sanctum.outputs.CORS_ORIGINS }}" \
-            --set-env-vars "FRONTEND_URL=${{ steps.sanctum.outputs.FRONTEND_URL }}" \
+            --set-env-vars "^@^APP_ENV=${{ env.ENVIRONMENT }}@APP_DEBUG=${{ env.ENVIRONMENT == 'qa' && 'true' || 'false' }}@APP_URL=${{ steps.sanctum.outputs.FRONTEND_URL }}@LOG_CHANNEL=stderr@AUTO_MIGRATE=true@DB_CONNECTION=pgsql@DB_HOST=/cloudsql/${{ steps.env.outputs.CLOUD_SQL_INSTANCE }}@DB_PORT=5432@DB_DATABASE=${{ steps.env.outputs.DB_NAME }}@DB_USERNAME=postgres@SANCTUM_STATEFUL_DOMAINS=${{ steps.sanctum.outputs.STATEFUL_DOMAINS }}@SESSION_DOMAIN=${{ steps.sanctum.outputs.SESSION_DOMAIN }}@SESSION_DRIVER=cookie@CORS_ALLOWED_ORIGINS=${{ steps.sanctum.outputs.CORS_ORIGINS }}@FRONTEND_URL=${{ steps.sanctum.outputs.FRONTEND_URL }}" \
+            --set-secrets "APP_KEY=nurturing-${{ steps.env.outputs.ENV_SUFFIX }}-app-key:latest,DB_PASSWORD=nurturing-${{ steps.env.outputs.ENV_SUFFIX }}-db-password:latest" \
             --add-cloudsql-instances ${{ steps.env.outputs.CLOUD_SQL_INSTANCE }}
 
       - name: Get Cloud Run URL
