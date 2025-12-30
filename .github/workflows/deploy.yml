@@ -111,11 +111,13 @@ jobs:
           if [ "${{ env.ENVIRONMENT }}" == "production" ]; then
             echo "STATEFUL_DOMAINS=app.nurturing.segal.cl,api.nurturing.segal.cl" >> $GITHUB_OUTPUT
             echo "FRONTEND_URL=https://app.nurturing.segal.cl" >> $GITHUB_OUTPUT
+            echo "API_URL=https://api.nurturing.segal.cl" >> $GITHUB_OUTPUT
             echo "SESSION_DOMAIN=.nurturing.segal.cl" >> $GITHUB_OUTPUT
             echo "CORS_ORIGINS=https://app.nurturing.segal.cl" >> $GITHUB_OUTPUT
           else
             echo "STATEFUL_DOMAINS=nurturing-qa.segal.cl,api-nurturing-qa.segal.cl" >> $GITHUB_OUTPUT
             echo "FRONTEND_URL=https://nurturing-qa.segal.cl" >> $GITHUB_OUTPUT
+            echo "API_URL=https://api-nurturing-qa.segal.cl" >> $GITHUB_OUTPUT
             echo "SESSION_DOMAIN=.segal.cl" >> $GITHUB_OUTPUT
             echo "CORS_ORIGINS=https://nurturing-qa.segal.cl" >> $GITHUB_OUTPUT
           fi
@@ -133,7 +135,7 @@ jobs:
             --min-instances 0 \
             --max-instances 10 \
             --timeout 300 \
-            --set-env-vars "^@^APP_ENV=${{ env.ENVIRONMENT }}@APP_DEBUG=${{ env.ENVIRONMENT == 'qa' && 'true' || 'false' }}@APP_URL=${{ steps.sanctum.outputs.FRONTEND_URL }}@LOG_CHANNEL=stderr@AUTO_MIGRATE=true@DB_CONNECTION=pgsql@DB_HOST=/cloudsql/${{ steps.env.outputs.CLOUD_SQL_INSTANCE }}@DB_PORT=5432@DB_DATABASE=${{ steps.env.outputs.DB_NAME }}@DB_USERNAME=postgres@SANCTUM_STATEFUL_DOMAINS=${{ steps.sanctum.outputs.STATEFUL_DOMAINS }}@SESSION_DOMAIN=${{ steps.sanctum.outputs.SESSION_DOMAIN }}@SESSION_DRIVER=cookie@CORS_ALLOWED_ORIGINS=${{ steps.sanctum.outputs.CORS_ORIGINS }}@FRONTEND_URL=${{ steps.sanctum.outputs.FRONTEND_URL }}" \
+            --set-env-vars "^@^APP_ENV=${{ env.ENVIRONMENT }}@APP_DEBUG=${{ env.ENVIRONMENT == 'qa' && 'true' || 'false' }}@APP_URL=${{ steps.sanctum.outputs.API_URL }}@LOG_CHANNEL=stderr@AUTO_MIGRATE=true@DB_CONNECTION=pgsql@DB_HOST=/cloudsql/${{ steps.env.outputs.CLOUD_SQL_INSTANCE }}@DB_PORT=5432@DB_DATABASE=${{ steps.env.outputs.DB_NAME }}@DB_USERNAME=postgres@SANCTUM_STATEFUL_DOMAINS=${{ steps.sanctum.outputs.STATEFUL_DOMAINS }}@SESSION_DOMAIN=${{ steps.sanctum.outputs.SESSION_DOMAIN }}@SESSION_DRIVER=cookie@CORS_ALLOWED_ORIGINS=${{ steps.sanctum.outputs.CORS_ORIGINS }}@FRONTEND_URL=${{ steps.sanctum.outputs.FRONTEND_URL }}" \
             --set-secrets "APP_KEY=nurturing-${{ steps.env.outputs.ENV_SUFFIX }}-app-key:latest,DB_PASSWORD=nurturing-${{ steps.env.outputs.ENV_SUFFIX }}-db-password:latest" \
             --add-cloudsql-instances ${{ steps.env.outputs.CLOUD_SQL_INSTANCE }}
 
