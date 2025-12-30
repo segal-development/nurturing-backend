@@ -1,0 +1,54 @@
+# =============================================================================
+# Dockerfile para Cloud Run Job - Scheduler
+# Ejecuta php artisan schedule:run
+# =============================================================================
+
+FROM php:8.3-cli-alpine
+
+# Instalar dependencias del sistema
+RUN apk add --no-cache \
+    postgresql-dev \
+    libpng-dev \
+    libzip-dev \
+    zip \
+    unzip
+
+# Instalar extensiones PHP
+RUN docker-php-ext-install pdo pdo_pgsql pgsql zip gd bcmath
+
+# Instalar Composer
+COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
+
+WORKDIR /app
+
+# Copiar archivos de composer primero (para cache de layers)
+COPY composer.json composer.lock ./
+
+# Instalar dependencias (sin dev)
+RUN composer install --no-dev --no-scripts --no-autoloader --prefer-dist
+
+# Copiar el resto del código
+COPY . .
+
+# Generar autoloader optimizado
+RUN composer dump-autoload --optimize
+
+# Script de entrada
+COPY <<'EOF' /entrypoint.sh
+#!/bin/sh
+set -e
+
+echo "=== Cloud Run Job: Scheduler ==="
+echo "Timestamp: $(date -Iseconds)"
+echo "Running: php artisan schedule:run"
+echo "================================="
+
+php artisan schedule:run --verbose
+
+echo "================================="
+echo "Scheduler completed successfully"
+EOF
+
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
