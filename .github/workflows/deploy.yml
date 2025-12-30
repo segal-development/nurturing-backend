@@ -134,7 +134,7 @@ jobs:
             --max-instances 10 \
             --timeout 300 \
             --set-env-vars "^@^APP_ENV=${{ env.ENVIRONMENT }}@APP_DEBUG=${{ env.ENVIRONMENT == 'qa' && 'true' || 'false' }}@APP_URL=${{ steps.sanctum.outputs.FRONTEND_URL }}@LOG_CHANNEL=stderr@AUTO_MIGRATE=true@DB_CONNECTION=pgsql@DB_HOST=/cloudsql/${{ steps.env.outputs.CLOUD_SQL_INSTANCE }}@DB_PORT=5432@DB_DATABASE=${{ steps.env.outputs.DB_NAME }}@DB_USERNAME=postgres@SANCTUM_STATEFUL_DOMAINS=${{ steps.sanctum.outputs.STATEFUL_DOMAINS }}@SESSION_DOMAIN=${{ steps.sanctum.outputs.SESSION_DOMAIN }}@SESSION_DRIVER=cookie@CORS_ALLOWED_ORIGINS=${{ steps.sanctum.outputs.CORS_ORIGINS }}@FRONTEND_URL=${{ steps.sanctum.outputs.FRONTEND_URL }}" \
-            --set-secrets "APP_KEY=nurturing-${{ steps.env.outputs.ENV_SUFFIX }}-app-key:latest,DB_PASSWORD=nurturing-${{ steps.env.outputs.ENV_SUFFIX }}-db-password:latest,SCHEDULER_SECRET=nurturing-${{ steps.env.outputs.ENV_SUFFIX }}-scheduler-secret:latest" \
+            --set-secrets "APP_KEY=nurturing-${{ steps.env.outputs.ENV_SUFFIX }}-app-key:latest,DB_PASSWORD=nurturing-${{ steps.env.outputs.ENV_SUFFIX }}-db-password:latest" \
             --add-cloudsql-instances ${{ steps.env.outputs.CLOUD_SQL_INSTANCE }}
 
       - name: Get Cloud Run URL
