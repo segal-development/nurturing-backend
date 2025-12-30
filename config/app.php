@@ -123,4 +123,16 @@ return [
         'store' => env('APP_MAINTENANCE_STORE', 'database'),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Scheduler Secret
+    |--------------------------------------------------------------------------
+    |
+    | Secret token para autenticar las llamadas del Cloud Scheduler.
+    | Debe configurarse en GCP Secret Manager y pasarse como env var.
+    |
+    */
+
+    'scheduler_secret' => env('SCHEDULER_SECRET'),
+
 ];

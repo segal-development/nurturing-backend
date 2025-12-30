@@ -10,6 +10,7 @@ use App\Http\Controllers\FlujoEjecucionController;
 use App\Http\Controllers\ImportacionController;
 use App\Http\Controllers\PlantillaController;
 use App\Http\Controllers\ProspectoController;
+use App\Http\Controllers\SchedulerController;
 use App\Http\Controllers\TestingController;
 use App\Http\Controllers\TrackingController;
 use Illuminate\Support\Facades\Route;
@@ -17,6 +18,13 @@ use Illuminate\Support\Facades\Route;
 // Rutas públicas de autenticación
 Route::post('/register', [AuthController::class, 'register']);
 Route::post('/login', [AuthController::class, 'login']);
+
+// Rutas del Scheduler (protegidas por secret, no por auth)
+Route::prefix('scheduler')->group(function () {
+    Route::get('/health', [SchedulerController::class, 'health']);
+    Route::post('/run', [SchedulerController::class, 'run']);
+    Route::post('/queue', [SchedulerController::class, 'processQueue']);
+});
 
 // Rutas protegidas con Sanctum (sesión o token)
 Route::middleware('auth:sanctum')->group(function () {
