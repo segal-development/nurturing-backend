@@ -7,9 +7,11 @@
     "license": "MIT",
     "require": {
         "php": "^8.2",
+        "google/cloud-storage": "^1.37",
         "laravel/framework": "^12.0",
         "laravel/sanctum": "^4.2",
         "laravel/tinker": "^2.10.1",
+        "league/flysystem-google-cloud-storage": "^3.0",
         "maatwebsite/excel": "^3.1",
         "spatie/laravel-permission": "^6.23"
     },

@@ -6,6 +6,7 @@ use App\Http\Requests\ImportarProspectosRequest;
 use App\Http\Requests\StoreImportacionRequest;
 use App\Http\Resources\ImportacionResource;
 use App\Imports\ProspectosImport;
+use App\Jobs\ProcesarImportacionJob;
 use App\Models\Importacion;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
@@ -52,32 +53,53 @@ class ImportacionController extends Controller
 
     /**
      * Store a newly created resource in storage (importar prospectos).
-     * El archivo se procesa directamente desde memoria, sin guardarlo.
+     * Para archivos grandes, sube a Cloud Storage y procesa en background.
+     * Para archivos pequeños (<5000 registros aprox), procesa directamente.
      */
     public function store(ImportarProspectosRequest $request): JsonResponse
     {
         try {
-            DB::beginTransaction();
-
             $archivo = $request->file('archivo');
             $nombreArchivo = $archivo->getClientOriginalName();
+            $tamanoArchivo = $archivo->getSize();
+            
+            // Si el archivo es mayor a 5MB, procesar en background
+            $procesarEnBackground = $tamanoArchivo > 5 * 1024 * 1024;
 
-            // Crear registro de importación (sin guardar archivo físico)
+            if ($procesarEnBackground) {
+                return $this->procesarEnBackground($request, $archivo, $nombreArchivo);
+            }
+
+            return $this->procesarDirecto($request, $archivo, $nombreArchivo);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'mensaje' => 'Error al procesar la importación',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Procesa archivos pequeños directamente (método original).
+     */
+    private function procesarDirecto($request, $archivo, string $nombreArchivo): JsonResponse
+    {
+        try {
+            DB::beginTransaction();
+
             $importacion = Importacion::create([
                 'nombre_archivo' => $nombreArchivo,
-                'ruta_archivo' => null, // No guardamos el archivo
+                'ruta_archivo' => null,
                 'origen' => $request->input('origen'),
                 'user_id' => $request->user()->id,
                 'estado' => 'procesando',
                 'fecha_importacion' => now(),
-                'metadata' => [],
+                'metadata' => ['modo' => 'directo'],
             ]);
 
-            // Procesar archivo directamente desde memoria
             $import = new ProspectosImport($importacion->id);
             Excel::import($import, $archivo);
-
-            // Actualizar estado de importación
             $import->actualizarImportacion();
 
             DB::commit();
@@ -85,6 +107,7 @@ class ImportacionController extends Controller
             return response()->json([
                 'mensaje' => 'Importación completada exitosamente',
                 'data' => new ImportacionResource($importacion->fresh()),
+                'procesamiento' => 'directo',
                 'resumen' => [
                     'total_registros' => $import->getRegistrosExitosos() + $import->getRegistrosFallidos(),
                     'registros_exitosos' => $import->getRegistrosExitosos(),
@@ -94,18 +117,93 @@ class ImportacionController extends Controller
                     'errores' => $import->getErrores(),
                 ],
             ], 201);
+
         } catch (\Exception $e) {
             DB::rollBack();
-
-            if (isset($importacion)) {
-                $importacion->update(['estado' => 'fallido']);
-            }
-
-            return response()->json([
-                'mensaje' => 'Error al procesar la importación',
-                'error' => $e->getMessage(),
-            ], 500);
+            throw $e;
         }
+    }
+
+    /**
+     * Procesa archivos grandes en background.
+     * Sube a Cloud Storage y encola job para procesamiento.
+     */
+    private function procesarEnBackground($request, $archivo, string $nombreArchivo): JsonResponse
+    {
+        // Generar nombre único para el archivo
+        $extension = $archivo->getClientOriginalExtension();
+        $rutaArchivo = 'imports/' . now()->format('Y/m/d') . '/' . uniqid() . '_' . time() . '.' . $extension;
+
+        // Determinar disk a usar (gcs en producción/qa, local en desarrollo)
+        $disk = app()->environment('local') ? 'local' : 'gcs';
+
+        // Subir archivo a storage
+        Storage::disk($disk)->put($rutaArchivo, file_get_contents($archivo->getRealPath()));
+
+        // Crear registro de importación
+        $importacion = Importacion::create([
+            'nombre_archivo' => $nombreArchivo,
+            'ruta_archivo' => $rutaArchivo,
+            'origen' => $request->input('origen'),
+            'user_id' => $request->user()->id,
+            'estado' => 'pendiente',
+            'fecha_importacion' => now(),
+            'metadata' => [
+                'modo' => 'background',
+                'tamano_archivo' => $archivo->getSize(),
+                'disk' => $disk,
+                'encolado_en' => now()->toISOString(),
+            ],
+        ]);
+
+        // Encolar job para procesamiento
+        ProcesarImportacionJob::dispatch(
+            $importacion->id,
+            $rutaArchivo,
+            $disk
+        );
+
+        return response()->json([
+            'mensaje' => 'Archivo recibido. La importación se está procesando en segundo plano.',
+            'data' => new ImportacionResource($importacion),
+            'procesamiento' => 'background',
+            'instrucciones' => 'Consulte el estado de la importación usando GET /api/importaciones/' . $importacion->id,
+        ], 202);
+    }
+
+    /**
+     * Get import progress/status.
+     */
+    public function progreso(Importacion $importacion): JsonResponse
+    {
+        return response()->json([
+            'data' => [
+                'id' => $importacion->id,
+                'estado' => $importacion->estado,
+                'nombre_archivo' => $importacion->nombre_archivo,
+                'total_registros' => $importacion->total_registros,
+                'registros_exitosos' => $importacion->registros_exitosos,
+                'registros_fallidos' => $importacion->registros_fallidos,
+                'progreso_porcentaje' => $this->calcularProgreso($importacion),
+                'metadata' => $importacion->metadata,
+                'created_at' => $importacion->created_at,
+                'updated_at' => $importacion->updated_at,
+            ],
+        ]);
+    }
+
+    /**
+     * Calcula el porcentaje de progreso de la importación.
+     */
+    private function calcularProgreso(Importacion $importacion): int
+    {
+        return match ($importacion->estado) {
+            'pendiente' => 0,
+            'procesando' => 50, // Podríamos mejorar esto con tracking más granular
+            'completado' => 100,
+            'fallido' => 100,
+            default => 0,
+        };
     }
 
     /**

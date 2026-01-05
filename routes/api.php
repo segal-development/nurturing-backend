@@ -33,6 +33,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::apiResource('prospectos', ProspectoController::class);
 
     // Rutas de Importaciones
+    Route::get('/importaciones/{importacion}/progreso', [ImportacionController::class, 'progreso']);
     Route::apiResource('importaciones', ImportacionController::class)->parameters([
         'importaciones' => 'importacion',
     ]);
