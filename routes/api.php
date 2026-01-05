@@ -87,6 +87,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Rutas de Testing (solo para desarrollo/staging)
     Route::prefix('testing')->group(function () {
+        Route::get('/check-ip', [TestingController::class, 'checkIp']);
         Route::post('/simular-estadisticas', [TestingController::class, 'simularEstadisticas']);
         Route::post('/forzar-verificacion-condicion', [TestingController::class, 'forzarVerificacionCondicion']);
         Route::post('/evaluar-condicion', [TestingController::class, 'evaluarCondicion']);

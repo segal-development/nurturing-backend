@@ -269,6 +269,27 @@ class TestingController extends Controller
     }
 
     /**
+     * Verifica la IP de salida del servidor
+     * 
+     * GET /api/testing/check-ip
+     * 
+     * @return \Illuminate\Http\JsonResponse
+     */
+    public function checkIp()
+    {
+        $ip = @file_get_contents('https://api.ipify.org');
+        
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'egress_ip' => $ip ?: 'No se pudo obtener',
+                'expected_ip' => '136.115.89.134',
+                'match' => $ip === '136.115.89.134',
+            ],
+        ]);
+    }
+
+    /**
      * Evalúa una condición manualmente sin afectar la ejecución
      * 
      * POST /api/testing/evaluar-condicion
