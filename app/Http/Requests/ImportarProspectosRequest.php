@@ -24,7 +24,7 @@ class ImportarProspectosRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'archivo' => ['required', 'file', 'mimes:xlsx,xls,csv', 'max:10240'],
+            'archivo' => ['required', 'file', 'mimes:xlsx,xls,csv', 'max:51200'],
             'origen' => ['required', 'string', 'max:255'],
         ];
     }
@@ -35,7 +35,7 @@ class ImportarProspectosRequest extends FormRequest
             'archivo.required' => 'El archivo es obligatorio.',
             'archivo.file' => 'Debe proporcionar un archivo válido.',
             'archivo.mimes' => 'El archivo debe ser de tipo: xlsx, xls o csv.',
-            'archivo.max' => 'El archivo no debe superar los 10MB.',
+            'archivo.max' => 'El archivo no debe superar los 50MB.',
             'origen.required' => 'El origen es obligatorio.',
             'origen.string' => 'El origen debe ser texto.',
         ];

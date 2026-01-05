@@ -64,8 +64,8 @@ EOF
 
 # PHP configuration tweaks
 COPY <<EOF /usr/local/etc/php/conf.d/custom.ini
-memory_limit=256M
-max_execution_time=60
+memory_limit=512M
+max_execution_time=300
 upload_max_filesize=64M
 post_max_size=64M
 expose_php=Off
