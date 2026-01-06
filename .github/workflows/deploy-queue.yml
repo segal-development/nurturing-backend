@@ -12,6 +12,8 @@ on:
       - main
     paths:
       - 'app/Jobs/**'
+      - 'app/Services/Import/**'
+      - 'app/Imports/**'
       - 'Dockerfile.queue'
       - '.github/workflows/deploy-queue.yml'
   workflow_dispatch:
@@ -91,10 +93,10 @@ jobs:
           gcloud run jobs deploy ${{ steps.env.outputs.JOB_NAME }} \
             --image "${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}" \
             --region ${{ secrets.GCP_REGION }} \
-            --memory 1Gi \
-            --cpu 1 \
-            --task-timeout 900 \
-            --max-retries 1 \
+            --memory 2Gi \
+            --cpu 2 \
+            --task-timeout 3600 \
+            --max-retries 0 \
             --service-account 751446065129-compute@developer.gserviceaccount.com \
             --set-env-vars "APP_ENV=${{ env.ENVIRONMENT }},APP_DEBUG=true,LOG_CHANNEL=stderr,DB_CONNECTION=pgsql,DB_HOST=/cloudsql/${{ steps.env.outputs.CLOUD_SQL_INSTANCE }},DB_PORT=5432,DB_DATABASE=${{ steps.env.outputs.DB_NAME }},DB_USERNAME=postgres,GOOGLE_CLOUD_PROJECT_ID=${{ secrets.GCP_PROJECT_ID }},GOOGLE_CLOUD_STORAGE_BUCKET=${{ steps.env.outputs.GCS_BUCKET }},FILESYSTEM_DISK=gcs,QUEUE_CONNECTION=database" \
             --set-secrets "APP_KEY=nurturing-${{ steps.env.outputs.ENV_SUFFIX }}-app-key:latest,DB_PASSWORD=nurturing-${{ steps.env.outputs.ENV_SUFFIX }}-db-password:latest" \
