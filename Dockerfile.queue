@@ -43,7 +43,7 @@ echo "Timestamp: $(date -Iseconds)"
 echo "Running: php artisan queue:work --stop-when-empty"
 echo "===================================="
 
-php artisan queue:work --stop-when-empty --tries=3 --timeout=60 --max-jobs=50
+php artisan queue:work --stop-when-empty --tries=1 --timeout=0 --max-jobs=100
 
 echo "===================================="
 echo "Queue worker completed"

@@ -46,7 +46,7 @@ final readonly class ProspectoRow
         return $this->nombre !== null && strlen($this->nombre) > 0 && strlen($this->nombre) <= 255;
     }
 
-    private static function cleanString(?string $value): ?string
+    private static function cleanString(mixed $value): ?string
     {
         if ($value === null || $value === '') {
             return null;
@@ -56,7 +56,7 @@ final readonly class ProspectoRow
         return $cleaned === '' ? null : $cleaned;
     }
 
-    private static function cleanEmail(?string $value): ?string
+    private static function cleanEmail(mixed $value): ?string
     {
         $cleaned = self::cleanString($value);
         
