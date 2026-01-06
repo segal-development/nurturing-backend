@@ -197,13 +197,27 @@ class ImportacionController extends Controller
      */
     private function calcularProgreso(Importacion $importacion): int
     {
-        return match ($importacion->estado) {
-            'pendiente' => 0,
-            'procesando' => 50, // Podríamos mejorar esto con tracking más granular
-            'completado' => 100,
-            'fallido' => 100,
-            default => 0,
-        };
+        if ($importacion->estado === 'pendiente') {
+            return 0;
+        }
+
+        if ($importacion->estado === 'completado' || $importacion->estado === 'fallido') {
+            return 100;
+        }
+
+        // Para estado 'procesando', calcular basado en registros procesados vs estimados
+        $totalEstimado = $importacion->metadata['total_estimado'] ?? 0;
+        $procesados = $importacion->total_registros ?? 0;
+
+        if ($totalEstimado <= 0) {
+            return 50; // Fallback si no hay estimación
+        }
+
+        // Calcular porcentaje real, con máximo de 99% mientras procesa
+        $porcentaje = (int) round(($procesados / $totalEstimado) * 100);
+        
+        // Si superó el estimado, mostrar 99% hasta que termine
+        return min($porcentaje, 99);
     }
 
     /**
