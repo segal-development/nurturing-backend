@@ -26,7 +26,7 @@ RUN composer dump-autoload --optimize --no-dev
 # -----------------------------------------------------------------------------
 # Stage 2: Production image
 # -----------------------------------------------------------------------------
-FROM php:8.2-cli-alpine
+FROM php:8.3-cli-alpine
 
 # Install system dependencies
 RUN apk add --no-cache \
