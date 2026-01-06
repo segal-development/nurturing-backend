@@ -23,9 +23,9 @@ use OpenSpout\Reader\XLSX\Options;
  */
 class SpoutProspectosImport
 {
-    private const SYNC_EVERY_N_ROWS = 1000;
+    private const SYNC_EVERY_N_ROWS = 5000;  // Sync cada 5000 filas (menos overhead de BD)
     private const MAX_ERRORS_STORED = 100;
-    private const BATCH_SIZE = 500;
+    private const BATCH_SIZE = 1000;  // Batches más grandes = menos roundtrips a BD
     
     // Bytes promedio por fila en XLSX (usado para estimar total)
     // Basado en: archivo de 37MB con ~380k filas = ~100 bytes/fila
@@ -51,6 +51,11 @@ class SpoutProspectosImport
     // Cache de tipos de prospecto para evitar queries repetidas
     private array $tiposProspectoCache = [];
     
+    // Cache de prospectos existentes para búsqueda O(1)
+    // Key = email o telefono, Value = prospecto_id
+    private array $emailsExistentes = [];
+    private array $telefonosExistentes = [];
+    
     // Batch para inserts
     private array $prospectosToCreate = [];
     private array $prospectosToUpdate = [];
@@ -60,7 +65,41 @@ class SpoutProspectosImport
         $this->importacionId = $importacionId;
         $this->filePath = $filePath;
         $this->loadTiposProspectoCache();
+        $this->loadProspectosExistentesCache();
         $this->estimateTotalRows();
+    }
+    
+    /**
+     * Pre-carga todos los emails y teléfonos existentes para búsqueda O(1).
+     * Esto evita hacer queries por cada fila del Excel.
+     */
+    private function loadProspectosExistentesCache(): void
+    {
+        Log::info('SpoutProspectosImport: Cargando cache de prospectos existentes');
+        
+        $startTime = microtime(true);
+        
+        // Cargar todos los emails existentes (solo los no-null)
+        $emails = DB::table('prospectos')
+            ->whereNotNull('email')
+            ->pluck('id', 'email')
+            ->toArray();
+        $this->emailsExistentes = $emails;
+        
+        // Cargar todos los teléfonos existentes (solo los no-null)
+        $telefonos = DB::table('prospectos')
+            ->whereNotNull('telefono')
+            ->pluck('id', 'telefono')
+            ->toArray();
+        $this->telefonosExistentes = $telefonos;
+        
+        $elapsed = round(microtime(true) - $startTime, 2);
+        
+        Log::info('SpoutProspectosImport: Cache de prospectos cargado', [
+            'emails_count' => count($this->emailsExistentes),
+            'telefonos_count' => count($this->telefonosExistentes),
+            'tiempo_segundos' => $elapsed,
+        ]);
     }
 
     /**
@@ -269,13 +308,21 @@ class SpoutProspectosImport
                 $this->sinTelefono++;
             }
 
-            // Buscar prospecto existente
-            $existente = $this->findExistingProspecto($data['email'], $data['telefono']);
+            // Buscar prospecto existente usando cache O(1)
+            $existenteId = $this->findExistingProspectoId($data['email'], $data['telefono']);
 
-            if ($existente) {
-                $this->queueUpdate($existente, $data, $montoDeuda, $tipoProspecto);
+            if ($existenteId) {
+                $this->queueUpdate($existenteId, $data, $montoDeuda, $tipoProspecto);
             } else {
                 $this->queueCreate($data, $montoDeuda, $tipoProspecto, $rowIndex);
+                
+                // Agregar al cache para detectar duplicados dentro del mismo archivo
+                if (!empty($data['email'])) {
+                    $this->emailsExistentes[$data['email']] = -1; // -1 = pendiente de crear
+                }
+                if (!empty($data['telefono'])) {
+                    $this->telefonosExistentes[$data['telefono']] = -1;
+                }
             }
 
             $this->registrosExitosos++;
@@ -291,19 +338,21 @@ class SpoutProspectosImport
     }
 
     /**
-     * Busca un prospecto existente por email o teléfono.
+     * Busca un prospecto existente por email o teléfono usando el cache en memoria.
+     * Complejidad O(1) en vez de O(n) queries a la BD.
+     * 
+     * @return int|null ID del prospecto existente o null si no existe
      */
-    private function findExistingProspecto(?string $email, ?string $telefono): ?Prospecto
+    private function findExistingProspectoId(?string $email, ?string $telefono): ?int
     {
-        if (!empty($email)) {
-            $prospecto = Prospecto::where('email', $email)->first();
-            if ($prospecto) {
-                return $prospecto;
-            }
+        // Buscar por email primero (prioridad)
+        if (!empty($email) && isset($this->emailsExistentes[$email])) {
+            return $this->emailsExistentes[$email];
         }
 
-        if (!empty($telefono)) {
-            return Prospecto::where('telefono', $telefono)->first();
+        // Buscar por teléfono
+        if (!empty($telefono) && isset($this->telefonosExistentes[$telefono])) {
+            return $this->telefonosExistentes[$telefono];
         }
 
         return null;
@@ -337,23 +386,21 @@ class SpoutProspectosImport
 
     /**
      * Encola un prospecto para actualizar.
+     * Ahora recibe solo el ID para evitar cargar el modelo completo.
      */
-    private function queueUpdate(Prospecto $existente, array $data, int $montoDeuda, TipoProspecto $tipoProspecto): void
+    private function queueUpdate(int $existenteId, array $data, int $montoDeuda, TipoProspecto $tipoProspecto): void
     {
         $this->prospectosToUpdate[] = [
-            'id' => $existente->id,
+            'id' => $existenteId,
             'nombre' => $data['nombre'],
-            'email' => $data['email'] ?? $existente->email,
-            'telefono' => $data['telefono'] ?? $existente->telefono,
-            'rut' => $data['rut'] ?? $existente->rut,
-            'url_informe' => $data['url_informe'] ?? $existente->url_informe,
+            'email' => $data['email'],
+            'telefono' => $data['telefono'],
+            'rut' => $data['rut'],
+            'url_informe' => $data['url_informe'],
             'monto_deuda' => $montoDeuda,
             'tipo_prospecto_id' => $tipoProspecto->id,
             'fecha_ultimo_contacto' => now(),
-            'metadata' => json_encode(array_merge(
-                $existente->metadata ?? [],
-                ['ultima_actualizacion_importacion' => $this->importacionId]
-            )),
+            'updated_at' => now(),
         ];
 
         if (count($this->prospectosToUpdate) >= self::BATCH_SIZE) {
@@ -393,7 +440,7 @@ class SpoutProspectosImport
     }
 
     /**
-     * Ejecuta los updates pendientes.
+     * Ejecuta los updates pendientes usando UPSERT batch.
      */
     private function flushUpdates(): void
     {
@@ -401,18 +448,32 @@ class SpoutProspectosImport
             return;
         }
 
-        foreach ($this->prospectosToUpdate as $data) {
-            try {
-                $id = $data['id'];
-                unset($data['id']);
-                DB::table('prospectos')->where('id', $id)->update($data);
-            } catch (\Exception $e) {
-                $this->registrosFallidos++;
-                $this->registrosExitosos--;
-                Log::warning('SpoutProspectosImport: Error actualizando prospecto', [
-                    'id' => $id ?? 'unknown',
-                    'error' => $e->getMessage(),
-                ]);
+        try {
+            // Usar upsert para actualizar en batch (PostgreSQL)
+            DB::table('prospectos')->upsert(
+                $this->prospectosToUpdate,
+                ['id'], // Columna única para match
+                ['nombre', 'email', 'telefono', 'rut', 'url_informe', 'monto_deuda', 'tipo_prospecto_id', 'fecha_ultimo_contacto', 'updated_at']
+            );
+        } catch (\Exception $e) {
+            Log::error('SpoutProspectosImport: Error en batch upsert', [
+                'count' => count($this->prospectosToUpdate),
+                'error' => $e->getMessage(),
+            ]);
+            // Si falla el batch, intentamos uno por uno
+            foreach ($this->prospectosToUpdate as $data) {
+                try {
+                    $id = $data['id'];
+                    unset($data['id']);
+                    DB::table('prospectos')->where('id', $id)->update($data);
+                } catch (\Exception $innerE) {
+                    $this->registrosFallidos++;
+                    $this->registrosExitosos--;
+                    Log::warning('SpoutProspectosImport: Error actualizando prospecto', [
+                        'id' => $id ?? 'unknown',
+                        'error' => $innerE->getMessage(),
+                    ]);
+                }
             }
         }
         
