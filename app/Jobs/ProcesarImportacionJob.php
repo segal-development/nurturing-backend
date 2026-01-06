@@ -74,18 +74,50 @@ class ProcesarImportacionJob implements ShouldQueue
                 ]),
             ]);
 
+            // Verificar que el archivo existe en storage
+            if (!Storage::disk($this->diskName)->exists($this->rutaArchivo)) {
+                throw new \Exception("Archivo no encontrado en storage: {$this->rutaArchivo}");
+            }
+
+            // Obtener tamaño del archivo en storage
+            $storageSize = Storage::disk($this->diskName)->size($this->rutaArchivo);
+            Log::info('ProcesarImportacionJob: Archivo encontrado en storage', [
+                'importacion_id' => $this->importacionId,
+                'storage_size_mb' => round($storageSize / 1024 / 1024, 2),
+            ]);
+
             // Descargar archivo de GCS a almacenamiento temporal
             $contenido = Storage::disk($this->diskName)->get($this->rutaArchivo);
-            $tempPath = storage_path('app/temp_' . basename($this->rutaArchivo));
-            file_put_contents($tempPath, $contenido);
+            
+            if (empty($contenido)) {
+                throw new \Exception("Archivo descargado está vacío");
+            }
+            
+            // Asegurar que el archivo temporal tenga extensión .xlsx
+            $originalName = basename($this->rutaArchivo);
+            $extension = pathinfo($originalName, PATHINFO_EXTENSION);
+            if (empty($extension)) {
+                $extension = 'xlsx';
+            }
+            $tempPath = storage_path('app/temp_' . uniqid() . '.' . $extension);
+            
+            // Guardar archivo temporal
+            $bytesWritten = file_put_contents($tempPath, $contenido);
             
             // Liberar memoria del contenido descargado
             unset($contenido);
+            
+            // Verificar integridad del archivo
+            $localSize = filesize($tempPath);
+            if ($localSize !== $storageSize) {
+                throw new \Exception("Tamaño del archivo no coincide. Storage: {$storageSize}, Local: {$localSize}");
+            }
 
-            Log::info('ProcesarImportacionJob: Archivo descargado', [
+            Log::info('ProcesarImportacionJob: Archivo descargado correctamente', [
                 'importacion_id' => $this->importacionId,
                 'temp_path' => $tempPath,
-                'size_mb' => round(filesize($tempPath) / 1024 / 1024, 2),
+                'size_mb' => round($localSize / 1024 / 1024, 2),
+                'bytes_written' => $bytesWritten,
             ]);
 
             // Procesar archivo con OpenSpout (streaming real)
