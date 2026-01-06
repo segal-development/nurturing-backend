@@ -19,29 +19,29 @@ use Illuminate\Support\Facades\Storage;
  * Usa OpenSpout para streaming real de archivos XLSX, permitiendo
  * procesar archivos de cualquier tamaño con memoria constante (~50MB).
  * 
- * Usa un lock optimista en la BD para evitar ejecuciones duplicadas
- * cuando el Cloud Scheduler dispara el worker múltiples veces.
+ * IMPORTANTE: Este job se auto-elimina de la cola inmediatamente al iniciar
+ * para evitar que el Cloud Scheduler lo re-intente. El estado se maneja
+ * 100% en la tabla importaciones.
  */
 class ProcesarImportacionJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     /**
-     * The number of times the job may be attempted.
-     * Solo 1 intento - si falla, falla definitivamente.
+     * Intentos ilimitados - manejamos el estado nosotros mismos.
+     * Ponemos un número alto para que Laravel no lo marque como fallido.
      */
-    public int $tries = 1;
+    public int $tries = 0;
     
     /**
-     * Indicate if the job should be marked as failed on timeout.
+     * Sin timeout de Laravel - lo manejamos nosotros.
      */
-    public bool $failOnTimeout = true;
-
+    public int $timeout = 0;
+    
     /**
-     * The maximum number of seconds the job can run.
-     * 2 horas para archivos muy grandes (500k+ registros)
+     * No fallar por timeout.
      */
-    public int $timeout = 7200;
+    public bool $failOnTimeout = false;
 
     /**
      * Create a new job instance.
@@ -55,12 +55,21 @@ class ProcesarImportacionJob implements ShouldQueue
     /**
      * Execute the job.
      * 
-     * Usa un UPDATE condicional para adquirir un "lock" en la BD.
-     * Solo el primer worker que ejecute el UPDATE podrá procesar.
+     * ESTRATEGIA: Eliminamos el job de la cola INMEDIATAMENTE y manejamos
+     * todo el estado en la tabla importaciones. Esto evita que Laravel
+     * cuente attempts y tire MaxAttemptsExceededException.
      */
     public function handle(): void
     {
-        // Intentar adquirir el lock usando UPDATE condicional
+        // PASO 1: Eliminar este job de la cola INMEDIATAMENTE
+        // Esto evita que el scheduler lo re-intente
+        $this->delete();
+        
+        Log::info('ProcesarImportacionJob: Job eliminado de cola, verificando estado', [
+            'importacion_id' => $this->importacionId,
+        ]);
+
+        // PASO 2: Intentar adquirir el lock usando UPDATE condicional
         // Solo actualiza si estado = 'pendiente', retorna filas afectadas
         $acquired = DB::table('importaciones')
             ->where('id', $this->importacionId)
@@ -75,13 +84,10 @@ class ProcesarImportacionJob implements ShouldQueue
             $importacion = Importacion::find($this->importacionId);
             $estado = $importacion?->estado ?? 'unknown';
             
-            Log::info('ProcesarImportacionJob: No se pudo adquirir lock, saltando', [
+            Log::info('ProcesarImportacionJob: Importación no está pendiente, saltando', [
                 'importacion_id' => $this->importacionId,
                 'estado_actual' => $estado,
             ]);
-            
-            // Eliminar este job de la cola sin marcarlo como fallido
-            $this->delete();
             return;
         }
 
@@ -193,29 +199,8 @@ class ProcesarImportacionJob implements ShouldQueue
                 ]),
             ]);
 
-            throw $e;
-        }
-    }
-
-    /**
-     * Handle a job failure.
-     */
-    public function failed(\Throwable $exception): void
-    {
-        Log::error('ProcesarImportacionJob: Job falló definitivamente', [
-            'importacion_id' => $this->importacionId,
-            'error' => $exception->getMessage(),
-        ]);
-
-        $importacion = Importacion::find($this->importacionId);
-        if ($importacion) {
-            $importacion->update([
-                'estado' => 'fallido',
-                'metadata' => array_merge($importacion->metadata ?? [], [
-                    'error_final' => $exception->getMessage(),
-                    'fallido_en' => now()->toISOString(),
-                ]),
-            ]);
+            // NO re-lanzamos la excepción - ya manejamos el estado nosotros
+            // throw $e;
         }
     }
 }
