@@ -23,9 +23,9 @@ use OpenSpout\Reader\XLSX\Options;
  */
 class SpoutProspectosImport
 {
-    private const SYNC_EVERY_N_ROWS = 500;
+    private const SYNC_EVERY_N_ROWS = 1000;
     private const MAX_ERRORS_STORED = 100;
-    private const BATCH_SIZE = 100;
+    private const BATCH_SIZE = 500;
     
     // Bytes promedio por fila en XLSX (usado para estimar total)
     // Basado en: archivo de 37MB con ~380k filas = ~100 bytes/fila
