@@ -462,11 +462,24 @@ class SpoutProspectosImport
         try {
             $importacion = Importacion::find($this->importacionId);
             if ($importacion) {
-                $importacion->update([
+                $updateData = [
                     'total_registros' => $this->rowsProcessed,
                     'registros_exitosos' => $this->registrosExitosos,
                     'registros_fallidos' => $this->registrosFallidos,
-                ]);
+                ];
+
+                // Actualizar total_estimado si los procesados lo superan
+                $currentEstimado = $importacion->metadata['total_estimado'] ?? 0;
+                if ($this->rowsProcessed > $currentEstimado) {
+                    // Estimar que faltan ~10% más de lo que llevamos procesado
+                    $newEstimado = (int) ceil($this->rowsProcessed * 1.1);
+                    $updateData['metadata'] = array_merge(
+                        $importacion->metadata ?? [],
+                        ['total_estimado' => $newEstimado]
+                    );
+                }
+
+                $importacion->update($updateData);
             }
         } catch (\Exception $e) {
             Log::warning('SpoutProspectosImport: Error sincronizando progreso', [
