@@ -50,11 +50,13 @@ jobs:
             echo "CLOUD_SQL_INSTANCE=${{ secrets.GCP_PROJECT_ID }}:${{ secrets.GCP_REGION }}:nurturing-db" >> $GITHUB_OUTPUT
             echo "ENV_SUFFIX=prod" >> $GITHUB_OUTPUT
             echo "DB_NAME=nurturing" >> $GITHUB_OUTPUT
+            echo "GCS_BUCKET=nurturing-imports-prod" >> $GITHUB_OUTPUT
           else
             echo "JOB_NAME=nurturing-queue-qa" >> $GITHUB_OUTPUT
             echo "CLOUD_SQL_INSTANCE=${{ secrets.GCP_PROJECT_ID }}:${{ secrets.GCP_REGION }}:nurturing-db" >> $GITHUB_OUTPUT
             echo "ENV_SUFFIX=qa" >> $GITHUB_OUTPUT
             echo "DB_NAME=nurturing" >> $GITHUB_OUTPUT
+            echo "GCS_BUCKET=nurturing-imports-qa" >> $GITHUB_OUTPUT
           fi
 
       - name: Authenticate to Google Cloud
@@ -89,11 +91,12 @@ jobs:
           gcloud run jobs deploy ${{ steps.env.outputs.JOB_NAME }} \
             --image "${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}" \
             --region ${{ secrets.GCP_REGION }} \
-            --memory 512Mi \
+            --memory 1Gi \
             --cpu 1 \
-            --task-timeout 300 \
+            --task-timeout 900 \
             --max-retries 1 \
-            --set-env-vars "APP_ENV=${{ env.ENVIRONMENT }},APP_DEBUG=false,LOG_CHANNEL=stderr,DB_CONNECTION=pgsql,DB_HOST=/cloudsql/${{ steps.env.outputs.CLOUD_SQL_INSTANCE }},DB_PORT=5432,DB_DATABASE=${{ steps.env.outputs.DB_NAME }},DB_USERNAME=postgres" \
+            --service-account 751446065129-compute@developer.gserviceaccount.com \
+            --set-env-vars "APP_ENV=${{ env.ENVIRONMENT }},APP_DEBUG=true,LOG_CHANNEL=stderr,DB_CONNECTION=pgsql,DB_HOST=/cloudsql/${{ steps.env.outputs.CLOUD_SQL_INSTANCE }},DB_PORT=5432,DB_DATABASE=${{ steps.env.outputs.DB_NAME }},DB_USERNAME=postgres,GOOGLE_CLOUD_PROJECT_ID=${{ secrets.GCP_PROJECT_ID }},GOOGLE_CLOUD_STORAGE_BUCKET=${{ steps.env.outputs.GCS_BUCKET }},FILESYSTEM_DISK=gcs,QUEUE_CONNECTION=database" \
             --set-secrets "APP_KEY=nurturing-${{ steps.env.outputs.ENV_SUFFIX }}-app-key:latest,DB_PASSWORD=nurturing-${{ steps.env.outputs.ENV_SUFFIX }}-db-password:latest" \
             --set-cloudsql-instances ${{ steps.env.outputs.CLOUD_SQL_INSTANCE }}
 
