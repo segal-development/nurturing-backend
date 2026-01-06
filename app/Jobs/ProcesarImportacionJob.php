@@ -9,6 +9,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 
@@ -17,6 +18,9 @@ use Illuminate\Support\Facades\Storage;
  * 
  * Usa OpenSpout para streaming real de archivos XLSX, permitiendo
  * procesar archivos de cualquier tamaño con memoria constante (~50MB).
+ * 
+ * Usa un lock optimista en la BD para evitar ejecuciones duplicadas
+ * cuando el Cloud Scheduler dispara el worker múltiples veces.
  */
 class ProcesarImportacionJob implements ShouldQueue
 {
@@ -24,7 +28,7 @@ class ProcesarImportacionJob implements ShouldQueue
 
     /**
      * The number of times the job may be attempted.
-     * Aumentado para archivos grandes que pueden tardar varios ciclos del scheduler.
+     * Solo 1 intento - si falla, falla definitivamente.
      */
     public int $tries = 1;
     
@@ -32,12 +36,6 @@ class ProcesarImportacionJob implements ShouldQueue
      * Indicate if the job should be marked as failed on timeout.
      */
     public bool $failOnTimeout = true;
-    
-    /**
-     * The number of seconds to wait before retrying the job.
-     * Esto previene que el scheduler re-intente inmediatamente.
-     */
-    public int $backoff = 300;
 
     /**
      * The maximum number of seconds the job can run.
@@ -56,40 +54,42 @@ class ProcesarImportacionJob implements ShouldQueue
 
     /**
      * Execute the job.
+     * 
+     * Usa un UPDATE condicional para adquirir un "lock" en la BD.
+     * Solo el primer worker que ejecute el UPDATE podrá procesar.
      */
     public function handle(): void
     {
-        $importacion = Importacion::find($this->importacionId);
-
-        if (!$importacion) {
-            Log::error('ProcesarImportacionJob: Importación no encontrada', [
-                'importacion_id' => $this->importacionId,
+        // Intentar adquirir el lock usando UPDATE condicional
+        // Solo actualiza si estado = 'pendiente', retorna filas afectadas
+        $acquired = DB::table('importaciones')
+            ->where('id', $this->importacionId)
+            ->where('estado', 'pendiente')
+            ->update([
+                'estado' => 'procesando',
+                'updated_at' => now(),
             ]);
-            return;
-        }
 
-        // IMPORTANTE: Verificar si ya está procesando para evitar ejecuciones duplicadas
-        // El Cloud Scheduler puede disparar múltiples instancias del worker
-        if ($importacion->estado === 'procesando') {
-            Log::warning('ProcesarImportacionJob: Importación ya está siendo procesada, saltando', [
+        if ($acquired === 0) {
+            // No se pudo adquirir el lock - otro worker ya lo tiene o ya terminó
+            $importacion = Importacion::find($this->importacionId);
+            $estado = $importacion?->estado ?? 'unknown';
+            
+            Log::info('ProcesarImportacionJob: No se pudo adquirir lock, saltando', [
                 'importacion_id' => $this->importacionId,
-                'estado_actual' => $importacion->estado,
+                'estado_actual' => $estado,
             ]);
+            
             // Eliminar este job de la cola sin marcarlo como fallido
             $this->delete();
             return;
         }
-        
-        // Si ya está completada o fallida, no reprocesar
-        if (in_array($importacion->estado, ['completado', 'fallido'])) {
-            Log::info('ProcesarImportacionJob: Importación ya finalizada, saltando', [
-                'importacion_id' => $this->importacionId,
-                'estado_actual' => $importacion->estado,
-            ]);
-            $this->delete();
-            return;
-        }
 
+        Log::info('ProcesarImportacionJob: Lock adquirido, iniciando procesamiento', [
+            'importacion_id' => $this->importacionId,
+        ]);
+
+        $importacion = Importacion::find($this->importacionId);
         $tempPath = null;
 
         try {
@@ -99,9 +99,8 @@ class ProcesarImportacionJob implements ShouldQueue
                 'memory_limit' => ini_get('memory_limit'),
             ]);
 
-            // Actualizar estado a procesando
+            // Actualizar metadata (estado ya fue cambiado por el lock)
             $importacion->update([
-                'estado' => 'procesando',
                 'metadata' => array_merge($importacion->metadata ?? [], [
                     'procesamiento_iniciado_en' => now()->toISOString(),
                     'motor' => 'openspout',
