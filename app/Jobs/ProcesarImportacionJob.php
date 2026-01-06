@@ -15,6 +15,7 @@ use Illuminate\Support\Facades\Storage;
 
 /**
  * Job para procesar importaciones de prospectos en background.
+ * Optimizado para archivos grandes (500k+ registros).
  * 
  * Usa OpenSpout para streaming real de archivos XLSX, permitiendo
  * procesar archivos de cualquier tamaño con memoria constante (~50MB).
