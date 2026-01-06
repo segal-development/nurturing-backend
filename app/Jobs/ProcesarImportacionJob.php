@@ -24,8 +24,20 @@ class ProcesarImportacionJob implements ShouldQueue
 
     /**
      * The number of times the job may be attempted.
+     * Aumentado para archivos grandes que pueden tardar varios ciclos del scheduler.
      */
-    public int $tries = 3;
+    public int $tries = 1;
+    
+    /**
+     * Indicate if the job should be marked as failed on timeout.
+     */
+    public bool $failOnTimeout = true;
+    
+    /**
+     * The number of seconds to wait before retrying the job.
+     * Esto previene que el scheduler re-intente inmediatamente.
+     */
+    public int $backoff = 300;
 
     /**
      * The maximum number of seconds the job can run.
@@ -53,6 +65,28 @@ class ProcesarImportacionJob implements ShouldQueue
             Log::error('ProcesarImportacionJob: Importación no encontrada', [
                 'importacion_id' => $this->importacionId,
             ]);
+            return;
+        }
+
+        // IMPORTANTE: Verificar si ya está procesando para evitar ejecuciones duplicadas
+        // El Cloud Scheduler puede disparar múltiples instancias del worker
+        if ($importacion->estado === 'procesando') {
+            Log::warning('ProcesarImportacionJob: Importación ya está siendo procesada, saltando', [
+                'importacion_id' => $this->importacionId,
+                'estado_actual' => $importacion->estado,
+            ]);
+            // Eliminar este job de la cola sin marcarlo como fallido
+            $this->delete();
+            return;
+        }
+        
+        // Si ya está completada o fallida, no reprocesar
+        if (in_array($importacion->estado, ['completado', 'fallido'])) {
+            Log::info('ProcesarImportacionJob: Importación ya finalizada, saltando', [
+                'importacion_id' => $this->importacionId,
+                'estado_actual' => $importacion->estado,
+            ]);
+            $this->delete();
             return;
         }
 
