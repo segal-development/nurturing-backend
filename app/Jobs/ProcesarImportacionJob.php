@@ -2,7 +2,7 @@
 
 namespace App\Jobs;
 
-use App\Imports\ProspectosImport;
+use App\Imports\SpoutProspectosImport;
 use App\Models\Importacion;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -11,8 +11,13 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
-use Maatwebsite\Excel\Facades\Excel;
 
+/**
+ * Job para procesar importaciones de prospectos en background.
+ * 
+ * Usa OpenSpout para streaming real de archivos XLSX, permitiendo
+ * procesar archivos de cualquier tamaño con memoria constante (~50MB).
+ */
 class ProcesarImportacionJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
@@ -24,8 +29,9 @@ class ProcesarImportacionJob implements ShouldQueue
 
     /**
      * The maximum number of seconds the job can run.
+     * 2 horas para archivos muy grandes (500k+ registros)
      */
-    public int $timeout = 3600; // 1 hora
+    public int $timeout = 7200;
 
     /**
      * Create a new job instance.
@@ -50,10 +56,13 @@ class ProcesarImportacionJob implements ShouldQueue
             return;
         }
 
+        $tempPath = null;
+
         try {
-            Log::info('ProcesarImportacionJob: Iniciando procesamiento', [
+            Log::info('ProcesarImportacionJob: Iniciando procesamiento con OpenSpout', [
                 'importacion_id' => $this->importacionId,
                 'ruta_archivo' => $this->rutaArchivo,
+                'memory_limit' => ini_get('memory_limit'),
             ]);
 
             // Actualizar estado a procesando
@@ -61,6 +70,7 @@ class ProcesarImportacionJob implements ShouldQueue
                 'estado' => 'procesando',
                 'metadata' => array_merge($importacion->metadata ?? [], [
                     'procesamiento_iniciado_en' => now()->toISOString(),
+                    'motor' => 'openspout',
                 ]),
             ]);
 
@@ -68,13 +78,20 @@ class ProcesarImportacionJob implements ShouldQueue
             $contenido = Storage::disk($this->diskName)->get($this->rutaArchivo);
             $tempPath = storage_path('app/temp_' . basename($this->rutaArchivo));
             file_put_contents($tempPath, $contenido);
+            
+            // Liberar memoria del contenido descargado
+            unset($contenido);
 
-            // Procesar archivo con el import existente
-            $import = new ProspectosImport($this->importacionId);
-            Excel::import($import, $tempPath);
+            Log::info('ProcesarImportacionJob: Archivo descargado', [
+                'importacion_id' => $this->importacionId,
+                'temp_path' => $tempPath,
+                'size_mb' => round(filesize($tempPath) / 1024 / 1024, 2),
+            ]);
 
-            // Actualizar importación con resultados
-            $import->actualizarImportacion();
+            // Procesar archivo con OpenSpout (streaming real)
+            $import = new SpoutProspectosImport($this->importacionId, $tempPath);
+            $import->import();
+            $import->finalize();
 
             // Limpiar archivos temporales
             @unlink($tempPath);
@@ -84,15 +101,23 @@ class ProcesarImportacionJob implements ShouldQueue
 
             Log::info('ProcesarImportacionJob: Procesamiento completado', [
                 'importacion_id' => $this->importacionId,
+                'registros_procesados' => $import->getRowsProcessed(),
                 'registros_exitosos' => $import->getRegistrosExitosos(),
                 'registros_fallidos' => $import->getRegistrosFallidos(),
+                'memory_peak_mb' => round(memory_get_peak_usage(true) / 1024 / 1024, 2),
             ]);
 
         } catch (\Exception $e) {
+            // Limpiar archivo temporal si existe
+            if ($tempPath && file_exists($tempPath)) {
+                @unlink($tempPath);
+            }
+
             Log::error('ProcesarImportacionJob: Error en procesamiento', [
                 'importacion_id' => $this->importacionId,
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
+                'memory_peak_mb' => round(memory_get_peak_usage(true) / 1024 / 1024, 2),
             ]);
 
             $importacion->update([
