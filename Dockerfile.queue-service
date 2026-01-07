@@ -47,12 +47,15 @@ RUN mkdir -p /etc/supervisor.d /var/log
 COPY <<'EOF' /etc/supervisor.d/queue-worker.ini
 [program:queue-worker]
 process_name=%(program_name)s_%(process_num)02d
-command=php /app/artisan queue:work database --sleep=3 --tries=3 --timeout=3600 --memory=1024
+command=php /app/artisan queue:work database --sleep=3 --tries=3 --timeout=3600 --memory=1536
 autostart=true
 autorestart=true
 stopasgroup=true
 killasgroup=true
-numprocs=2
+; IMPORTANTE: 1 worker para evitar problemas de concurrencia con el cache de prospectos
+; Cuando 2 workers procesan archivos grandes en paralelo, sus caches no se sincronizan
+; y puede haber problemas de memoria (2GB limite de Cloud Run)
+numprocs=1
 redirect_stderr=true
 stdout_logfile=/dev/stdout
 stdout_logfile_maxbytes=0

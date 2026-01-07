@@ -224,6 +224,18 @@ class ProcesarImportacionJob implements ShouldQueue
             $service = new ProspectoImportService($importacion, $tempPath);
             $service->import();
 
+            // IMPORTANTE: Verificar que el estado se actualizó correctamente
+            // Si por alguna razón import() terminó pero no se marcó como completado, forzarlo
+            $importacion->refresh();
+            if ($importacion->estado === 'procesando') {
+                Log::warning('ProcesarImportacionJob: Import terminó pero estado sigue en procesando, forzando completado', [
+                    'importacion_id' => $this->importacionId,
+                    'registros_exitosos' => $service->getRegistrosExitosos(),
+                ]);
+                $this->forceMarkAsCompleted($importacion, $service);
+            }
+
+            // Cleanup DESPUÉS de asegurar que el estado está bien
             $this->cleanup($tempPath);
             
             Log::info('ProcesarImportacionJob: Procesamiento completado', [
@@ -231,6 +243,7 @@ class ProcesarImportacionJob implements ShouldQueue
                 'registros_procesados' => $service->getRowsProcessed(),
                 'exitosos' => $service->getRegistrosExitosos(),
                 'fallidos' => $service->getRegistrosFallidos(),
+                'estado_final' => $importacion->fresh()->estado,
                 'memoria_peak_mb' => round(memory_get_peak_usage(true) / 1024 / 1024, 2),
             ]);
 
@@ -240,6 +253,71 @@ class ProcesarImportacionJob implements ShouldQueue
             $this->handleError($importacion, $tempPath, $e);
             return false;
         }
+    }
+
+    /**
+     * Fuerza marcar la importación como completada.
+     * Se usa como fallback si import() terminó pero no actualizó el estado.
+     */
+    private function forceMarkAsCompleted(Importacion $importacion, ProspectoImportService $service): void
+    {
+        $importacion->update([
+            'estado' => 'completado',
+            'total_registros' => $service->getRowsProcessed(),
+            'registros_exitosos' => $service->getRegistrosExitosos(),
+            'registros_fallidos' => $service->getRegistrosFallidos(),
+            'metadata' => array_merge($importacion->metadata ?? [], [
+                'completado_en' => now()->toISOString(),
+                'completado_por' => 'job_fallback',
+            ]),
+        ]);
+
+        // Actualizar el lote
+        $this->updateLoteAfterComplete($importacion);
+    }
+
+    /**
+     * Actualiza el lote después de completar una importación.
+     */
+    private function updateLoteAfterComplete(Importacion $importacion): void
+    {
+        $importacion->refresh();
+        
+        if (!$importacion->lote_id) {
+            return;
+        }
+
+        $lote = $importacion->lote;
+        if (!$lote) {
+            return;
+        }
+
+        $importaciones = $lote->importaciones()->get();
+        
+        $totalRegistros = $importaciones->sum('total_registros');
+        $registrosExitosos = $importaciones->sum('registros_exitosos');
+        $registrosFallidos = $importaciones->sum('registros_fallidos');
+        
+        $todasCompletadas = $importaciones->every(fn ($imp) => in_array($imp->estado, ['completado', 'fallido']));
+        $algunaFallida = $importaciones->contains(fn ($imp) => $imp->estado === 'fallido');
+        
+        $estadoLote = $lote->estado;
+        if ($todasCompletadas) {
+            $estadoLote = $algunaFallida ? 'fallido' : 'completado';
+        }
+
+        $lote->update([
+            'total_registros' => $totalRegistros,
+            'registros_exitosos' => $registrosExitosos,
+            'registros_fallidos' => $registrosFallidos,
+            'estado' => $estadoLote,
+            'cerrado_en' => $todasCompletadas ? now() : null,
+        ]);
+
+        Log::info('ProcesarImportacionJob: Lote actualizado', [
+            'lote_id' => $lote->id,
+            'estado' => $estadoLote,
+        ]);
     }
 
     /**
