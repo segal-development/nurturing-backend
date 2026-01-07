@@ -86,6 +86,7 @@ final class ImportacionRecoveryService
      * Intenta recuperar una importación específica.
      * 
      * Verifica que no exista ya un job en cola para evitar duplicados.
+     * También detecta importaciones que terminaron pero no se marcaron como completadas.
      */
     private function tryRecoverImportacion(Importacion $importacion): bool
     {
@@ -99,6 +100,19 @@ final class ImportacionRecoveryService
 
         // Verificar que el archivo aún existe
         if (!$this->validateFileExists($importacion)) {
+            // CASO ESPECIAL: Si el archivo no existe pero hay registros procesados,
+            // probablemente el proceso terminó exitosamente pero murió antes de markAsCompleted()
+            // En ese caso, marcamos como completado, no como fallido.
+            if ($this->shouldMarkAsCompleted($importacion)) {
+                Log::info('ImportacionRecoveryService: Archivo no existe pero hay registros, marcando como completado', [
+                    'importacion_id' => $importacion->id,
+                    'registros_exitosos' => $importacion->registros_exitosos,
+                    'total_registros' => $importacion->total_registros,
+                ]);
+                $this->markAsCompleted($importacion);
+                return true;
+            }
+            
             Log::warning('ImportacionRecoveryService: Archivo no encontrado, marcando como fallido', [
                 'importacion_id' => $importacion->id,
                 'ruta_archivo' => $importacion->ruta_archivo,
@@ -109,6 +123,105 @@ final class ImportacionRecoveryService
 
         // Re-encolar el job
         return $this->requeue($importacion);
+    }
+    
+    /**
+     * Determina si una importación sin archivo debería marcarse como completada.
+     * 
+     * Criterios:
+     * - Tiene registros exitosos > 0
+     * - La diferencia entre total_registros y registros_exitosos es mínima (<=10 o <1%)
+     * - Esto indica que el proceso terminó pero murió antes de markAsCompleted()
+     */
+    private function shouldMarkAsCompleted(Importacion $importacion): bool
+    {
+        $exitosos = $importacion->registros_exitosos ?? 0;
+        $total = $importacion->total_registros ?? 0;
+        $fallidos = $importacion->registros_fallidos ?? 0;
+        
+        // Si no hay registros procesados, no está completo
+        if ($exitosos === 0 && $total === 0) {
+            return false;
+        }
+        
+        // Si exitosos + fallidos >= total - 10, consideramos que terminó
+        // (tolerancia de 10 registros por posibles off-by-one en conteo)
+        $procesados = $exitosos + $fallidos;
+        
+        if ($total > 0 && $procesados >= ($total - 10)) {
+            return true;
+        }
+        
+        // Si tiene muchos exitosos (> 1000) y el total es similar, también
+        if ($exitosos > 1000 && $total > 0 && ($procesados / $total) > 0.99) {
+            return true;
+        }
+        
+        return false;
+    }
+    
+    /**
+     * Marca una importación como completada (para casos donde terminó pero no se marcó).
+     */
+    private function markAsCompleted(Importacion $importacion): void
+    {
+        $importacion->update([
+            'estado' => 'completado',
+            'metadata' => array_merge($importacion->metadata ?? [], [
+                'completado_en' => now()->toISOString(),
+                'completado_por' => 'recovery_service',
+                'nota' => 'Marcado como completado por recovery - proceso terminó pero no se guardó estado',
+            ]),
+        ]);
+        
+        // Actualizar el lote si existe
+        $this->updateLoteIfExists($importacion);
+    }
+    
+    /**
+     * Actualiza el lote padre cuando una importación se marca como completada por recovery.
+     */
+    private function updateLoteIfExists(Importacion $importacion): void
+    {
+        $importacion->refresh();
+        
+        if (!$importacion->lote_id) {
+            return;
+        }
+
+        $lote = $importacion->lote;
+        if (!$lote) {
+            return;
+        }
+
+        // Recalcular totales del lote
+        $importaciones = $lote->importaciones()->get();
+        
+        $totalRegistros = $importaciones->sum('total_registros');
+        $registrosExitosos = $importaciones->sum('registros_exitosos');
+        $registrosFallidos = $importaciones->sum('registros_fallidos');
+        
+        $todasCompletadas = $importaciones->every(fn ($imp) => in_array($imp->estado, ['completado', 'fallido']));
+        $algunaFallida = $importaciones->contains(fn ($imp) => $imp->estado === 'fallido');
+        
+        $estadoLote = $lote->estado;
+        if ($todasCompletadas) {
+            $estadoLote = $algunaFallida ? 'fallido' : 'completado';
+        }
+
+        $lote->update([
+            'total_registros' => $totalRegistros,
+            'registros_exitosos' => $registrosExitosos,
+            'registros_fallidos' => $registrosFallidos,
+            'estado' => $estadoLote,
+            'cerrado_en' => $todasCompletadas ? now() : null,
+        ]);
+
+        Log::info('ImportacionRecoveryService: Lote actualizado por recovery', [
+            'lote_id' => $lote->id,
+            'estado' => $estadoLote,
+            'total_registros' => $totalRegistros,
+        ]);
     }
 
     /**
