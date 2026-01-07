@@ -17,11 +17,13 @@ use Illuminate\Support\Facades\Log;
 final class ImportCheckpointManager
 {
     private const CHECKPOINT_EVERY_N_ROWS = 5000;
+    private const HEARTBEAT_EVERY_N_ROWS = 1000;
     private const MAX_ERRORS_STORED = 100;
 
     private Importacion $importacion;
     private ImportProgress $progress;
     private int $lastCheckpointRow = 0;
+    private int $lastHeartbeatRow = 0;
     
     /** @var array<array{fila: int, errores: array}> */
     private array $errores = [];
@@ -52,6 +54,7 @@ final class ImportCheckpointManager
 
     /**
      * Actualiza el progreso y guarda checkpoint si es necesario.
+     * También envía heartbeat para indicar que el proceso sigue vivo.
      */
     public function updateProgress(
         int $currentRow,
@@ -69,10 +72,29 @@ final class ImportCheckpointManager
             errores: $this->errores,
         );
 
-        // Guardar checkpoint cada N filas
+        // Guardar checkpoint completo cada N filas
         if ($currentRow - $this->lastCheckpointRow >= self::CHECKPOINT_EVERY_N_ROWS) {
             $this->saveCheckpoint();
             $this->lastCheckpointRow = $currentRow;
+            $this->lastHeartbeatRow = $currentRow; // Reset heartbeat también
+        }
+        // Heartbeat ligero (solo updated_at) cada M filas
+        elseif ($currentRow - $this->lastHeartbeatRow >= self::HEARTBEAT_EVERY_N_ROWS) {
+            $this->sendHeartbeat();
+            $this->lastHeartbeatRow = $currentRow;
+        }
+    }
+
+    /**
+     * Envía un heartbeat ligero (solo actualiza updated_at).
+     * Esto indica que el proceso sigue vivo sin el overhead de guardar todo el metadata.
+     */
+    private function sendHeartbeat(): void
+    {
+        try {
+            $this->importacion->touch();
+        } catch (\Exception $e) {
+            // Silenciar errores de heartbeat - no son críticos
         }
     }
 

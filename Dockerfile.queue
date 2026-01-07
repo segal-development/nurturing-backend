@@ -33,20 +33,40 @@ COPY . .
 # Generar autoloader optimizado
 RUN composer dump-autoload --optimize
 
-# Script de entrada
+# Script de entrada con auto-recovery
 COPY <<'EOF' /entrypoint.sh
 #!/bin/sh
 set -e
 
-echo "=== Cloud Run Job: Queue Worker ==="
+echo "=============================================="
+echo "=== Cloud Run Job: Queue Worker v2.0      ==="
+echo "=== Con Auto-Recovery de Importaciones    ==="
+echo "=============================================="
 echo "Timestamp: $(date -Iseconds)"
+echo ""
+
+# ================================================
+# PASO 1: Recovery de importaciones stuck
+# ================================================
+echo "[1/2] Ejecutando recovery de importaciones stuck..."
+php artisan importaciones:recover || {
+    echo "WARN: Recovery falló, continuando de todos modos..."
+}
+echo ""
+
+# ================================================
+# PASO 2: Procesar cola de jobs
+# ================================================
+echo "[2/2] Procesando cola de jobs..."
 echo "Running: php artisan queue:work --stop-when-empty"
-echo "===================================="
+echo "----------------------------------------------"
 
 php artisan queue:work --stop-when-empty --tries=1 --timeout=0 --max-jobs=100
 
-echo "===================================="
+echo "----------------------------------------------"
 echo "Queue worker completed"
+echo "Timestamp: $(date -Iseconds)"
+echo "=============================================="
 EOF
 
 RUN chmod +x /entrypoint.sh

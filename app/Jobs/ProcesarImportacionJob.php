@@ -61,8 +61,19 @@ class ProcesarImportacionJob implements ShouldQueue
      */
     public function handle(): void
     {
+        $startTime = microtime(true);
+        
+        Log::info('ProcesarImportacionJob: Iniciando', [
+            'importacion_id' => $this->importacionId,
+            'attempt' => $this->attempts(),
+            'memoria_inicial_mb' => round(memory_get_usage(true) / 1024 / 1024, 2),
+        ]);
+
         // Paso 1: Intentar adquirir lock (sin eliminar de cola)
         if (!$this->tryAcquireLock()) {
+            Log::info('ProcesarImportacionJob: No se pudo adquirir lock, saliendo', [
+                'importacion_id' => $this->importacionId,
+            ]);
             return; // Otro worker ya lo tiene, salir sin eliminar de cola
         }
 
@@ -75,9 +86,21 @@ class ProcesarImportacionJob implements ShouldQueue
         // Paso 3: Procesar importación
         $success = $this->processImport();
 
+        $elapsed = round(microtime(true) - $startTime, 2);
+
         // Paso 4: Solo eliminar de cola si terminó exitosamente
         if ($success) {
+            Log::info('ProcesarImportacionJob: Finalizado exitosamente', [
+                'importacion_id' => $this->importacionId,
+                'tiempo_total_segundos' => $elapsed,
+                'memoria_peak_mb' => round(memory_get_peak_usage(true) / 1024 / 1024, 2),
+            ]);
             $this->deleteAndLog('Importación completada exitosamente');
+        } else {
+            Log::warning('ProcesarImportacionJob: Finalizado con errores, permanece en cola', [
+                'importacion_id' => $this->importacionId,
+                'tiempo_segundos' => $elapsed,
+            ]);
         }
         // Si no fue exitoso, el job permanece en cola para reintento
     }

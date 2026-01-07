@@ -8,6 +8,7 @@ use App\Http\Resources\ImportacionResource;
 use App\Imports\ProspectosImport;
 use App\Jobs\ProcesarImportacionJob;
 use App\Models\Importacion;
+use App\Services\Import\ImportacionRecoveryService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -267,6 +268,131 @@ class ImportacionController extends Controller
 
         return response()->json([
             'mensaje' => 'Importación eliminada exitosamente',
+        ]);
+    }
+
+    /**
+     * Health check y estadísticas del sistema de importaciones.
+     * Útil para monitoreo y debugging.
+     */
+    public function health(): JsonResponse
+    {
+        $service = new ImportacionRecoveryService();
+        $stats = $service->getHealthStats();
+
+        $status = $stats['stuck_count'] > 0 ? 'warning' : 'healthy';
+
+        return response()->json([
+            'status' => $status,
+            'data' => $stats,
+            'message' => $stats['stuck_count'] > 0 
+                ? "Hay {$stats['stuck_count']} importación(es) stuck que requieren atención"
+                : 'Sistema de importaciones funcionando correctamente',
+        ]);
+    }
+
+    /**
+     * Fuerza el recovery de importaciones stuck.
+     * Endpoint manual para intervención cuando el auto-recovery no es suficiente.
+     */
+    public function forceRecovery(): JsonResponse
+    {
+        $service = new ImportacionRecoveryService();
+        $result = $service->recoverStuckImportations();
+
+        if ($result['recovered'] === 0) {
+            return response()->json([
+                'mensaje' => 'No se encontraron importaciones stuck para recuperar',
+                'recovered' => 0,
+            ]);
+        }
+
+        return response()->json([
+            'mensaje' => "Se recuperaron {$result['recovered']} importación(es)",
+            'recovered' => $result['recovered'],
+            'importaciones' => $result['importaciones'],
+        ]);
+    }
+
+    /**
+     * Re-encola manualmente una importación específica.
+     * Útil cuando una importación quedó stuck y necesita ser retomada.
+     */
+    public function retry(Importacion $importacion): JsonResponse
+    {
+        // Validar que la importación puede ser reintentada
+        if ($importacion->estado === 'completado') {
+            return response()->json([
+                'mensaje' => 'Esta importación ya fue completada',
+            ], 422);
+        }
+
+        if ($importacion->estado === 'pendiente') {
+            // Verificar si ya hay un job en cola
+            $hasJob = DB::table('jobs')
+                ->where('payload', 'like', '%ProcesarImportacionJob%')
+                ->where('payload', 'like', '%"importacionId";i:' . $importacion->id . ';%')
+                ->exists();
+
+            if ($hasJob) {
+                return response()->json([
+                    'mensaje' => 'Ya existe un job en cola para esta importación',
+                ], 422);
+            }
+        }
+
+        // Validar que el archivo existe
+        if (empty($importacion->ruta_archivo)) {
+            return response()->json([
+                'mensaje' => 'La importación no tiene un archivo asociado',
+            ], 422);
+        }
+
+        $disk = $importacion->metadata['disk'] ?? 'gcs';
+        
+        try {
+            if (!Storage::disk($disk)->exists($importacion->ruta_archivo)) {
+                return response()->json([
+                    'mensaje' => 'El archivo de la importación ya no existe en storage',
+                ], 422);
+            }
+        } catch (\Exception $e) {
+            return response()->json([
+                'mensaje' => 'Error verificando el archivo: ' . $e->getMessage(),
+            ], 500);
+        }
+
+        // Obtener checkpoint actual
+        $checkpoint = $importacion->metadata['last_processed_row'] ?? 0;
+
+        // Actualizar metadata
+        $importacion->update([
+            'metadata' => array_merge($importacion->metadata ?? [], [
+                'manual_retry_at' => now()->toISOString(),
+                'retry_from_checkpoint' => $checkpoint,
+            ]),
+        ]);
+
+        // Si estaba en estado "procesando", dejarlo así para que el job lo retome
+        // Si estaba en "fallido", volver a "procesando"
+        if ($importacion->estado === 'fallido') {
+            $importacion->update(['estado' => 'procesando']);
+        }
+
+        // Encolar job
+        ProcesarImportacionJob::dispatch(
+            $importacion->id,
+            $importacion->ruta_archivo,
+            $disk
+        );
+
+        return response()->json([
+            'mensaje' => 'Importación re-encolada exitosamente',
+            'data' => [
+                'importacion_id' => $importacion->id,
+                'checkpoint' => $checkpoint,
+                'estado' => $importacion->estado,
+            ],
         ]);
     }
 }
