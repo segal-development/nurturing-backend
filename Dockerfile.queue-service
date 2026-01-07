@@ -63,14 +63,16 @@ stderr_logfile=/dev/stderr
 stderr_logfile_maxbytes=0
 stopwaitsecs=3600
 
-[program:recovery]
-process_name=%(program_name)s
-command=sh -c 'while true; do php /app/artisan importaciones:recover --quiet 2>/dev/null || true; sleep 60; done'
-autostart=true
-autorestart=true
-redirect_stderr=true
-stdout_logfile=/dev/stdout
-stdout_logfile_maxbytes=0
+# RECOVERY DESACTIVADO - Estaba marcando como fallidas importaciones que aún no empezaban
+# Con 1 worker procesando secuencialmente, no es necesario recovery automático
+# [program:recovery]
+# process_name=%(program_name)s
+# command=sh -c 'while true; do php /app/artisan importaciones:recover --quiet 2>/dev/null || true; sleep 60; done'
+# autostart=true
+# autorestart=true
+# redirect_stderr=true
+# stdout_logfile=/dev/stdout
+# stdout_logfile_maxbytes=0
 
 [program:healthcheck-server]
 process_name=%(program_name)s
@@ -134,14 +136,8 @@ echo ""
 # Guardar timestamp de inicio
 date +%s > /tmp/start_time
 
-# Ejecutar recovery inicial
-echo "[INIT] Ejecutando recovery inicial..."
-php artisan importaciones:recover || echo "WARN: Recovery inicial falló (puede ser normal en primer deploy)"
-echo ""
-
 echo "[START] Iniciando Supervisor con:"
-echo "  - 2x queue:work (procesamiento paralelo)"
-echo "  - 1x recovery loop (cada 60 segundos)"
+echo "  - 1x queue:work (procesamiento secuencial)"
 echo "  - 1x health server (puerto 8080)"
 echo "=============================================="
 
