@@ -7,7 +7,7 @@ use App\Http\Requests\StoreImportacionRequest;
 use App\Http\Resources\ImportacionResource;
 use App\Http\Resources\LoteResource;
 use App\Imports\ProspectosImport;
-use App\Jobs\ProcesarImportacionJob;
+use App\Jobs\ProcesarLoteJob;
 use App\Models\Importacion;
 use App\Models\Lote;
 use App\Services\Import\ImportacionRecoveryService;
@@ -165,7 +165,10 @@ class ImportacionController extends Controller
 
     /**
      * Procesa archivos grandes en background.
-     * Sube a Cloud Storage y encola job para procesamiento.
+     * Sube a Cloud Storage y encola job del LOTE (no de la importación individual).
+     * 
+     * ESTRATEGIA: Un solo ProcesarLoteJob procesa TODOS los archivos del lote secuencialmente.
+     * Esto elimina problemas de concurrencia entre múltiples jobs.
      */
     private function procesarEnBackground($request, $archivo, string $nombreArchivo, Lote $lote): JsonResponse
     {
@@ -179,7 +182,7 @@ class ImportacionController extends Controller
         // Subir archivo a storage
         Storage::disk($disk)->put($rutaArchivo, file_get_contents($archivo->getRealPath()));
 
-        // Crear registro de importación
+        // Crear registro de importación en estado PENDIENTE
         $importacion = Importacion::create([
             'lote_id' => $lote->id,
             'nombre_archivo' => $nombreArchivo,
@@ -192,29 +195,42 @@ class ImportacionController extends Controller
                 'modo' => 'background',
                 'tamano_archivo' => $archivo->getSize(),
                 'disk' => $disk,
-                'encolado_en' => now()->toISOString(),
+                'subido_en' => now()->toISOString(),
             ],
         ]);
 
-        // Actualizar lote a procesando
-        $lote->estado = 'procesando';
+        // Actualizar totales del lote
         $lote->total_archivos = $lote->importaciones()->count();
         $lote->save();
 
-        // Encolar job para procesamiento
-        ProcesarImportacionJob::dispatch(
-            $importacion->id,
-            $rutaArchivo,
-            $disk
-        );
+        // Verificar si ya hay un job del lote en cola
+        $hayJobEnCola = $this->loteYaTieneJobEnCola($lote->id);
+
+        if (!$hayJobEnCola) {
+            // Encolar UN SOLO job para procesar TODO el lote
+            $lote->update(['estado' => 'procesando']);
+            ProcesarLoteJob::dispatch($lote->id);
+        }
 
         return response()->json([
-            'mensaje' => 'Archivo recibido. La importación se está procesando en segundo plano.',
+            'mensaje' => 'Archivo recibido. El lote se está procesando en segundo plano.',
             'data' => new ImportacionResource($importacion),
             'lote' => new LoteResource($lote->fresh(['importaciones'])),
             'procesamiento' => 'background',
+            'job_encolado' => !$hayJobEnCola,
             'instrucciones' => 'Consulte el estado del lote usando GET /api/lotes/' . $lote->id,
         ], 202);
+    }
+
+    /**
+     * Verifica si ya existe un job de lote en cola.
+     */
+    private function loteYaTieneJobEnCola(int $loteId): bool
+    {
+        return DB::table('jobs')
+            ->where('payload', 'like', '%ProcesarLoteJob%')
+            ->where('payload', 'like', '%"loteId";i:' . $loteId . ';%')
+            ->exists();
     }
 
     /**
@@ -485,18 +501,20 @@ class ImportacionController extends Controller
             ], 422);
         }
 
-        if ($importacion->estado === 'pendiente') {
-            // Verificar si ya hay un job en cola
-            $hasJob = DB::table('jobs')
-                ->where('payload', 'like', '%ProcesarImportacionJob%')
-                ->where('payload', 'like', '%"importacionId";i:' . $importacion->id . ';%')
-                ->exists();
+        // Validar que la importación tiene un lote
+        if (!$importacion->lote_id) {
+            return response()->json([
+                'mensaje' => 'La importación no tiene un lote asociado',
+            ], 422);
+        }
 
-            if ($hasJob) {
-                return response()->json([
-                    'mensaje' => 'Ya existe un job en cola para esta importación',
-                ], 422);
-            }
+        // Verificar si ya hay un job del lote en cola
+        $hasJob = $this->loteYaTieneJobEnCola($importacion->lote_id);
+
+        if ($hasJob) {
+            return response()->json([
+                'mensaje' => 'Ya existe un job en cola para este lote',
+            ], 422);
         }
 
         // Validar que el archivo existe
@@ -520,36 +538,27 @@ class ImportacionController extends Controller
             ], 500);
         }
 
-        // Obtener checkpoint actual
-        $checkpoint = $importacion->metadata['last_processed_row'] ?? 0;
-
-        // Actualizar metadata
-        $importacion->update([
-            'metadata' => array_merge($importacion->metadata ?? [], [
-                'manual_retry_at' => now()->toISOString(),
-                'retry_from_checkpoint' => $checkpoint,
-            ]),
-        ]);
-
-        // Si estaba en estado "procesando", dejarlo así para que el job lo retome
-        // Si estaba en "fallido", volver a "procesando"
+        // Si estaba en "fallido", volver a "pendiente" para que el job del lote la procese
         if ($importacion->estado === 'fallido') {
-            $importacion->update(['estado' => 'procesando']);
+            $importacion->update([
+                'estado' => 'pendiente',
+                'metadata' => array_merge($importacion->metadata ?? [], [
+                    'manual_retry_at' => now()->toISOString(),
+                ]),
+            ]);
         }
 
-        // Encolar job
-        ProcesarImportacionJob::dispatch(
-            $importacion->id,
-            $importacion->ruta_archivo,
-            $disk
-        );
+        // Encolar job del lote
+        $lote = $importacion->lote;
+        $lote->update(['estado' => 'procesando']);
+        ProcesarLoteJob::dispatch($lote->id);
 
         return response()->json([
-            'mensaje' => 'Importación re-encolada exitosamente',
+            'mensaje' => 'Lote re-encolado exitosamente',
             'data' => [
                 'importacion_id' => $importacion->id,
-                'checkpoint' => $checkpoint,
-                'estado' => $importacion->estado,
+                'lote_id' => $lote->id,
+                'estado' => $importacion->fresh()->estado,
             ],
         ]);
     }
