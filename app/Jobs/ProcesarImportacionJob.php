@@ -29,6 +29,12 @@ class ProcesarImportacionJob implements ShouldQueue
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     /**
+     * Cola específica para importaciones.
+     * Separada de la cola default para no bloquear envíos de email/SMS.
+     */
+    public string $queue = 'imports';
+
+    /**
      * Intentos altos - el job debe persistir hasta completarse.
      * El lock en BD evita ejecuciones paralelas.
      */
