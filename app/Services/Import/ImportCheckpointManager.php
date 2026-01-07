@@ -175,6 +175,62 @@ final class ImportCheckpointManager
             'exitosos' => $exitosos,
             'fallidos' => $fallidos,
         ]);
+
+        // Actualizar el lote si existe
+        $this->updateLoteIfExists();
+    }
+
+    /**
+     * Actualiza el lote padre cuando una importación termina.
+     * Recalcula totales y determina si el lote está completado.
+     */
+    private function updateLoteIfExists(): void
+    {
+        // Refrescar para obtener el lote_id actualizado
+        $this->importacion->refresh();
+        
+        if (!$this->importacion->lote_id) {
+            return;
+        }
+
+        $lote = $this->importacion->lote;
+        if (!$lote) {
+            return;
+        }
+
+        // Recalcular totales del lote basado en todas sus importaciones
+        $importaciones = $lote->importaciones()->get();
+        
+        $totalRegistros = $importaciones->sum('total_registros');
+        $registrosExitosos = $importaciones->sum('registros_exitosos');
+        $registrosFallidos = $importaciones->sum('registros_fallidos');
+        
+        // Determinar estado del lote
+        $todasCompletadas = $importaciones->every(fn ($imp) => in_array($imp->estado, ['completado', 'fallido']));
+        $algunaFallida = $importaciones->contains(fn ($imp) => $imp->estado === 'fallido');
+        
+        $estadoLote = $lote->estado;
+        if ($todasCompletadas) {
+            $estadoLote = $algunaFallida ? 'fallido' : 'completado';
+        } elseif ($importaciones->contains(fn ($imp) => $imp->estado === 'procesando')) {
+            $estadoLote = 'procesando';
+        }
+
+        $lote->update([
+            'total_registros' => $totalRegistros,
+            'registros_exitosos' => $registrosExitosos,
+            'registros_fallidos' => $registrosFallidos,
+            'estado' => $estadoLote,
+            'cerrado_en' => $todasCompletadas ? now() : null,
+        ]);
+
+        Log::info('ImportCheckpointManager: Lote actualizado', [
+            'lote_id' => $lote->id,
+            'estado' => $estadoLote,
+            'total_registros' => $totalRegistros,
+            'importaciones_completadas' => $importaciones->filter(fn ($imp) => $imp->estado === 'completado')->count(),
+            'importaciones_total' => $importaciones->count(),
+        ]);
     }
 
     /**
