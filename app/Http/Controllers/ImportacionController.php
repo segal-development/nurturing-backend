@@ -5,9 +5,11 @@ namespace App\Http\Controllers;
 use App\Http\Requests\ImportarProspectosRequest;
 use App\Http\Requests\StoreImportacionRequest;
 use App\Http\Resources\ImportacionResource;
+use App\Http\Resources\LoteResource;
 use App\Imports\ProspectosImport;
 use App\Jobs\ProcesarImportacionJob;
 use App\Models\Importacion;
+use App\Models\Lote;
 use App\Services\Import\ImportacionRecoveryService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
@@ -56,6 +58,9 @@ class ImportacionController extends Controller
      * Store a newly created resource in storage (importar prospectos).
      * Para archivos grandes, sube a Cloud Storage y procesa en background.
      * Para archivos pequeños (<5000 registros aprox), procesa directamente.
+     * 
+     * Soporta lotes: Si se envía lote_id, agrega el archivo a ese lote.
+     * Si no, crea un nuevo lote con el nombre de origen.
      */
     public function store(ImportarProspectosRequest $request): JsonResponse
     {
@@ -64,14 +69,17 @@ class ImportacionController extends Controller
             $nombreArchivo = $archivo->getClientOriginalName();
             $tamanoArchivo = $archivo->getSize();
             
+            // Obtener o crear el lote
+            $lote = $this->obtenerOCrearLote($request);
+            
             // Si el archivo es mayor a 5MB, procesar en background
             $procesarEnBackground = $tamanoArchivo > 5 * 1024 * 1024;
 
             if ($procesarEnBackground) {
-                return $this->procesarEnBackground($request, $archivo, $nombreArchivo);
+                return $this->procesarEnBackground($request, $archivo, $nombreArchivo, $lote);
             }
 
-            return $this->procesarDirecto($request, $archivo, $nombreArchivo);
+            return $this->procesarDirecto($request, $archivo, $nombreArchivo, $lote);
 
         } catch (\Exception $e) {
             return response()->json([
@@ -82,17 +90,43 @@ class ImportacionController extends Controller
     }
 
     /**
+     * Obtiene un lote existente o crea uno nuevo.
+     */
+    private function obtenerOCrearLote($request): Lote
+    {
+        // Si viene lote_id, usar ese lote
+        if ($request->filled('lote_id')) {
+            $lote = Lote::findOrFail($request->input('lote_id'));
+            
+            // Verificar que el lote permite agregar más archivos
+            if ($lote->estado === 'completado') {
+                throw new \Exception('No se pueden agregar archivos a un lote completado');
+            }
+            
+            return $lote;
+        }
+
+        // Crear nuevo lote con el nombre de origen
+        return Lote::create([
+            'nombre' => $request->input('origen'),
+            'user_id' => $request->user()->id,
+            'estado' => 'abierto',
+        ]);
+    }
+
+    /**
      * Procesa archivos pequeños directamente (método original).
      */
-    private function procesarDirecto($request, $archivo, string $nombreArchivo): JsonResponse
+    private function procesarDirecto($request, $archivo, string $nombreArchivo, Lote $lote): JsonResponse
     {
         try {
             DB::beginTransaction();
 
             $importacion = Importacion::create([
+                'lote_id' => $lote->id,
                 'nombre_archivo' => $nombreArchivo,
                 'ruta_archivo' => null,
-                'origen' => $request->input('origen'),
+                'origen' => $lote->nombre,
                 'user_id' => $request->user()->id,
                 'estado' => 'procesando',
                 'fecha_importacion' => now(),
@@ -103,11 +137,15 @@ class ImportacionController extends Controller
             Excel::import($import, $archivo);
             $import->actualizarImportacion();
 
+            // Actualizar totales del lote
+            $lote->recalcularTotales();
+
             DB::commit();
 
             return response()->json([
                 'mensaje' => 'Importación completada exitosamente',
                 'data' => new ImportacionResource($importacion->fresh()),
+                'lote' => new LoteResource($lote->fresh(['importaciones'])),
                 'procesamiento' => 'directo',
                 'resumen' => [
                     'total_registros' => $import->getRegistrosExitosos() + $import->getRegistrosFallidos(),
@@ -129,7 +167,7 @@ class ImportacionController extends Controller
      * Procesa archivos grandes en background.
      * Sube a Cloud Storage y encola job para procesamiento.
      */
-    private function procesarEnBackground($request, $archivo, string $nombreArchivo): JsonResponse
+    private function procesarEnBackground($request, $archivo, string $nombreArchivo, Lote $lote): JsonResponse
     {
         // Generar nombre único para el archivo
         $extension = $archivo->getClientOriginalExtension();
@@ -143,9 +181,10 @@ class ImportacionController extends Controller
 
         // Crear registro de importación
         $importacion = Importacion::create([
+            'lote_id' => $lote->id,
             'nombre_archivo' => $nombreArchivo,
             'ruta_archivo' => $rutaArchivo,
-            'origen' => $request->input('origen'),
+            'origen' => $lote->nombre,
             'user_id' => $request->user()->id,
             'estado' => 'pendiente',
             'fecha_importacion' => now(),
@@ -157,6 +196,11 @@ class ImportacionController extends Controller
             ],
         ]);
 
+        // Actualizar lote a procesando
+        $lote->estado = 'procesando';
+        $lote->total_archivos = $lote->importaciones()->count();
+        $lote->save();
+
         // Encolar job para procesamiento
         ProcesarImportacionJob::dispatch(
             $importacion->id,
@@ -167,8 +211,9 @@ class ImportacionController extends Controller
         return response()->json([
             'mensaje' => 'Archivo recibido. La importación se está procesando en segundo plano.',
             'data' => new ImportacionResource($importacion),
+            'lote' => new LoteResource($lote->fresh(['importaciones'])),
             'procesamiento' => 'background',
-            'instrucciones' => 'Consulte el estado de la importación usando GET /api/importaciones/' . $importacion->id,
+            'instrucciones' => 'Consulte el estado del lote usando GET /api/lotes/' . $lote->id,
         ], 202);
     }
 

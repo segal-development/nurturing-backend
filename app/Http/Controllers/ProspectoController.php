@@ -18,7 +18,14 @@ class ProspectoController extends Controller
     {
         $query = Prospecto::query()->with(['tipoProspecto', 'importacion']);
 
-        // Filtrar por importación específica (ID)
+        // Filtrar por lote (agrupa múltiples importaciones)
+        if ($request->filled('lote_id')) {
+            $query->whereHas('importacion', function ($q) use ($request) {
+                $q->where('lote_id', $request->input('lote_id'));
+            });
+        }
+
+        // Filtrar por importación específica (ID) - mantener compatibilidad
         if ($request->filled('importacion_id')) {
             $query->where('importacion_id', $request->input('importacion_id'));
         }
@@ -209,29 +216,42 @@ class ProspectoController extends Controller
 
     /**
      * Get filter options for prospectos.
+     * Ahora devuelve lotes en lugar de importaciones individuales.
      */
     public function opcionesFiltrado(): JsonResponse
     {
-        // Obtener todas las importaciones con conteo de prospectos
-        $importaciones = \App\Models\Importacion::query()
-            ->withCount('prospectos')
-            ->orderBy('fecha_importacion', 'desc')
+        // Obtener todos los lotes con sus importaciones y conteo de prospectos
+        $lotes = \App\Models\Lote::query()
+            ->with(['importaciones' => function ($query) {
+                $query->withCount('prospectos');
+            }])
+            ->orderBy('created_at', 'desc')
             ->get()
-            ->map(function ($importacion) {
+            ->map(function ($lote) {
+                $totalProspectos = $lote->importaciones->sum('prospectos_count');
                 return [
-                    'id' => $importacion->id,
-                    'nombre_archivo' => $importacion->nombre_archivo,
-                    'origen' => $importacion->origen,
-                    'fecha_importacion' => $importacion->fecha_importacion?->timezone('America/Santiago')->format('d/m/Y H:i:s'),
-                    'total_prospectos' => $importacion->prospectos_count,
+                    'id' => $lote->id,
+                    'nombre' => $lote->nombre,
+                    'estado' => $lote->estado,
+                    'total_archivos' => $lote->importaciones->count(),
+                    'total_prospectos' => $totalProspectos,
+                    'total_registros' => $lote->total_registros,
+                    'registros_exitosos' => $lote->registros_exitosos,
+                    'created_at' => $lote->created_at?->timezone('America/Santiago')->format('d/m/Y H:i:s'),
+                    'importaciones' => $lote->importaciones->map(fn($i) => [
+                        'id' => $i->id,
+                        'nombre_archivo' => $i->nombre_archivo,
+                        'estado' => $i->estado,
+                        'total_prospectos' => $i->prospectos_count,
+                    ]),
                 ];
             });
 
-        // Obtener orígenes únicos
-        $origenes = \App\Models\Importacion::query()
-            ->select('origen')
+        // Obtener orígenes únicos (ahora son los nombres de los lotes)
+        $origenes = \App\Models\Lote::query()
+            ->select('nombre')
             ->distinct()
-            ->pluck('origen')
+            ->pluck('nombre')
             ->filter()
             ->values();
 
@@ -260,7 +280,7 @@ class ProspectoController extends Controller
 
         return response()->json([
             'data' => [
-                'importaciones' => $importaciones,
+                'lotes' => $lotes,
                 'origenes' => $origenes,
                 'estados' => $estados,
                 'tipos_prospecto' => $tiposProspecto,

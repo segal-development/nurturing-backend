@@ -8,6 +8,7 @@ use App\Http\Controllers\EnvioController;
 use App\Http\Controllers\FlujoController;
 use App\Http\Controllers\FlujoEjecucionController;
 use App\Http\Controllers\ImportacionController;
+use App\Http\Controllers\LoteController;
 use App\Http\Controllers\PlantillaController;
 use App\Http\Controllers\ProspectoController;
 use App\Http\Controllers\TestingController;
@@ -31,6 +32,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/prospectos/estadisticas', [ProspectoController::class, 'estadisticas']);
     Route::get('/prospectos/opciones-filtrado', [ProspectoController::class, 'opcionesFiltrado']);
     Route::apiResource('prospectos', ProspectoController::class);
+
+    // Rutas de Lotes (agrupación de importaciones)
+    Route::get('/lotes/abiertos', [LoteController::class, 'abiertos']);
+    Route::get('/lotes/{lote}/progreso', [LoteController::class, 'progreso']);
+    Route::post('/lotes/{lote}/cerrar', [LoteController::class, 'cerrar']);
+    Route::apiResource('lotes', LoteController::class)->only(['index', 'store', 'show']);
 
     // Rutas de Importaciones
     Route::get('/importaciones/health', [ImportacionController::class, 'health']);

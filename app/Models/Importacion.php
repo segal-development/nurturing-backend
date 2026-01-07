@@ -14,6 +14,7 @@ class Importacion extends Model
     protected $table = 'importaciones';
 
     protected $fillable = [
+        'lote_id',
         'nombre_archivo',
         'ruta_archivo',
         'origen',
@@ -37,6 +38,11 @@ class Importacion extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    public function lote(): BelongsTo
+    {
+        return $this->belongsTo(Lote::class);
     }
 
     public function prospectos(): HasMany
