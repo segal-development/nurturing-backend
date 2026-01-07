@@ -106,29 +106,84 @@ class LoteController extends Controller
 
     /**
      * Obtener progreso del lote (para polling)
+     * Incluye información detallada de cada importación para tracking en tiempo real
      */
     public function progreso(Lote $lote): JsonResponse
     {
+        // Recargar importaciones frescas
+        $lote->load('importaciones');
         $lote->recalcularTotales();
+        
+        $importaciones = $lote->importaciones;
+        
+        // Calcular estadísticas agregadas
+        $archivosCompletados = $importaciones->filter(fn($i) => $i->estado === 'completado')->count();
+        $archivosProcesando = $importaciones->filter(fn($i) => $i->estado === 'procesando')->count();
+        $archivosPendientes = $importaciones->filter(fn($i) => $i->estado === 'pendiente')->count();
+        $archivosFallidos = $importaciones->filter(fn($i) => $i->estado === 'fallido')->count();
+        
+        // Calcular progreso total estimado
+        $totalEstimado = $importaciones->sum(fn($i) => $i->metadata['total_estimado'] ?? $i->total_registros);
+        $totalProcesado = $importaciones->sum('total_registros');
+        $progresoPorcentaje = $totalEstimado > 0 ? round(($totalProcesado / $totalEstimado) * 100, 1) : 0;
         
         return response()->json([
             'data' => [
                 'id' => $lote->id,
                 'nombre' => $lote->nombre,
                 'estado' => $lote->estado,
+                'created_at' => $lote->created_at->toISOString(),
+                
+                // Contadores de archivos
                 'total_archivos' => $lote->total_archivos,
+                'archivos_completados' => $archivosCompletados,
+                'archivos_procesando' => $archivosProcesando,
+                'archivos_pendientes' => $archivosPendientes,
+                'archivos_fallidos' => $archivosFallidos,
+                
+                // Contadores de registros
                 'total_registros' => $lote->total_registros,
                 'registros_exitosos' => $lote->registros_exitosos,
                 'registros_fallidos' => $lote->registros_fallidos,
-                'importaciones' => $lote->importaciones->map(fn($i) => [
+                'total_estimado' => $totalEstimado,
+                'progreso_porcentaje' => $progresoPorcentaje,
+                
+                // Detalle por importación
+                'importaciones' => $importaciones->map(fn($i) => [
                     'id' => $i->id,
                     'nombre_archivo' => $i->nombre_archivo,
                     'estado' => $i->estado,
                     'total_registros' => $i->total_registros,
                     'registros_exitosos' => $i->registros_exitosos,
-                    'progreso' => $i->metadata['last_processed_row'] ?? 0,
+                    'registros_fallidos' => $i->registros_fallidos,
+                    'total_estimado' => $i->metadata['total_estimado'] ?? $i->total_registros,
+                    'progreso_porcentaje' => $this->calcularProgresoImportacion($i),
+                    'error' => $i->metadata['error'] ?? null,
                 ]),
             ],
         ]);
+    }
+
+    /**
+     * Calcula el porcentaje de progreso de una importación individual
+     */
+    private function calcularProgresoImportacion($importacion): float
+    {
+        if ($importacion->estado === 'completado') {
+            return 100;
+        }
+        
+        if ($importacion->estado === 'fallido') {
+            return 0;
+        }
+        
+        $estimado = $importacion->metadata['total_estimado'] ?? 0;
+        $procesado = $importacion->total_registros ?? 0;
+        
+        if ($estimado <= 0) {
+            return 0;
+        }
+        
+        return min(round(($procesado / $estimado) * 100, 1), 99.9); // Max 99.9 hasta que complete
     }
 }
