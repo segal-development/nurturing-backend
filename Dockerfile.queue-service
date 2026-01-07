@@ -42,7 +42,7 @@ RUN mkdir -p /etc/supervisor.d /var/log
 COPY <<'EOF' /etc/supervisor.d/workers.ini
 [program:queue-worker]
 process_name=%(program_name)s
-command=php /app/artisan queue:work database --sleep=3 --tries=3 --timeout=3600 --memory=1536
+command=php /app/artisan queue:work database --sleep=3 --tries=3 --timeout=3600 --memory=3500
 autostart=true
 autorestart=true
 stopasgroup=true
