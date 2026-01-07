@@ -127,4 +127,24 @@ final class ProspectoCacheService
             'loaded' => $this->loaded,
         ];
     }
+
+    /**
+     * Limpia la cache para liberar memoria.
+     * Llamar después de terminar cada importación.
+     */
+    public function clear(): void
+    {
+        $emailCount = count($this->emailIndex);
+        $telefonoCount = count($this->telefonoIndex);
+        
+        $this->emailIndex = [];
+        $this->telefonoIndex = [];
+        $this->loaded = false;
+        
+        Log::info('ProspectoCacheService: Cache limpiado', [
+            'emails_liberados' => $emailCount,
+            'telefonos_liberados' => $telefonoCount,
+            'memoria_mb' => round(memory_get_usage(true) / 1024 / 1024, 2),
+        ]);
+    }
 }

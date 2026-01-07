@@ -146,13 +146,16 @@ class ProcesarLoteJob implements ShouldQueue
 
     /**
      * Procesa una importación individual.
+     * 
+     * IMPORTANTE: Libera memoria después de cada archivo para evitar OOM.
      */
     private function procesarImportacion(Importacion $importacion, Lote $lote): void
     {
         Log::info('ProcesarLoteJob: Iniciando importación', [
             'lote_id' => $lote->id,
             'importacion_id' => $importacion->id,
-            'archivo' => $importacion->nombre_archivo
+            'archivo' => $importacion->nombre_archivo,
+            'memoria_antes_mb' => round(memory_get_usage(true) / 1024 / 1024, 2)
         ]);
 
         // Actualizar checkpoint del lote
@@ -193,15 +196,22 @@ class ProcesarLoteJob implements ShouldQueue
 
             // Limpiar archivos
             $this->cleanup($importacion, $tempPath);
+            
+            // IMPORTANTE: Liberar memoria del servicio
+            unset($service);
 
             Log::info('ProcesarLoteJob: Importación completada', [
                 'lote_id' => $lote->id,
                 'importacion_id' => $importacion->id,
-                'registros_exitosos' => $importacion->fresh()->registros_exitosos
+                'registros_exitosos' => $importacion->fresh()->registros_exitosos,
+                'memoria_despues_mb' => round(memory_get_usage(true) / 1024 / 1024, 2)
             ]);
 
             // Actualizar totales del lote después de cada importación
             $lote->recalcularTotales();
+            
+            // Forzar garbage collection después de cada archivo grande
+            gc_collect_cycles();
 
         } catch (\Exception $e) {
             // Limpiar archivo temporal si existe
@@ -212,7 +222,8 @@ class ProcesarLoteJob implements ShouldQueue
             Log::error('ProcesarLoteJob: Error en importación', [
                 'lote_id' => $lote->id,
                 'importacion_id' => $importacion->id,
-                'error' => $e->getMessage()
+                'error' => $e->getMessage(),
+                'memoria_mb' => round(memory_get_usage(true) / 1024 / 1024, 2)
             ]);
 
             // Marcar esta importación como fallida pero continuar con las demás
@@ -225,6 +236,9 @@ class ProcesarLoteJob implements ShouldQueue
             ]);
 
             $lote->recalcularTotales();
+            
+            // Forzar garbage collection
+            gc_collect_cycles();
         }
     }
 

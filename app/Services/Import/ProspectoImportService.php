@@ -284,4 +284,22 @@ final class ProspectoImportService
     {
         return $this->rowsProcessed;
     }
+
+    /**
+     * Libera memoria limpiando cache y estructuras internas.
+     * Llamar después de terminar la importación.
+     */
+    public function cleanup(): void
+    {
+        $this->cacheService->clear();
+        $this->rowReader->close();
+    }
+
+    /**
+     * Destructor - asegura que se libere memoria.
+     */
+    public function __destruct()
+    {
+        $this->cleanup();
+    }
 }
