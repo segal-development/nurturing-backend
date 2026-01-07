@@ -360,6 +360,119 @@ class ImportacionController extends Controller
     }
 
     /**
+     * Fuerza la finalización de importaciones que terminaron de procesar
+     * pero quedaron en estado "procesando" (el proceso murió antes de markAsCompleted).
+     * 
+     * Criterio: Si procesó >95% de registros y el archivo ya no existe, marcar como completado.
+     */
+    public function forceComplete(): JsonResponse
+    {
+        $threshold = 0.95; // 95%
+        $completed = [];
+        $skipped = [];
+
+        $importaciones = Importacion::where('estado', 'procesando')->get();
+
+        foreach ($importaciones as $importacion) {
+            $total = $importacion->total_registros ?? 0;
+            $exitosos = $importacion->registros_exitosos ?? 0;
+            $fallidos = $importacion->registros_fallidos ?? 0;
+            $procesados = $exitosos + $fallidos;
+
+            // Calcular porcentaje
+            $porcentaje = $total > 0 ? ($procesados / $total) : 0;
+
+            // Verificar si el archivo existe
+            $archivoExiste = false;
+            if (!empty($importacion->ruta_archivo)) {
+                try {
+                    $disk = $importacion->metadata['disk'] ?? 'gcs';
+                    $archivoExiste = Storage::disk($disk)->exists($importacion->ruta_archivo);
+                } catch (\Exception $e) {
+                    // Asumir que no existe si hay error
+                }
+            }
+
+            // Si procesó >95% y el archivo no existe, marcar como completado
+            if ($porcentaje >= $threshold && !$archivoExiste) {
+                $importacion->update([
+                    'estado' => 'completado',
+                    'metadata' => array_merge($importacion->metadata ?? [], [
+                        'completado_en' => now()->toISOString(),
+                        'completado_por' => 'force_complete_api',
+                        'nota' => 'Forzado via API - proceso terminó pero no guardó estado',
+                    ]),
+                ]);
+
+                // Actualizar el lote
+                $this->updateLoteAfterForceComplete($importacion);
+
+                $completed[] = [
+                    'id' => $importacion->id,
+                    'nombre_archivo' => $importacion->nombre_archivo,
+                    'porcentaje_procesado' => round($porcentaje * 100, 2),
+                ];
+            } else {
+                $skipped[] = [
+                    'id' => $importacion->id,
+                    'nombre_archivo' => $importacion->nombre_archivo,
+                    'porcentaje_procesado' => round($porcentaje * 100, 2),
+                    'archivo_existe' => $archivoExiste,
+                    'razon' => $archivoExiste 
+                        ? 'El archivo aún existe (puede estar procesando)'
+                        : 'Porcentaje procesado menor al threshold (' . round($threshold * 100) . '%)' ,
+                ];
+            }
+        }
+
+        return response()->json([
+            'mensaje' => count($completed) > 0 
+                ? 'Se forzó la finalización de ' . count($completed) . ' importación(es)'
+                : 'No se encontraron importaciones que cumplan los criterios',
+            'completadas' => $completed,
+            'omitidas' => $skipped,
+        ]);
+    }
+
+    /**
+     * Actualiza el lote después de forzar una importación como completada.
+     */
+    private function updateLoteAfterForceComplete(Importacion $importacion): void
+    {
+        $importacion->refresh();
+        
+        if (!$importacion->lote_id) {
+            return;
+        }
+
+        $lote = Lote::find($importacion->lote_id);
+        if (!$lote) {
+            return;
+        }
+
+        $importaciones = $lote->importaciones()->get();
+        
+        $totalRegistros = $importaciones->sum('total_registros');
+        $registrosExitosos = $importaciones->sum('registros_exitosos');
+        $registrosFallidos = $importaciones->sum('registros_fallidos');
+        
+        $todasCompletadas = $importaciones->every(fn ($imp) => in_array($imp->estado, ['completado', 'fallido']));
+        $algunaFallida = $importaciones->contains(fn ($imp) => $imp->estado === 'fallido');
+        
+        $estadoLote = $todasCompletadas 
+            ? ($algunaFallida ? 'fallido' : 'completado')
+            : 'procesando';
+
+        $lote->update([
+            'total_registros' => $totalRegistros,
+            'registros_exitosos' => $registrosExitosos,
+            'registros_fallidos' => $registrosFallidos,
+            'estado' => $estadoLote,
+            'cerrado_en' => $todasCompletadas ? now() : null,
+        ]);
+    }
+
+    /**
      * Re-encola manualmente una importación específica.
      * Útil cuando una importación quedó stuck y necesita ser retomada.
      */

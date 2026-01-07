@@ -42,6 +42,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Rutas de Importaciones
     Route::get('/importaciones/health', [ImportacionController::class, 'health']);
     Route::post('/importaciones/recovery', [ImportacionController::class, 'forceRecovery']);
+    Route::post('/importaciones/force-complete', [ImportacionController::class, 'forceComplete']);
     Route::get('/importaciones/{importacion}/progreso', [ImportacionController::class, 'progreso']);
     Route::post('/importaciones/{importacion}/retry', [ImportacionController::class, 'retry']);
     Route::apiResource('importaciones', ImportacionController::class)->parameters([
