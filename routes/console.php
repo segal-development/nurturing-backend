@@ -45,8 +45,7 @@ Schedule::call(function () {
     return $result;
 })->everyMinute()
   ->name('importaciones:auto-recovery')
-  ->withoutOverlapping()
-  ->runInBackground();
+  ->withoutOverlapping();
 
 // ============================================================================
 // VERIFICACIÓN DE IMPORTACIONES PENDIENTES
@@ -94,8 +93,7 @@ Schedule::call(function () {
     return ['requeued' => count($requeued), 'importaciones' => $requeued];
 })->everyMinute()
   ->name('importaciones:check-pendientes')
-  ->withoutOverlapping()
-  ->runInBackground();
+  ->withoutOverlapping();
 
 // ============================================================================
 // ACTUALIZACIÓN DE ESTADO DE LOTES
@@ -126,5 +124,4 @@ Schedule::command('queue:work --stop-when-empty --tries=1 --timeout=0 --max-jobs
   ->when(function () {
       // Solo ejecutar si hay jobs en cola
       return DB::table('jobs')->exists();
-  })
-  ->runInBackground();
+  });
