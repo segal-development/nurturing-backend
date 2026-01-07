@@ -85,24 +85,63 @@ class ProcesarLoteJob implements ShouldQueue
 
     /**
      * Procesa todas las importaciones del lote secuencialmente.
+     * 
+     * IMPORTANTE: Usa un loop con refresh para detectar nuevas importaciones
+     * que se agreguen mientras el job está corriendo.
      */
     private function procesarImportacionesDelLote(Lote $lote): void
     {
-        // Obtener importaciones ordenadas por ID (orden de subida)
-        $importaciones = $lote->importaciones()
-            ->whereIn('estado', ['pendiente', 'procesando'])
-            ->orderBy('id')
-            ->get();
+        $procesadas = [];
+        $intentosSinNuevas = 0;
+        $maxIntentosSinNuevas = 3; // Esperar hasta 3 ciclos sin nuevas importaciones
+        
+        while ($intentosSinNuevas < $maxIntentosSinNuevas) {
+            // Refrescar el lote para ver nuevas importaciones
+            $lote->refresh();
+            
+            // Obtener importaciones pendientes que NO hemos procesado aún
+            $importaciones = $lote->importaciones()
+                ->whereIn('estado', ['pendiente', 'procesando'])
+                ->whereNotIn('id', $procesadas)
+                ->orderBy('id')
+                ->get();
 
-        Log::info('ProcesarLoteJob: Procesando importaciones', [
-            'lote_id' => $lote->id,
-            'total_importaciones' => $importaciones->count(),
-            'importacion_ids' => $importaciones->pluck('id')->toArray()
-        ]);
+            if ($importaciones->isEmpty()) {
+                // No hay más importaciones por procesar
+                // Esperar un poco por si se están subiendo más archivos
+                $intentosSinNuevas++;
+                
+                if ($intentosSinNuevas < $maxIntentosSinNuevas) {
+                    Log::info('ProcesarLoteJob: Sin importaciones pendientes, esperando...', [
+                        'lote_id' => $lote->id,
+                        'intento' => $intentosSinNuevas,
+                        'procesadas' => count($procesadas)
+                    ]);
+                    sleep(5); // Esperar 5 segundos por si vienen más archivos
+                }
+                continue;
+            }
+            
+            // Reset contador porque encontramos importaciones
+            $intentosSinNuevas = 0;
 
-        foreach ($importaciones as $importacion) {
-            $this->procesarImportacion($importacion, $lote);
+            Log::info('ProcesarLoteJob: Procesando importaciones', [
+                'lote_id' => $lote->id,
+                'total_importaciones' => $importaciones->count(),
+                'importacion_ids' => $importaciones->pluck('id')->toArray(),
+                'ya_procesadas' => count($procesadas)
+            ]);
+
+            foreach ($importaciones as $importacion) {
+                $this->procesarImportacion($importacion, $lote);
+                $procesadas[] = $importacion->id;
+            }
         }
+        
+        Log::info('ProcesarLoteJob: Todas las importaciones procesadas', [
+            'lote_id' => $lote->id,
+            'total_procesadas' => count($procesadas)
+        ]);
     }
 
     /**

@@ -180,7 +180,29 @@ class ImportacionController extends Controller
         $disk = app()->environment('local') ? 'local' : 'gcs';
 
         // Subir archivo a storage
-        Storage::disk($disk)->put($rutaArchivo, file_get_contents($archivo->getRealPath()));
+        $contenido = file_get_contents($archivo->getRealPath());
+        $uploaded = Storage::disk($disk)->put($rutaArchivo, $contenido);
+        
+        // VERIFICAR que el archivo se subió correctamente
+        if (!$uploaded) {
+            throw new \Exception("Error al subir archivo a {$disk}: {$rutaArchivo}");
+        }
+        
+        // Verificar que el archivo existe en storage
+        if (!Storage::disk($disk)->exists($rutaArchivo)) {
+            throw new \Exception("Archivo subido pero no encontrado en {$disk}: {$rutaArchivo}");
+        }
+        
+        $sizeInStorage = Storage::disk($disk)->size($rutaArchivo);
+        
+        \Illuminate\Support\Facades\Log::info('ImportacionController: Archivo subido a storage', [
+            'nombre_archivo' => $nombreArchivo,
+            'ruta_archivo' => $rutaArchivo,
+            'disk' => $disk,
+            'size_original' => strlen($contenido),
+            'size_in_storage' => $sizeInStorage,
+            'lote_id' => $lote->id,
+        ]);
 
         // Crear registro de importación en estado PENDIENTE
         $importacion = Importacion::create([
@@ -194,6 +216,7 @@ class ImportacionController extends Controller
             'metadata' => [
                 'modo' => 'background',
                 'tamano_archivo' => $archivo->getSize(),
+                'tamano_en_storage' => $sizeInStorage,
                 'disk' => $disk,
                 'subido_en' => now()->toISOString(),
             ],
@@ -203,13 +226,18 @@ class ImportacionController extends Controller
         $lote->total_archivos = $lote->importaciones()->count();
         $lote->save();
 
-        // Verificar si ya hay un job del lote en cola
+        // Verificar si ya hay un job del lote en cola O si el lote está procesando
         $hayJobEnCola = $this->loteYaTieneJobEnCola($lote->id);
+        $loteYaProcesando = $lote->estado === 'procesando';
 
-        if (!$hayJobEnCola) {
+        if (!$hayJobEnCola && !$loteYaProcesando) {
             // Encolar UN SOLO job para procesar TODO el lote
             $lote->update(['estado' => 'procesando']);
             ProcesarLoteJob::dispatch($lote->id);
+            
+            \Illuminate\Support\Facades\Log::info('ImportacionController: Job de lote encolado', [
+                'lote_id' => $lote->id,
+            ]);
         }
 
         return response()->json([
