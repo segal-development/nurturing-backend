@@ -9,12 +9,21 @@ use Illuminate\Support\Facades\Log;
 
 /**
  * Servicio de cache para prospectos existentes.
- * Carga emails y teléfonos en memoria para búsqueda O(1).
  * 
- * Single Responsibility: Solo maneja el cache de identificadores de prospectos.
+ * Carga emails y teléfonos en memoria para búsqueda O(1).
+ * Esencial para performance en importaciones grandes (100k+ registros).
+ * 
+ * @example
+ * $cache = new ProspectoCacheService();
+ * $cache->loadExistingProspectos();
+ * $existingId = $cache->findExistingProspectoId($email, $telefono);
  */
 final class ProspectoCacheService
 {
+    // =========================================================================
+    // ESTADO
+    // =========================================================================
+
     /** @var array<string, int> email => prospecto_id */
     private array $emailIndex = [];
     
@@ -22,6 +31,10 @@ final class ProspectoCacheService
     private array $telefonoIndex = [];
     
     private bool $loaded = false;
+
+    // =========================================================================
+    // CARGA DE DATOS
+    // =========================================================================
 
     /**
      * Carga todos los emails y teléfonos existentes en memoria.
@@ -35,44 +48,86 @@ final class ProspectoCacheService
 
         $startTime = microtime(true);
         
-        $this->loadEmails();
-        $this->loadTelefonos();
+        $this->loadEmailIndex();
+        $this->loadTelefonoIndex();
         
         $this->loaded = true;
         
-        $elapsed = round(microtime(true) - $startTime, 2);
-        
+        $this->logCacheLoaded($startTime);
+    }
+
+    private function loadEmailIndex(): void
+    {
+        $this->emailIndex = DB::table('prospectos')
+            ->whereNotNull('email')
+            ->where('email', '!=', '')
+            ->pluck('id', 'email')
+            ->toArray();
+    }
+
+    private function loadTelefonoIndex(): void
+    {
+        $this->telefonoIndex = DB::table('prospectos')
+            ->whereNotNull('telefono')
+            ->where('telefono', '!=', '')
+            ->pluck('id', 'telefono')
+            ->toArray();
+    }
+
+    private function logCacheLoaded(float $startTime): void
+    {
         Log::info('ProspectoCacheService: Cache cargado', [
             'emails_count' => count($this->emailIndex),
             'telefonos_count' => count($this->telefonoIndex),
-            'tiempo_segundos' => $elapsed,
+            'tiempo_segundos' => round(microtime(true) - $startTime, 2),
             'memoria_mb' => round(memory_get_usage(true) / 1024 / 1024, 2),
         ]);
     }
 
+    // =========================================================================
+    // BÚSQUEDA
+    // =========================================================================
+
     /**
      * Busca un prospecto existente por email o teléfono.
+     * 
+     * Prioridad: email > teléfono
      * Complejidad: O(1)
      * 
      * @return int|null ID del prospecto o null si no existe
      */
     public function findExistingProspectoId(?string $email, ?string $telefono): ?int
     {
-        // Prioridad: email > teléfono
-        if ($email !== null && isset($this->emailIndex[$email])) {
-            return $this->emailIndex[$email];
-        }
-
-        if ($telefono !== null && isset($this->telefonoIndex[$telefono])) {
-            return $this->telefonoIndex[$telefono];
-        }
-
-        return null;
+        return $this->findByEmail($email) ?? $this->findByTelefono($telefono);
     }
+
+    private function findByEmail(?string $email): ?int
+    {
+        if ($email === null) {
+            return null;
+        }
+        
+        return $this->emailIndex[$email] ?? null;
+    }
+
+    private function findByTelefono(?string $telefono): ?int
+    {
+        if ($telefono === null) {
+            return null;
+        }
+        
+        return $this->telefonoIndex[$telefono] ?? null;
+    }
+
+    // =========================================================================
+    // REGISTRO DE NUEVOS
+    // =========================================================================
 
     /**
      * Registra un nuevo prospecto en el cache.
      * Usado para detectar duplicados dentro del mismo archivo.
+     * 
+     * @param int $id ID del prospecto (-1 para pendientes de crear)
      */
     public function registerNewProspecto(?string $email, ?string $telefono, int $id = -1): void
     {
@@ -85,8 +140,12 @@ final class ProspectoCacheService
         }
     }
 
+    // =========================================================================
+    // CONSULTAS
+    // =========================================================================
+
     /**
-     * Verifica si un email ya existe (en BD o pendiente de crear).
+     * Verifica si un email ya existe.
      */
     public function emailExists(?string $email): bool
     {
@@ -94,30 +153,24 @@ final class ProspectoCacheService
     }
 
     /**
-     * Verifica si un teléfono ya existe (en BD o pendiente de crear).
+     * Verifica si un teléfono ya existe.
      */
     public function telefonoExists(?string $telefono): bool
     {
         return $telefono !== null && isset($this->telefonoIndex[$telefono]);
     }
 
-    private function loadEmails(): void
+    /**
+     * Verifica si el cache está cargado.
+     */
+    public function isLoaded(): bool
     {
-        $this->emailIndex = DB::table('prospectos')
-            ->whereNotNull('email')
-            ->where('email', '!=', '')
-            ->pluck('id', 'email')
-            ->toArray();
+        return $this->loaded;
     }
 
-    private function loadTelefonos(): void
-    {
-        $this->telefonoIndex = DB::table('prospectos')
-            ->whereNotNull('telefono')
-            ->where('telefono', '!=', '')
-            ->pluck('id', 'telefono')
-            ->toArray();
-    }
+    // =========================================================================
+    // ESTADÍSTICAS
+    // =========================================================================
 
     public function getStats(): array
     {
@@ -126,5 +179,15 @@ final class ProspectoCacheService
             'telefonos_count' => count($this->telefonoIndex),
             'loaded' => $this->loaded,
         ];
+    }
+
+    public function getEmailCount(): int
+    {
+        return count($this->emailIndex);
+    }
+
+    public function getTelefonoCount(): int
+    {
+        return count($this->telefonoIndex);
     }
 }
