@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Jobs;
 
 use App\Models\Importacion;
+use App\Models\Lote;
 use App\Services\Import\ProspectoImportService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -28,27 +29,32 @@ class ProcesarImportacionJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    /**
-     * Intentos altos - el job debe persistir hasta completarse.
-     * El lock en BD evita ejecuciones paralelas.
-     */
+    // =========================================================================
+    // CONFIGURACION DE COLA
+    // =========================================================================
+
+    /** Intentos altos - el job debe persistir hasta completarse */
     public int $tries = 9999;
     
-    /**
-     * Sin timeout de Laravel - Cloud Run maneja el timeout.
-     */
+    /** Sin timeout de Laravel - Cloud Run maneja el timeout */
     public int $timeout = 0;
     
-    /**
-     * No fallar por timeout.
-     */
+    /** No fallar por timeout */
     public bool $failOnTimeout = false;
 
-    /**
-     * Backoff entre reintentos (segundos).
-     * Evita que el job se re-intente inmediatamente si falla.
-     */
+    /** Backoff entre reintentos (segundos) */
     public int $backoff = 30;
+
+    // =========================================================================
+    // CONSTANTES INTERNAS
+    // =========================================================================
+
+    /** Minutos máximos sin update para considerar lock abandonado */
+    private const STALE_LOCK_THRESHOLD_MINUTES = 2;
+
+    // =========================================================================
+    // CONSTRUCTOR
+    // =========================================================================
 
     public function __construct(
         public int $importacionId,
@@ -56,120 +62,71 @@ class ProcesarImportacionJob implements ShouldQueue
         public string $diskName = 'gcs'
     ) {}
 
-    /**
-     * Ejecuta el job de importación.
-     */
+    // =========================================================================
+    // HANDLER PRINCIPAL
+    // =========================================================================
+
     public function handle(): void
     {
         $startTime = microtime(true);
         
-        Log::info('ProcesarImportacionJob: Iniciando', [
-            'importacion_id' => $this->importacionId,
-            'attempt' => $this->attempts(),
-            'memoria_inicial_mb' => round(memory_get_usage(true) / 1024 / 1024, 2),
-        ]);
+        $this->logInicio();
 
-        // Paso 1: Intentar adquirir lock (sin eliminar de cola)
         if (!$this->tryAcquireLock()) {
-            Log::info('ProcesarImportacionJob: No se pudo adquirir lock, saliendo', [
-                'importacion_id' => $this->importacionId,
-            ]);
-            return; // Otro worker ya lo tiene, salir sin eliminar de cola
+            $this->logNoLock();
+            return;
         }
 
-        // Paso 2: Verificar si ya está completado
         if ($this->isAlreadyCompleted()) {
             $this->deleteAndLog('Importación ya completada');
             return;
         }
 
-        // Paso 3: Procesar importación
         $success = $this->processImport();
 
-        $elapsed = round(microtime(true) - $startTime, 2);
+        $this->logFinalizacion($success, $startTime);
 
-        // Paso 4: Solo eliminar de cola si terminó exitosamente
         if ($success) {
-            Log::info('ProcesarImportacionJob: Finalizado exitosamente', [
-                'importacion_id' => $this->importacionId,
-                'tiempo_total_segundos' => $elapsed,
-                'memoria_peak_mb' => round(memory_get_peak_usage(true) / 1024 / 1024, 2),
-            ]);
             $this->deleteAndLog('Importación completada exitosamente');
-        } else {
-            Log::warning('ProcesarImportacionJob: Finalizado con errores, permanece en cola', [
-                'importacion_id' => $this->importacionId,
-                'tiempo_segundos' => $elapsed,
-            ]);
         }
-        // Si no fue exitoso, el job permanece en cola para reintento
     }
 
-    /**
-     * Intenta adquirir el lock usando UPDATE condicional.
-     */
+    // =========================================================================
+    // GESTION DE LOCKS
+    // =========================================================================
+
     private function tryAcquireLock(): bool
     {
         $importacion = Importacion::find($this->importacionId);
         
         if (!$importacion) {
-            Log::error('ProcesarImportacionJob: Importación no encontrada', [
-                'importacion_id' => $this->importacionId,
-            ]);
+            $this->logImportacionNoEncontrada();
             $this->delete();
             return false;
         }
 
-        // Si ya está procesando, verificar si el proceso anterior murió
-        if ($importacion->estado === 'procesando') {
-            return $this->tryRecoverStaleLock($importacion);
-        }
-
-        // Si está pendiente, adquirir lock
-        if ($importacion->estado === 'pendiente') {
-            return $this->acquireFreshLock();
-        }
-
-        // Estados finales (completado, fallido) - no procesar
-        Log::info('ProcesarImportacionJob: Estado final, no procesar', [
-            'importacion_id' => $this->importacionId,
-            'estado' => $importacion->estado,
-        ]);
-        return false;
+        return match ($importacion->estado) {
+            'procesando' => $this->tryRecoverStaleLock($importacion),
+            'pendiente' => $this->acquireFreshLock(),
+            default => $this->handleEstadoFinal($importacion->estado),
+        };
     }
 
-    /**
-     * Intenta recuperar un lock abandonado (proceso anterior murió).
-     */
     private function tryRecoverStaleLock(Importacion $importacion): bool
     {
-        $lastUpdate = $importacion->updated_at;
-        $minutesSinceUpdate = now()->diffInMinutes($lastUpdate);
+        $minutesSinceUpdate = (int) now()->diffInMinutes($importacion->updated_at);
 
-        // Si se actualizó hace menos de 2 minutos, otro proceso lo tiene activo
-        if ($minutesSinceUpdate < 2) {
-            Log::info('ProcesarImportacionJob: Lock activo, otro worker procesando', [
-                'importacion_id' => $this->importacionId,
-                'minutes_since_update' => $minutesSinceUpdate,
-            ]);
+        if ($minutesSinceUpdate < self::STALE_LOCK_THRESHOLD_MINUTES) {
+            $this->logLockActivo($minutesSinceUpdate);
             return false;
         }
 
-        // Lock abandonado - recuperarlo
-        Log::warning('ProcesarImportacionJob: Recuperando lock abandonado', [
-            'importacion_id' => $this->importacionId,
-            'minutes_since_update' => $minutesSinceUpdate,
-            'last_checkpoint' => $importacion->metadata['last_processed_row'] ?? 0,
-        ]);
-
-        // Actualizar timestamp para indicar que este worker lo tiene
+        $this->logRecuperandoLock($minutesSinceUpdate, $importacion);
         $importacion->update(['updated_at' => now()]);
+        
         return true;
     }
 
-    /**
-     * Adquiere un lock fresco (estado pendiente).
-     */
     private function acquireFreshLock(): bool
     {
         $acquired = DB::table('importaciones')
@@ -181,32 +138,33 @@ class ProcesarImportacionJob implements ShouldQueue
             ]);
 
         if ($acquired === 0) {
-            Log::info('ProcesarImportacionJob: No se pudo adquirir lock fresco', [
-                'importacion_id' => $this->importacionId,
-            ]);
+            $this->logNoSePudoAdquirirLock();
             return false;
         }
 
-        Log::info('ProcesarImportacionJob: Lock fresco adquirido', [
-            'importacion_id' => $this->importacionId,
-        ]);
+        $this->logLockAdquirido();
         return true;
     }
 
-    /**
-     * Verifica si la importación ya está completada.
-     */
+    private function handleEstadoFinal(string $estado): bool
+    {
+        Log::info('ProcesarImportacionJob: Estado final, no procesar', [
+            'importacion_id' => $this->importacionId,
+            'estado' => $estado,
+        ]);
+        return false;
+    }
+
     private function isAlreadyCompleted(): bool
     {
         $importacion = Importacion::find($this->importacionId);
         return $importacion && $importacion->estado === 'completado';
     }
 
-    /**
-     * Procesa la importación usando el servicio.
-     * 
-     * @return bool True si completó exitosamente
-     */
+    // =========================================================================
+    // PROCESAMIENTO
+    // =========================================================================
+
     private function processImport(): bool
     {
         $importacion = Importacion::find($this->importacionId);
@@ -219,37 +177,14 @@ class ProcesarImportacionJob implements ShouldQueue
 
         try {
             $tempPath = $this->downloadFile();
-            $this->updateMetadata($importacion, $tempPath);
+            $this->updateMetadataInicio($importacion, $tempPath);
             
-            $service = new ProspectoImportService($importacion, $tempPath);
-            $service->import();
-
-            // IMPORTANTE: Verificar que el estado se actualizó correctamente
-            // Si por alguna razón import() terminó pero no se marcó como completado, forzarlo
-            $importacion->refresh();
-            if ($importacion->estado === 'procesando') {
-                Log::warning('ProcesarImportacionJob: Import terminó pero estado sigue en procesando, forzando completado', [
-                    'importacion_id' => $this->importacionId,
-                    'registros_exitosos' => $service->getRegistrosExitosos(),
-                ]);
-                $this->forceMarkAsCompleted($importacion, $service);
-            }
-
-            // Cleanup DESPUÉS de asegurar que el estado está bien
+            $service = $this->ejecutarServicioImportacion($importacion, $tempPath);
+            $this->verificarYForzarCompletado($importacion, $service);
             $this->cleanup($tempPath);
-            
-            // Forzar liberación de memoria después de procesar archivo grande
             $this->forceMemoryCleanup();
             
-            Log::info('ProcesarImportacionJob: Procesamiento completado', [
-                'importacion_id' => $this->importacionId,
-                'registros_procesados' => $service->getRowsProcessed(),
-                'exitosos' => $service->getRegistrosExitosos(),
-                'fallidos' => $service->getRegistrosFallidos(),
-                'estado_final' => $importacion->fresh()->estado,
-                'memoria_peak_mb' => round(memory_get_peak_usage(true) / 1024 / 1024, 2),
-                'memoria_actual_mb' => round(memory_get_usage(true) / 1024 / 1024, 2),
-            ]);
+            $this->logProcesamientoCompletado($importacion, $service);
 
             return true;
 
@@ -259,10 +194,29 @@ class ProcesarImportacionJob implements ShouldQueue
         }
     }
 
-    /**
-     * Fuerza marcar la importación como completada.
-     * Se usa como fallback si import() terminó pero no actualizó el estado.
-     */
+    private function ejecutarServicioImportacion(Importacion $importacion, string $tempPath): ProspectoImportService
+    {
+        $service = new ProspectoImportService($importacion, $tempPath);
+        $service->import();
+        return $service;
+    }
+
+    private function verificarYForzarCompletado(Importacion $importacion, ProspectoImportService $service): void
+    {
+        $importacion->refresh();
+        
+        if ($importacion->estado !== 'procesando') {
+            return;
+        }
+
+        Log::warning('ProcesarImportacionJob: Import terminó pero estado sigue en procesando, forzando completado', [
+            'importacion_id' => $this->importacionId,
+            'registros_exitosos' => $service->getRegistrosExitosos(),
+        ]);
+        
+        $this->forceMarkAsCompleted($importacion, $service);
+    }
+
     private function forceMarkAsCompleted(Importacion $importacion, ProspectoImportService $service): void
     {
         $importacion->update([
@@ -276,16 +230,18 @@ class ProcesarImportacionJob implements ShouldQueue
             ]),
         ]);
 
-        // Actualizar el lote
         $this->updateLoteAfterComplete($importacion);
     }
+
+    // =========================================================================
+    // GESTION DE LOTE
+    // =========================================================================
 
     /**
      * Actualiza el lote después de completar una importación.
      * 
      * IMPORTANTE: Solo recalcula totales, NO cierra el lote automáticamente.
      * El lote debe ser cerrado manualmente por el usuario via POST /api/lotes/{id}/cerrar.
-     * Esto permite agregar múltiples archivos al mismo lote.
      */
     private function updateLoteAfterComplete(Importacion $importacion): void
     {
@@ -300,27 +256,24 @@ class ProcesarImportacionJob implements ShouldQueue
             return;
         }
 
+        $this->recalcularTotalesLote($lote);
+    }
+
+    private function recalcularTotalesLote(Lote $lote): void
+    {
         $importaciones = $lote->importaciones()->get();
         
-        $totalRegistros = $importaciones->sum('total_registros');
-        $registrosExitosos = $importaciones->sum('registros_exitosos');
-        $registrosFallidos = $importaciones->sum('registros_fallidos');
+        $hayEnProceso = $importaciones->contains(
+            fn($imp) => in_array($imp->estado, ['procesando', 'pendiente'])
+        );
         
-        // Determinar estado del lote basado en importaciones en proceso
-        // NOTA: El lote queda en "abierto" o "procesando", NUNCA se cierra automáticamente
-        $hayProcesando = $importaciones->contains(fn ($imp) => $imp->estado === 'procesando');
-        $hayPendientes = $importaciones->contains(fn ($imp) => $imp->estado === 'pendiente');
-        
-        // Si hay alguna importación procesando o pendiente, el lote está procesando
-        // Si todas terminaron, el lote queda en "abierto" (listo para más archivos)
-        $estadoLote = ($hayProcesando || $hayPendientes) ? 'procesando' : 'abierto';
+        $estadoLote = $hayEnProceso ? 'procesando' : 'abierto';
 
         $lote->update([
-            'total_registros' => $totalRegistros,
-            'registros_exitosos' => $registrosExitosos,
-            'registros_fallidos' => $registrosFallidos,
+            'total_registros' => $importaciones->sum('total_registros'),
+            'registros_exitosos' => $importaciones->sum('registros_exitosos'),
+            'registros_fallidos' => $importaciones->sum('registros_fallidos'),
             'estado' => $estadoLote,
-            // NO actualizamos cerrado_en - eso solo lo hace el cierre manual
         ]);
 
         Log::info('ProcesarImportacionJob: Lote actualizado (sin cierre automático)', [
@@ -329,49 +282,64 @@ class ProcesarImportacionJob implements ShouldQueue
         ]);
     }
 
-    /**
-     * Descarga el archivo de GCS a almacenamiento temporal.
-     */
+    // =========================================================================
+    // DESCARGA DE ARCHIVO
+    // =========================================================================
+
     private function downloadFile(): string
     {
-        Log::info('ProcesarImportacionJob: Descargando archivo', [
-            'importacion_id' => $this->importacionId,
-            'ruta' => $this->rutaArchivo,
-        ]);
+        $this->logDescargaInicio();
 
+        $this->validarArchivoExiste();
+        
+        $contenido = $this->descargarContenido();
+        $tempPath = $this->guardarEnTemporal($contenido);
+        
+        unset($contenido);
+
+        $this->logDescargaCompletada($tempPath);
+
+        return $tempPath;
+    }
+
+    private function validarArchivoExiste(): void
+    {
         if (!Storage::disk($this->diskName)->exists($this->rutaArchivo)) {
             throw new \Exception("Archivo no encontrado: {$this->rutaArchivo}");
         }
+    }
 
-        $storageSize = Storage::disk($this->diskName)->size($this->rutaArchivo);
+    private function descargarContenido(): string
+    {
         $contenido = Storage::disk($this->diskName)->get($this->rutaArchivo);
 
         if (empty($contenido)) {
             throw new \Exception("Archivo descargado está vacío");
         }
 
+        return $contenido;
+    }
+
+    private function guardarEnTemporal(string $contenido): string
+    {
+        $storageSize = Storage::disk($this->diskName)->size($this->rutaArchivo);
         $extension = pathinfo($this->rutaArchivo, PATHINFO_EXTENSION) ?: 'xlsx';
         $tempPath = storage_path('app/temp_' . uniqid() . '.' . $extension);
         
         file_put_contents($tempPath, $contenido);
-        unset($contenido);
 
         if (filesize($tempPath) !== $storageSize) {
             throw new \Exception("Tamaño no coincide. Storage: {$storageSize}, Local: " . filesize($tempPath));
         }
 
-        Log::info('ProcesarImportacionJob: Archivo descargado', [
-            'importacion_id' => $this->importacionId,
-            'size_mb' => round($storageSize / 1024 / 1024, 2),
-        ]);
-
         return $tempPath;
     }
 
-    /**
-     * Actualiza metadata con información del procesamiento.
-     */
-    private function updateMetadata(Importacion $importacion, string $tempPath): void
+    // =========================================================================
+    // METADATA Y CLEANUP
+    // =========================================================================
+
+    private function updateMetadataInicio(Importacion $importacion, string $tempPath): void
     {
         $importacion->update([
             'metadata' => array_merge($importacion->metadata ?? [], [
@@ -382,15 +350,21 @@ class ProcesarImportacionJob implements ShouldQueue
         ]);
     }
 
-    /**
-     * Limpia archivos temporales y de GCS.
-     */
     private function cleanup(?string $tempPath): void
+    {
+        $this->eliminarArchivoTemporal($tempPath);
+        $this->eliminarArchivoStorage();
+    }
+
+    private function eliminarArchivoTemporal(?string $tempPath): void
     {
         if ($tempPath && file_exists($tempPath)) {
             @unlink($tempPath);
         }
+    }
 
+    private function eliminarArchivoStorage(): void
+    {
         try {
             Storage::disk($this->diskName)->delete($this->rutaArchivo);
         } catch (\Exception $e) {
@@ -400,55 +374,12 @@ class ProcesarImportacionJob implements ShouldQueue
         }
     }
 
-    /**
-     * Maneja errores durante el procesamiento.
-     */
-    private function handleError(Importacion $importacion, ?string $tempPath, \Exception $e): void
-    {
-        if ($tempPath && file_exists($tempPath)) {
-            @unlink($tempPath);
-        }
-
-        Log::error('ProcesarImportacionJob: Error en procesamiento', [
-            'importacion_id' => $this->importacionId,
-            'error' => $e->getMessage(),
-            'memoria_peak_mb' => round(memory_get_peak_usage(true) / 1024 / 1024, 2),
-        ]);
-
-        // Guardar error en metadata pero NO marcar como fallido
-        // El job se reintentará automáticamente
-        $importacion->update([
-            'metadata' => array_merge($importacion->metadata ?? [], [
-                'ultimo_error' => $e->getMessage(),
-                'ultimo_error_en' => now()->toISOString(),
-            ]),
-        ]);
-    }
-
-    /**
-     * Elimina el job de la cola y loguea.
-     */
-    private function deleteAndLog(string $reason): void
-    {
-        Log::info('ProcesarImportacionJob: Eliminando de cola', [
-            'importacion_id' => $this->importacionId,
-            'reason' => $reason,
-        ]);
-        $this->delete();
-    }
-
-    /**
-     * Fuerza limpieza de memoria después de procesar archivo grande.
-     * Esto ayuda a evitar que la memoria acumulada cause OOM en el siguiente job.
-     */
     private function forceMemoryCleanup(): void
     {
-        // Limpiar cualquier referencia en memoria
         if (function_exists('gc_collect_cycles')) {
             gc_collect_cycles();
         }
         
-        // Forzar garbage collection
         gc_mem_caches();
         
         Log::info('ProcesarImportacionJob: Memoria limpiada', [
@@ -457,19 +388,146 @@ class ProcesarImportacionJob implements ShouldQueue
         ]);
     }
 
-    /**
-     * Determina si el job debe reintentarse.
-     */
+    // =========================================================================
+    // MANEJO DE ERRORES
+    // =========================================================================
+
+    private function handleError(Importacion $importacion, ?string $tempPath, \Exception $e): void
+    {
+        $this->eliminarArchivoTemporal($tempPath);
+
+        Log::error('ProcesarImportacionJob: Error en procesamiento', [
+            'importacion_id' => $this->importacionId,
+            'error' => $e->getMessage(),
+            'memoria_peak_mb' => round(memory_get_peak_usage(true) / 1024 / 1024, 2),
+        ]);
+
+        $importacion->update([
+            'metadata' => array_merge($importacion->metadata ?? [], [
+                'ultimo_error' => $e->getMessage(),
+                'ultimo_error_en' => now()->toISOString(),
+            ]),
+        ]);
+    }
+
     public function shouldRetry(\Throwable $exception): bool
     {
         $importacion = Importacion::find($this->importacionId);
         
-        // No reintentar si ya está completado
-        if ($importacion && $importacion->estado === 'completado') {
-            return false;
+        return !($importacion && $importacion->estado === 'completado');
+    }
+
+    // =========================================================================
+    // LOGGING
+    // =========================================================================
+
+    private function logInicio(): void
+    {
+        Log::info('ProcesarImportacionJob: Iniciando', [
+            'importacion_id' => $this->importacionId,
+            'attempt' => $this->attempts(),
+            'memoria_inicial_mb' => round(memory_get_usage(true) / 1024 / 1024, 2),
+        ]);
+    }
+
+    private function logNoLock(): void
+    {
+        Log::info('ProcesarImportacionJob: No se pudo adquirir lock, saliendo', [
+            'importacion_id' => $this->importacionId,
+        ]);
+    }
+
+    private function logImportacionNoEncontrada(): void
+    {
+        Log::error('ProcesarImportacionJob: Importación no encontrada', [
+            'importacion_id' => $this->importacionId,
+        ]);
+    }
+
+    private function logLockActivo(int $minutesSinceUpdate): void
+    {
+        Log::info('ProcesarImportacionJob: Lock activo, otro worker procesando', [
+            'importacion_id' => $this->importacionId,
+            'minutes_since_update' => $minutesSinceUpdate,
+        ]);
+    }
+
+    private function logRecuperandoLock(int $minutesSinceUpdate, Importacion $importacion): void
+    {
+        Log::warning('ProcesarImportacionJob: Recuperando lock abandonado', [
+            'importacion_id' => $this->importacionId,
+            'minutes_since_update' => $minutesSinceUpdate,
+            'last_checkpoint' => $importacion->metadata['last_processed_row'] ?? 0,
+        ]);
+    }
+
+    private function logNoSePudoAdquirirLock(): void
+    {
+        Log::info('ProcesarImportacionJob: No se pudo adquirir lock fresco', [
+            'importacion_id' => $this->importacionId,
+        ]);
+    }
+
+    private function logLockAdquirido(): void
+    {
+        Log::info('ProcesarImportacionJob: Lock fresco adquirido', [
+            'importacion_id' => $this->importacionId,
+        ]);
+    }
+
+    private function logDescargaInicio(): void
+    {
+        Log::info('ProcesarImportacionJob: Descargando archivo', [
+            'importacion_id' => $this->importacionId,
+            'ruta' => $this->rutaArchivo,
+        ]);
+    }
+
+    private function logDescargaCompletada(string $tempPath): void
+    {
+        Log::info('ProcesarImportacionJob: Archivo descargado', [
+            'importacion_id' => $this->importacionId,
+            'size_mb' => round(filesize($tempPath) / 1024 / 1024, 2),
+        ]);
+    }
+
+    private function logProcesamientoCompletado(Importacion $importacion, ProspectoImportService $service): void
+    {
+        Log::info('ProcesarImportacionJob: Procesamiento completado', [
+            'importacion_id' => $this->importacionId,
+            'registros_procesados' => $service->getRowsProcessed(),
+            'exitosos' => $service->getRegistrosExitosos(),
+            'fallidos' => $service->getRegistrosFallidos(),
+            'estado_final' => $importacion->fresh()->estado,
+            'memoria_peak_mb' => round(memory_get_peak_usage(true) / 1024 / 1024, 2),
+            'memoria_actual_mb' => round(memory_get_usage(true) / 1024 / 1024, 2),
+        ]);
+    }
+
+    private function logFinalizacion(bool $success, float $startTime): void
+    {
+        $elapsed = round(microtime(true) - $startTime, 2);
+
+        if ($success) {
+            Log::info('ProcesarImportacionJob: Finalizado exitosamente', [
+                'importacion_id' => $this->importacionId,
+                'tiempo_total_segundos' => $elapsed,
+                'memoria_peak_mb' => round(memory_get_peak_usage(true) / 1024 / 1024, 2),
+            ]);
+        } else {
+            Log::warning('ProcesarImportacionJob: Finalizado con errores, permanece en cola', [
+                'importacion_id' => $this->importacionId,
+                'tiempo_segundos' => $elapsed,
+            ]);
         }
-        
-        // Reintentar en otros casos
-        return true;
+    }
+
+    private function deleteAndLog(string $reason): void
+    {
+        Log::info('ProcesarImportacionJob: Eliminando de cola', [
+            'importacion_id' => $this->importacionId,
+            'reason' => $reason,
+        ]);
+        $this->delete();
     }
 }

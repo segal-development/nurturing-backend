@@ -1,22 +1,44 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Http\Controllers;
 
 use App\Http\Resources\LoteResource;
+use App\Models\Importacion;
 use App\Models\Lote;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 
+/**
+ * Controller para gestión de lotes de importación.
+ * 
+ * Un lote agrupa múltiples archivos de importación que se procesan
+ * en paralelo. Permite tracking unificado del progreso.
+ */
 class LoteController extends Controller
 {
+    // =========================================================================
+    // CONFIGURACION
+    // =========================================================================
+
+    private const ESTADOS_EN_PROCESO = ['procesando', 'pendiente'];
+    private const MAX_PROGRESS_WHILE_PROCESSING = 99.9;
+
+    // =========================================================================
+    // ENDPOINTS CRUD
+    // =========================================================================
+
     /**
-     * Listar todos los lotes del usuario (para el selector)
+     * Listar todos los lotes con sus importaciones.
      */
     public function index(Request $request): JsonResponse
     {
-        $lotes = Lote::with(['importaciones' => function ($query) {
-                $query->select('id', 'lote_id', 'nombre_archivo', 'estado', 'total_registros', 'registros_exitosos', 'registros_fallidos');
-            }])
+        $lotes = Lote::with(['importaciones' => fn($q) => $q->select(
+            'id', 'lote_id', 'nombre_archivo', 'estado',
+            'total_registros', 'registros_exitosos', 'registros_fallidos'
+        )])
             ->orderBy('created_at', 'desc')
             ->get();
 
@@ -26,15 +48,14 @@ class LoteController extends Controller
     }
 
     /**
-     * Obtener lotes abiertos (para agregar más archivos)
+     * Obtener lotes abiertos (para agregar más archivos).
      */
     public function abiertos(Request $request): JsonResponse
     {
-        $lotes = Lote::where('estado', 'abierto')
-            ->orWhere('estado', 'procesando')
-            ->with(['importaciones' => function ($query) {
-                $query->select('id', 'lote_id', 'nombre_archivo', 'estado', 'total_registros');
-            }])
+        $lotes = Lote::whereIn('estado', ['abierto', 'procesando'])
+            ->with(['importaciones' => fn($q) => $q->select(
+                'id', 'lote_id', 'nombre_archivo', 'estado', 'total_registros'
+            )])
             ->orderBy('created_at', 'desc')
             ->get();
 
@@ -44,7 +65,7 @@ class LoteController extends Controller
     }
 
     /**
-     * Crear un nuevo lote
+     * Crear un nuevo lote.
      */
     public function store(Request $request): JsonResponse
     {
@@ -65,7 +86,7 @@ class LoteController extends Controller
     }
 
     /**
-     * Obtener un lote específico con sus importaciones
+     * Obtener un lote específico con sus importaciones.
      */
     public function show(Lote $lote): JsonResponse
     {
@@ -76,122 +97,193 @@ class LoteController extends Controller
         ]);
     }
 
+    // =========================================================================
+    // GESTION DE ESTADO
+    // =========================================================================
+
     /**
-     * Cerrar/Finalizar un lote manualmente (no permite más archivos)
+     * Cerrar/Finalizar un lote manualmente.
      * 
-     * Este método es llamado cuando el usuario clickea "Finalizar carga" en el frontend.
+     * Llamado cuando el usuario clickea "Finalizar carga" en el frontend.
      * Permite cerrar el lote aunque haya importaciones fallidas.
      */
     public function cerrar(Lote $lote): JsonResponse
     {
         if ($lote->estado === 'completado') {
-            return response()->json([
-                'mensaje' => 'El lote ya está completado',
-            ], 422);
+            return response()->json(['mensaje' => 'El lote ya está completado'], 422);
         }
 
-        // Verificar si hay importaciones procesando o pendientes
         $importaciones = $lote->importaciones()->get();
-        $hayProcesando = $importaciones->contains(fn($i) => in_array($i->estado, ['procesando', 'pendiente']));
         
-        if ($hayProcesando) {
-            return response()->json([
-                'mensaje' => 'No se puede cerrar el lote mientras hay importaciones en proceso',
-                'importaciones_pendientes' => $importaciones
-                    ->filter(fn($i) => in_array($i->estado, ['procesando', 'pendiente']))
-                    ->map(fn($i) => ['id' => $i->id, 'nombre' => $i->nombre_archivo, 'estado' => $i->estado]),
-            ], 422);
+        if ($this->tieneImportacionesEnProceso($importaciones)) {
+            return $this->respuestaImportacionesEnProceso($importaciones);
         }
 
-        // Recalcular totales antes de cerrar
-        $lote->recalcularTotales();
+        $this->cerrarLote($lote, $importaciones);
 
-        // Determinar estado final basado en las importaciones
-        $algunaFallida = $importaciones->contains(fn($i) => $i->estado === 'fallido');
-        $todasFallidas = $importaciones->every(fn($i) => $i->estado === 'fallido');
-        
-        // Si todas fallaron -> fallido, si algunas fallaron -> completado (parcial), si ninguna falló -> completado
-        if ($todasFallidas && $importaciones->count() > 0) {
-            $lote->estado = 'fallido';
-        } else {
-            $lote->estado = 'completado';
-        }
-        
-        $lote->cerrado_en = now();
-        $lote->save();
+        $algunaFallida = $this->tieneImportacionesFallidas($importaciones);
+        $mensaje = $algunaFallida 
+            ? 'Lote cerrado con algunas importaciones fallidas' 
+            : 'Lote cerrado exitosamente';
 
         return response()->json([
-            'mensaje' => $algunaFallida 
-                ? 'Lote cerrado con algunas importaciones fallidas' 
-                : 'Lote cerrado exitosamente',
+            'mensaje' => $mensaje,
             'data' => new LoteResource($lote->fresh(['importaciones'])),
         ]);
     }
 
+    // =========================================================================
+    // PROGRESO
+    // =========================================================================
+
     /**
-     * Obtener progreso del lote (para polling)
-     * Incluye información detallada de cada importación para tracking en tiempo real
+     * Obtener progreso del lote (para polling).
+     * Incluye información detallada de cada importación para tracking en tiempo real.
      */
     public function progreso(Lote $lote): JsonResponse
     {
-        // Recargar importaciones frescas
         $lote->load('importaciones');
         $lote->recalcularTotales();
         
-        $importaciones = $lote->importaciones;
-        
-        // Calcular estadísticas agregadas
-        $archivosCompletados = $importaciones->filter(fn($i) => $i->estado === 'completado')->count();
-        $archivosProcesando = $importaciones->filter(fn($i) => $i->estado === 'procesando')->count();
-        $archivosPendientes = $importaciones->filter(fn($i) => $i->estado === 'pendiente')->count();
-        $archivosFallidos = $importaciones->filter(fn($i) => $i->estado === 'fallido')->count();
-        
-        // Calcular progreso total estimado
-        $totalEstimado = $importaciones->sum(fn($i) => $i->metadata['total_estimado'] ?? $i->total_registros);
-        $totalProcesado = $importaciones->sum('total_registros');
-        $progresoPorcentaje = $totalEstimado > 0 ? round(($totalProcesado / $totalEstimado) * 100, 1) : 0;
-        
         return response()->json([
-            'data' => [
-                'id' => $lote->id,
-                'nombre' => $lote->nombre,
-                'estado' => $lote->estado,
-                'created_at' => $lote->created_at->toISOString(),
-                
-                // Contadores de archivos
-                'total_archivos' => $lote->total_archivos,
-                'archivos_completados' => $archivosCompletados,
-                'archivos_procesando' => $archivosProcesando,
-                'archivos_pendientes' => $archivosPendientes,
-                'archivos_fallidos' => $archivosFallidos,
-                
-                // Contadores de registros
-                'total_registros' => $lote->total_registros,
-                'registros_exitosos' => $lote->registros_exitosos,
-                'registros_fallidos' => $lote->registros_fallidos,
-                'total_estimado' => $totalEstimado,
-                'progreso_porcentaje' => $progresoPorcentaje,
-                
-                // Detalle por importación
-                'importaciones' => $importaciones->map(fn($i) => [
-                    'id' => $i->id,
-                    'nombre_archivo' => $i->nombre_archivo,
-                    'estado' => $i->estado,
-                    'total_registros' => $i->total_registros,
-                    'registros_exitosos' => $i->registros_exitosos,
-                    'registros_fallidos' => $i->registros_fallidos,
-                    'total_estimado' => $i->metadata['total_estimado'] ?? $i->total_registros,
-                    'progreso_porcentaje' => $this->calcularProgresoImportacion($i),
-                    'error' => $i->metadata['error'] ?? null,
-                ]),
-            ],
+            'data' => $this->buildProgresoData($lote),
         ]);
     }
 
+    // =========================================================================
+    // HELPERS DE ESTADO
+    // =========================================================================
+
+    private function tieneImportacionesEnProceso(Collection $importaciones): bool
+    {
+        return $importaciones->contains(
+            fn($i) => in_array($i->estado, self::ESTADOS_EN_PROCESO)
+        );
+    }
+
+    private function tieneImportacionesFallidas(Collection $importaciones): bool
+    {
+        return $importaciones->contains(fn($i) => $i->estado === 'fallido');
+    }
+
+    private function todasLasImportacionesFallidas(Collection $importaciones): bool
+    {
+        return $importaciones->isNotEmpty() 
+            && $importaciones->every(fn($i) => $i->estado === 'fallido');
+    }
+
+    private function cerrarLote(Lote $lote, Collection $importaciones): void
+    {
+        $lote->recalcularTotales();
+        
+        $lote->estado = $this->todasLasImportacionesFallidas($importaciones) 
+            ? 'fallido' 
+            : 'completado';
+        
+        $lote->cerrado_en = now();
+        $lote->save();
+    }
+
+    private function respuestaImportacionesEnProceso(Collection $importaciones): JsonResponse
+    {
+        $pendientes = $importaciones
+            ->filter(fn($i) => in_array($i->estado, self::ESTADOS_EN_PROCESO))
+            ->map(fn($i) => [
+                'id' => $i->id,
+                'nombre' => $i->nombre_archivo,
+                'estado' => $i->estado,
+            ]);
+
+        return response()->json([
+            'mensaje' => 'No se puede cerrar el lote mientras hay importaciones en proceso',
+            'importaciones_pendientes' => $pendientes,
+        ], 422);
+    }
+
+    // =========================================================================
+    // HELPERS DE PROGRESO
+    // =========================================================================
+
+    private function buildProgresoData(Lote $lote): array
+    {
+        $importaciones = $lote->importaciones;
+        $estadisticas = $this->calcularEstadisticasArchivos($importaciones);
+        $progresoTotal = $this->calcularProgresoTotal($importaciones);
+
+        return [
+            'id' => $lote->id,
+            'nombre' => $lote->nombre,
+            'estado' => $lote->estado,
+            'created_at' => $lote->created_at->toISOString(),
+            
+            // Contadores de archivos
+            'total_archivos' => $lote->total_archivos,
+            'archivos_completados' => $estadisticas['completados'],
+            'archivos_procesando' => $estadisticas['procesando'],
+            'archivos_pendientes' => $estadisticas['pendientes'],
+            'archivos_fallidos' => $estadisticas['fallidos'],
+            
+            // Contadores de registros
+            'total_registros' => $lote->total_registros,
+            'registros_exitosos' => $lote->registros_exitosos,
+            'registros_fallidos' => $lote->registros_fallidos,
+            'total_estimado' => $progresoTotal['estimado'],
+            'progreso_porcentaje' => $progresoTotal['porcentaje'],
+            
+            // Detalle por importación
+            'importaciones' => $this->mapImportacionesParaProgreso($importaciones),
+        ];
+    }
+
     /**
-     * Calcula el porcentaje de progreso de una importación individual
+     * @return array{completados: int, procesando: int, pendientes: int, fallidos: int}
      */
-    private function calcularProgresoImportacion($importacion): float
+    private function calcularEstadisticasArchivos(Collection $importaciones): array
+    {
+        return [
+            'completados' => $importaciones->filter(fn($i) => $i->estado === 'completado')->count(),
+            'procesando' => $importaciones->filter(fn($i) => $i->estado === 'procesando')->count(),
+            'pendientes' => $importaciones->filter(fn($i) => $i->estado === 'pendiente')->count(),
+            'fallidos' => $importaciones->filter(fn($i) => $i->estado === 'fallido')->count(),
+        ];
+    }
+
+    /**
+     * @return array{estimado: int, porcentaje: float}
+     */
+    private function calcularProgresoTotal(Collection $importaciones): array
+    {
+        $totalEstimado = $importaciones->sum(
+            fn($i) => $i->metadata['total_estimado'] ?? $i->total_registros
+        );
+        $totalProcesado = $importaciones->sum('total_registros');
+        
+        $porcentaje = $totalEstimado > 0 
+            ? round(($totalProcesado / $totalEstimado) * 100, 1) 
+            : 0;
+
+        return [
+            'estimado' => (int) $totalEstimado,
+            'porcentaje' => $porcentaje,
+        ];
+    }
+
+    private function mapImportacionesParaProgreso(Collection $importaciones): Collection
+    {
+        return $importaciones->map(fn($i) => [
+            'id' => $i->id,
+            'nombre_archivo' => $i->nombre_archivo,
+            'estado' => $i->estado,
+            'total_registros' => $i->total_registros,
+            'registros_exitosos' => $i->registros_exitosos,
+            'registros_fallidos' => $i->registros_fallidos,
+            'total_estimado' => $i->metadata['total_estimado'] ?? $i->total_registros,
+            'progreso_porcentaje' => $this->calcularProgresoImportacion($i),
+            'error' => $i->metadata['error'] ?? null,
+        ]);
+    }
+
+    private function calcularProgresoImportacion(Importacion $importacion): float
     {
         if ($importacion->estado === 'completado') {
             return 100;
@@ -208,6 +300,8 @@ class LoteController extends Controller
             return 0;
         }
         
-        return min(round(($procesado / $estimado) * 100, 1), 99.9); // Max 99.9 hasta que complete
+        $porcentaje = round(($procesado / $estimado) * 100, 1);
+        
+        return min($porcentaje, self::MAX_PROGRESS_WHILE_PROCESSING);
     }
 }

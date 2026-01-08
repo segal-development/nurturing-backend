@@ -12,6 +12,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 
@@ -34,38 +35,55 @@ class ProcesarLoteJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
+    // =========================================================================
+    // CONFIGURACION DE COLA
+    // =========================================================================
+
     public int $tries = 9999;
     public int $timeout = 0;
     public bool $failOnTimeout = false;
     public int $backoff = 30;
 
+    // =========================================================================
+    // CONSTANTES INTERNAS
+    // =========================================================================
+
+    /** Intentos máximos esperando nuevas importaciones */
+    private const MAX_INTENTOS_SIN_NUEVAS = 3;
+
+    /** Segundos de espera entre intentos sin nuevas importaciones */
+    private const SEGUNDOS_ESPERA_NUEVAS = 5;
+
+    // =========================================================================
+    // CONSTRUCTOR
+    // =========================================================================
+
     public function __construct(
         public int $loteId
     ) {}
 
+    // =========================================================================
+    // HANDLER PRINCIPAL
+    // =========================================================================
+
     public function handle(): void
     {
-        Log::info('ProcesarLoteJob: Iniciando', ['lote_id' => $this->loteId]);
+        $this->logInicio();
 
         $lote = Lote::find($this->loteId);
         
         if (!$lote) {
-            Log::error('ProcesarLoteJob: Lote no encontrado', ['lote_id' => $this->loteId]);
+            $this->logLoteNoEncontrado();
             $this->delete();
             return;
         }
 
-        // Si el lote ya está completado o fallido, no procesar
-        if (in_array($lote->estado, ['completado', 'fallido'])) {
-            Log::info('ProcesarLoteJob: Lote ya finalizado', [
-                'lote_id' => $this->loteId,
-                'estado' => $lote->estado
-            ]);
+        if ($this->esEstadoFinal($lote)) {
+            $this->logLoteYaFinalizado($lote);
             $this->delete();
             return;
         }
 
-        // Marcar lote como procesando
         $lote->update(['estado' => 'procesando']);
 
         try {
@@ -73,64 +91,43 @@ class ProcesarLoteJob implements ShouldQueue
             $this->finalizarLote($lote);
             $this->delete();
         } catch (\Exception $e) {
-            Log::error('ProcesarLoteJob: Error procesando lote', [
-                'lote_id' => $this->loteId,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
-            ]);
-            // No marcar como fallido, dejar que se reintente
+            $this->logErrorProcesandoLote($e);
             throw $e;
         }
     }
 
+    // =========================================================================
+    // PROCESAMIENTO DE IMPORTACIONES
+    // =========================================================================
+
     /**
      * Procesa todas las importaciones del lote secuencialmente.
      * 
-     * IMPORTANTE: Usa un loop con refresh para detectar nuevas importaciones
+     * Usa un loop con refresh para detectar nuevas importaciones
      * que se agreguen mientras el job está corriendo.
      */
     private function procesarImportacionesDelLote(Lote $lote): void
     {
         $procesadas = [];
         $intentosSinNuevas = 0;
-        $maxIntentosSinNuevas = 3; // Esperar hasta 3 ciclos sin nuevas importaciones
         
-        while ($intentosSinNuevas < $maxIntentosSinNuevas) {
-            // Refrescar el lote para ver nuevas importaciones
+        while ($intentosSinNuevas < self::MAX_INTENTOS_SIN_NUEVAS) {
             $lote->refresh();
             
-            // Obtener importaciones pendientes que NO hemos procesado aún
-            $importaciones = $lote->importaciones()
-                ->whereIn('estado', ['pendiente', 'procesando'])
-                ->whereNotIn('id', $procesadas)
-                ->orderBy('id')
-                ->get();
+            $importaciones = $this->obtenerImportacionesPendientes($lote, $procesadas);
 
             if ($importaciones->isEmpty()) {
-                // No hay más importaciones por procesar
-                // Esperar un poco por si se están subiendo más archivos
                 $intentosSinNuevas++;
                 
-                if ($intentosSinNuevas < $maxIntentosSinNuevas) {
-                    Log::info('ProcesarLoteJob: Sin importaciones pendientes, esperando...', [
-                        'lote_id' => $lote->id,
-                        'intento' => $intentosSinNuevas,
-                        'procesadas' => count($procesadas)
-                    ]);
-                    sleep(5); // Esperar 5 segundos por si vienen más archivos
+                if ($intentosSinNuevas < self::MAX_INTENTOS_SIN_NUEVAS) {
+                    $this->logEsperandoNuevasImportaciones($lote, $intentosSinNuevas, count($procesadas));
+                    sleep(self::SEGUNDOS_ESPERA_NUEVAS);
                 }
                 continue;
             }
             
-            // Reset contador porque encontramos importaciones
             $intentosSinNuevas = 0;
-
-            Log::info('ProcesarLoteJob: Procesando importaciones', [
-                'lote_id' => $lote->id,
-                'total_importaciones' => $importaciones->count(),
-                'importacion_ids' => $importaciones->pluck('id')->toArray(),
-                'ya_procesadas' => count($procesadas)
-            ]);
+            $this->logProcesandoImportaciones($lote, $importaciones, count($procesadas));
 
             foreach ($importaciones as $importacion) {
                 $this->procesarImportacion($importacion, $lote);
@@ -138,10 +135,19 @@ class ProcesarLoteJob implements ShouldQueue
             }
         }
         
-        Log::info('ProcesarLoteJob: Todas las importaciones procesadas', [
-            'lote_id' => $lote->id,
-            'total_procesadas' => count($procesadas)
-        ]);
+        $this->logTodasProcesadas($lote, count($procesadas));
+    }
+
+    /**
+     * @return Collection<int, Importacion>
+     */
+    private function obtenerImportacionesPendientes(Lote $lote, array $procesadas): Collection
+    {
+        return $lote->importaciones()
+            ->whereIn('estado', ['pendiente', 'procesando'])
+            ->whereNotIn('id', $procesadas)
+            ->orderBy('id')
+            ->get();
     }
 
     /**
@@ -151,141 +157,54 @@ class ProcesarLoteJob implements ShouldQueue
      */
     private function procesarImportacion(Importacion $importacion, Lote $lote): void
     {
-        Log::info('ProcesarLoteJob: Iniciando importación', [
-            'lote_id' => $lote->id,
-            'importacion_id' => $importacion->id,
-            'archivo' => $importacion->nombre_archivo,
-            'memoria_antes_mb' => round(memory_get_usage(true) / 1024 / 1024, 2)
-        ]);
-
-        // Actualizar checkpoint del lote
-        $lote->update([
-            'metadata' => array_merge($lote->metadata ?? [], [
-                'current_importacion_id' => $importacion->id,
-                'procesando_desde' => now()->toISOString()
-            ])
-        ]);
-
-        // Marcar importación como procesando
+        $this->logInicioImportacion($lote, $importacion);
+        $this->actualizarCheckpointLote($lote, $importacion);
         $importacion->update(['estado' => 'procesando']);
 
         $tempPath = null;
 
         try {
-            // Descargar archivo
-            Log::info('ProcesarLoteJob: Descargando archivo...', [
-                'importacion_id' => $importacion->id
-            ]);
-            $tempPath = $this->downloadFile($importacion);
-            
-            // Actualizar metadata
-            Log::info('ProcesarLoteJob: Archivo descargado, iniciando procesamiento...', [
-                'importacion_id' => $importacion->id,
-                'file_size_mb' => round(filesize($tempPath) / 1024 / 1024, 2),
-                'memoria_mb' => round(memory_get_usage(true) / 1024 / 1024, 2)
-            ]);
-            
-            $importacion->update([
-                'metadata' => array_merge($importacion->metadata ?? [], [
-                    'procesamiento_iniciado_en' => now()->toISOString(),
-                    'file_size_mb' => round(filesize($tempPath) / 1024 / 1024, 2),
-                ])
-            ]);
-
-            // Procesar con el servicio existente
-            Log::info('ProcesarLoteJob: Creando ProspectoImportService...', [
-                'importacion_id' => $importacion->id
-            ]);
-            $service = new ProspectoImportService($importacion, $tempPath);
-            
-            Log::info('ProcesarLoteJob: Iniciando import()...', [
-                'importacion_id' => $importacion->id,
-                'memoria_mb' => round(memory_get_usage(true) / 1024 / 1024, 2)
-            ]);
-            $service->import();
-
-            // Verificar que se marcó como completado
-            $importacion->refresh();
-            if ($importacion->estado === 'procesando') {
-                // Forzar completado si el servicio no lo hizo
-                $this->forceMarkImportacionCompleted($importacion, $service);
-            }
-
-            // Limpiar archivos
+            $tempPath = $this->descargarArchivo($importacion);
+            $this->procesarConServicio($importacion, $tempPath);
             $this->cleanup($importacion, $tempPath);
             
-            // IMPORTANTE: Liberar memoria del servicio
-            unset($service);
-
-            Log::info('ProcesarLoteJob: Importación completada', [
-                'lote_id' => $lote->id,
-                'importacion_id' => $importacion->id,
-                'registros_exitosos' => $importacion->fresh()->registros_exitosos,
-                'memoria_despues_mb' => round(memory_get_usage(true) / 1024 / 1024, 2)
-            ]);
-
-            // Actualizar totales del lote después de cada importación
-            $lote->recalcularTotales();
+            unset($tempPath);
             
-            // Forzar garbage collection después de cada archivo grande
-            gc_collect_cycles();
+            $this->logImportacionCompletada($lote, $importacion);
+            $lote->recalcularTotales();
+            $this->liberarMemoria();
 
         } catch (\Exception $e) {
-            // Limpiar archivo temporal si existe
-            if ($tempPath && file_exists($tempPath)) {
-                @unlink($tempPath);
-            }
-
-            Log::error('ProcesarLoteJob: Error en importación', [
-                'lote_id' => $lote->id,
-                'importacion_id' => $importacion->id,
-                'error' => $e->getMessage(),
-                'memoria_mb' => round(memory_get_usage(true) / 1024 / 1024, 2)
-            ]);
-
-            // Marcar esta importación como fallida pero continuar con las demás
-            $importacion->update([
-                'estado' => 'fallido',
-                'metadata' => array_merge($importacion->metadata ?? [], [
-                    'error' => $e->getMessage(),
-                    'fallido_en' => now()->toISOString()
-                ])
-            ]);
-
-            $lote->recalcularTotales();
-            
-            // Forzar garbage collection
-            gc_collect_cycles();
+            $this->handleErrorImportacion($importacion, $lote, $tempPath, $e);
         }
     }
 
-    /**
-     * Descarga archivo de GCS a temporal.
-     */
-    private function downloadFile(Importacion $importacion): string
+    private function procesarConServicio(Importacion $importacion, string $tempPath): void
     {
-        $disk = $importacion->metadata['disk'] ?? 'gcs';
-        $rutaArchivo = $importacion->ruta_archivo;
+        $this->actualizarMetadataInicio($importacion, $tempPath);
+        
+        $this->logCreandoServicio($importacion);
+        $service = new ProspectoImportService($importacion, $tempPath);
+        
+        $this->logIniciandoImport($importacion);
+        $service->import();
 
-        if (!Storage::disk($disk)->exists($rutaArchivo)) {
-            throw new \Exception("Archivo no encontrado en storage: {$rutaArchivo}");
-        }
-
-        $tempPath = sys_get_temp_dir() . '/' . uniqid('import_') . '.xlsx';
-        $content = Storage::disk($disk)->get($rutaArchivo);
-        file_put_contents($tempPath, $content);
-
-        Log::info('ProcesarLoteJob: Archivo descargado', [
-            'importacion_id' => $importacion->id,
-            'size_mb' => round(strlen($content) / 1024 / 1024, 2)
-        ]);
-
-        return $tempPath;
+        $this->verificarYForzarCompletado($importacion, $service);
+        
+        unset($service);
     }
 
-    /**
-     * Fuerza marcar importación como completada.
-     */
+    private function verificarYForzarCompletado(Importacion $importacion, ProspectoImportService $service): void
+    {
+        $importacion->refresh();
+        
+        if ($importacion->estado !== 'procesando') {
+            return;
+        }
+
+        $this->forceMarkImportacionCompleted($importacion, $service);
+    }
+
     private function forceMarkImportacionCompleted(Importacion $importacion, ProspectoImportService $service): void
     {
         $importacion->update([
@@ -295,62 +214,309 @@ class ProcesarLoteJob implements ShouldQueue
             'registros_fallidos' => $service->getRegistrosFallidos(),
             'metadata' => array_merge($importacion->metadata ?? [], [
                 'completado_en' => now()->toISOString(),
-                'completado_por' => 'lote_job_fallback'
-            ])
+                'completado_por' => 'lote_job_fallback',
+            ]),
         ]);
     }
 
-    /**
-     * Limpia archivos temporales y de storage.
-     */
+    // =========================================================================
+    // DESCARGA DE ARCHIVOS
+    // =========================================================================
+
+    private function descargarArchivo(Importacion $importacion): string
+    {
+        $this->logDescargandoArchivo($importacion);
+        
+        $disk = $importacion->metadata['disk'] ?? 'gcs';
+        $rutaArchivo = $importacion->ruta_archivo;
+
+        if (!Storage::disk($disk)->exists($rutaArchivo)) {
+            throw new \Exception("Archivo no encontrado en storage: {$rutaArchivo}");
+        }
+
+        $content = Storage::disk($disk)->get($rutaArchivo);
+        $tempPath = sys_get_temp_dir() . '/' . uniqid('import_') . '.xlsx';
+        file_put_contents($tempPath, $content);
+
+        $this->logArchivoDescargado($importacion, strlen($content));
+
+        unset($content);
+
+        return $tempPath;
+    }
+
+    // =========================================================================
+    // METADATA Y CHECKPOINTS
+    // =========================================================================
+
+    private function actualizarCheckpointLote(Lote $lote, Importacion $importacion): void
+    {
+        $lote->update([
+            'metadata' => array_merge($lote->metadata ?? [], [
+                'current_importacion_id' => $importacion->id,
+                'procesando_desde' => now()->toISOString(),
+            ]),
+        ]);
+    }
+
+    private function actualizarMetadataInicio(Importacion $importacion, string $tempPath): void
+    {
+        $this->logArchivoDescargadoIniciandoProcesamiento($importacion, $tempPath);
+        
+        $importacion->update([
+            'metadata' => array_merge($importacion->metadata ?? [], [
+                'procesamiento_iniciado_en' => now()->toISOString(),
+                'file_size_mb' => round(filesize($tempPath) / 1024 / 1024, 2),
+            ]),
+        ]);
+    }
+
+    // =========================================================================
+    // CLEANUP Y MEMORIA
+    // =========================================================================
+
     private function cleanup(Importacion $importacion, ?string $tempPath): void
     {
-        // Eliminar archivo temporal
+        $this->eliminarArchivoTemporal($tempPath);
+        $this->eliminarArchivoStorage($importacion);
+    }
+
+    private function eliminarArchivoTemporal(?string $tempPath): void
+    {
         if ($tempPath && file_exists($tempPath)) {
             @unlink($tempPath);
         }
+    }
 
-        // Eliminar archivo de GCS
+    private function eliminarArchivoStorage(Importacion $importacion): void
+    {
         try {
             $disk = $importacion->metadata['disk'] ?? 'gcs';
             Storage::disk($disk)->delete($importacion->ruta_archivo);
         } catch (\Exception $e) {
             Log::warning('ProcesarLoteJob: Error eliminando archivo de GCS', [
                 'importacion_id' => $importacion->id,
-                'error' => $e->getMessage()
+                'error' => $e->getMessage(),
             ]);
         }
     }
 
-    /**
-     * Finaliza el lote después de procesar todas las importaciones.
-     */
+    private function liberarMemoria(): void
+    {
+        gc_collect_cycles();
+    }
+
+    // =========================================================================
+    // MANEJO DE ERRORES
+    // =========================================================================
+
+    private function handleErrorImportacion(
+        Importacion $importacion,
+        Lote $lote,
+        ?string $tempPath,
+        \Exception $e
+    ): void {
+        $this->eliminarArchivoTemporal($tempPath);
+
+        $this->logErrorEnImportacion($lote, $importacion, $e);
+
+        $importacion->update([
+            'estado' => 'fallido',
+            'metadata' => array_merge($importacion->metadata ?? [], [
+                'error' => $e->getMessage(),
+                'fallido_en' => now()->toISOString(),
+            ]),
+        ]);
+
+        $lote->recalcularTotales();
+        $this->liberarMemoria();
+    }
+
+    // =========================================================================
+    // FINALIZACION
+    // =========================================================================
+
+    private function esEstadoFinal(Lote $lote): bool
+    {
+        return in_array($lote->estado, ['completado', 'fallido']);
+    }
+
     private function finalizarLote(Lote $lote): void
     {
         $lote->refresh();
         $lote->recalcularTotales();
 
         $importaciones = $lote->importaciones()->get();
-        $todasFinalizadas = $importaciones->every(fn($i) => in_array($i->estado, ['completado', 'fallido']));
-        $algunaFallida = $importaciones->contains(fn($i) => $i->estado === 'fallido');
-
-        if ($todasFinalizadas) {
-            $estadoFinal = $algunaFallida ? 'fallido' : 'completado';
-            $lote->update([
-                'estado' => $estadoFinal,
-                'cerrado_en' => now(),
-                'metadata' => array_merge($lote->metadata ?? [], [
-                    'finalizado_en' => now()->toISOString(),
-                    'finalizado_por' => 'lote_job'
-                ])
-            ]);
-
-            Log::info('ProcesarLoteJob: Lote finalizado', [
-                'lote_id' => $lote->id,
-                'estado' => $estadoFinal,
-                'total_registros' => $lote->total_registros,
-                'registros_exitosos' => $lote->registros_exitosos
-            ]);
+        
+        if (!$this->todasFinalizadas($importaciones)) {
+            return;
         }
+
+        $algunaFallida = $this->tieneAlgunaFallida($importaciones);
+        $estadoFinal = $algunaFallida ? 'fallido' : 'completado';
+        
+        $this->marcarLoteComoFinalizado($lote, $estadoFinal);
+        $this->logLoteFinalizado($lote, $estadoFinal);
+    }
+
+    private function todasFinalizadas(Collection $importaciones): bool
+    {
+        return $importaciones->every(
+            fn($i) => in_array($i->estado, ['completado', 'fallido'])
+        );
+    }
+
+    private function tieneAlgunaFallida(Collection $importaciones): bool
+    {
+        return $importaciones->contains(fn($i) => $i->estado === 'fallido');
+    }
+
+    private function marcarLoteComoFinalizado(Lote $lote, string $estadoFinal): void
+    {
+        $lote->update([
+            'estado' => $estadoFinal,
+            'cerrado_en' => now(),
+            'metadata' => array_merge($lote->metadata ?? [], [
+                'finalizado_en' => now()->toISOString(),
+                'finalizado_por' => 'lote_job',
+            ]),
+        ]);
+    }
+
+    // =========================================================================
+    // LOGGING
+    // =========================================================================
+
+    private function logInicio(): void
+    {
+        Log::info('ProcesarLoteJob: Iniciando', ['lote_id' => $this->loteId]);
+    }
+
+    private function logLoteNoEncontrado(): void
+    {
+        Log::error('ProcesarLoteJob: Lote no encontrado', ['lote_id' => $this->loteId]);
+    }
+
+    private function logLoteYaFinalizado(Lote $lote): void
+    {
+        Log::info('ProcesarLoteJob: Lote ya finalizado', [
+            'lote_id' => $this->loteId,
+            'estado' => $lote->estado,
+        ]);
+    }
+
+    private function logErrorProcesandoLote(\Exception $e): void
+    {
+        Log::error('ProcesarLoteJob: Error procesando lote', [
+            'lote_id' => $this->loteId,
+            'error' => $e->getMessage(),
+            'trace' => $e->getTraceAsString(),
+        ]);
+    }
+
+    private function logEsperandoNuevasImportaciones(Lote $lote, int $intento, int $procesadas): void
+    {
+        Log::info('ProcesarLoteJob: Sin importaciones pendientes, esperando...', [
+            'lote_id' => $lote->id,
+            'intento' => $intento,
+            'procesadas' => $procesadas,
+        ]);
+    }
+
+    private function logProcesandoImportaciones(Lote $lote, Collection $importaciones, int $yaProcesadas): void
+    {
+        Log::info('ProcesarLoteJob: Procesando importaciones', [
+            'lote_id' => $lote->id,
+            'total_importaciones' => $importaciones->count(),
+            'importacion_ids' => $importaciones->pluck('id')->toArray(),
+            'ya_procesadas' => $yaProcesadas,
+        ]);
+    }
+
+    private function logTodasProcesadas(Lote $lote, int $total): void
+    {
+        Log::info('ProcesarLoteJob: Todas las importaciones procesadas', [
+            'lote_id' => $lote->id,
+            'total_procesadas' => $total,
+        ]);
+    }
+
+    private function logInicioImportacion(Lote $lote, Importacion $importacion): void
+    {
+        Log::info('ProcesarLoteJob: Iniciando importación', [
+            'lote_id' => $lote->id,
+            'importacion_id' => $importacion->id,
+            'archivo' => $importacion->nombre_archivo,
+            'memoria_antes_mb' => round(memory_get_usage(true) / 1024 / 1024, 2),
+        ]);
+    }
+
+    private function logDescargandoArchivo(Importacion $importacion): void
+    {
+        Log::info('ProcesarLoteJob: Descargando archivo...', [
+            'importacion_id' => $importacion->id,
+        ]);
+    }
+
+    private function logArchivoDescargado(Importacion $importacion, int $sizeBytes): void
+    {
+        Log::info('ProcesarLoteJob: Archivo descargado', [
+            'importacion_id' => $importacion->id,
+            'size_mb' => round($sizeBytes / 1024 / 1024, 2),
+        ]);
+    }
+
+    private function logArchivoDescargadoIniciandoProcesamiento(Importacion $importacion, string $tempPath): void
+    {
+        Log::info('ProcesarLoteJob: Archivo descargado, iniciando procesamiento...', [
+            'importacion_id' => $importacion->id,
+            'file_size_mb' => round(filesize($tempPath) / 1024 / 1024, 2),
+            'memoria_mb' => round(memory_get_usage(true) / 1024 / 1024, 2),
+        ]);
+    }
+
+    private function logCreandoServicio(Importacion $importacion): void
+    {
+        Log::info('ProcesarLoteJob: Creando ProspectoImportService...', [
+            'importacion_id' => $importacion->id,
+        ]);
+    }
+
+    private function logIniciandoImport(Importacion $importacion): void
+    {
+        Log::info('ProcesarLoteJob: Iniciando import()...', [
+            'importacion_id' => $importacion->id,
+            'memoria_mb' => round(memory_get_usage(true) / 1024 / 1024, 2),
+        ]);
+    }
+
+    private function logImportacionCompletada(Lote $lote, Importacion $importacion): void
+    {
+        Log::info('ProcesarLoteJob: Importación completada', [
+            'lote_id' => $lote->id,
+            'importacion_id' => $importacion->id,
+            'registros_exitosos' => $importacion->fresh()->registros_exitosos,
+            'memoria_despues_mb' => round(memory_get_usage(true) / 1024 / 1024, 2),
+        ]);
+    }
+
+    private function logErrorEnImportacion(Lote $lote, Importacion $importacion, \Exception $e): void
+    {
+        Log::error('ProcesarLoteJob: Error en importación', [
+            'lote_id' => $lote->id,
+            'importacion_id' => $importacion->id,
+            'error' => $e->getMessage(),
+            'memoria_mb' => round(memory_get_usage(true) / 1024 / 1024, 2),
+        ]);
+    }
+
+    private function logLoteFinalizado(Lote $lote, string $estadoFinal): void
+    {
+        Log::info('ProcesarLoteJob: Lote finalizado', [
+            'lote_id' => $lote->id,
+            'estado' => $estadoFinal,
+            'total_registros' => $lote->total_registros,
+            'registros_exitosos' => $lote->registros_exitosos,
+        ]);
     }
 }
