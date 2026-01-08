@@ -7,12 +7,13 @@ use App\Http\Requests\StoreImportacionRequest;
 use App\Http\Resources\ImportacionResource;
 use App\Http\Resources\LoteResource;
 use App\Imports\ProspectosImport;
-use App\Jobs\ProcesarLoteJob;
+use App\Jobs\ProcesarImportacionJob;
 use App\Models\Importacion;
 use App\Models\Lote;
 use App\Services\Import\ImportacionRecoveryService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Maatwebsite\Excel\Facades\Excel;
 
@@ -165,10 +166,9 @@ class ImportacionController extends Controller
 
     /**
      * Procesa archivos grandes en background.
-     * Sube a Cloud Storage y encola job del LOTE (no de la importación individual).
+     * UN ARCHIVO = UN JOB. Simple y funcional.
      * 
-     * ESTRATEGIA: Un solo ProcesarLoteJob procesa TODOS los archivos del lote secuencialmente.
-     * Esto elimina problemas de concurrencia entre múltiples jobs.
+     * El frontend se encarga de esperar a que termine antes de subir otro.
      */
     private function procesarEnBackground($request, $archivo, string $nombreArchivo, Lote $lote): JsonResponse
     {
@@ -183,28 +183,23 @@ class ImportacionController extends Controller
         $contenido = file_get_contents($archivo->getRealPath());
         $uploaded = Storage::disk($disk)->put($rutaArchivo, $contenido);
         
-        // VERIFICAR que el archivo se subió correctamente
         if (!$uploaded) {
             throw new \Exception("Error al subir archivo a {$disk}: {$rutaArchivo}");
         }
         
-        // Verificar que el archivo existe en storage
         if (!Storage::disk($disk)->exists($rutaArchivo)) {
             throw new \Exception("Archivo subido pero no encontrado en {$disk}: {$rutaArchivo}");
         }
         
         $sizeInStorage = Storage::disk($disk)->size($rutaArchivo);
         
-        \Illuminate\Support\Facades\Log::info('ImportacionController: Archivo subido a storage', [
+        Log::info('ImportacionController: Archivo subido', [
             'nombre_archivo' => $nombreArchivo,
             'ruta_archivo' => $rutaArchivo,
-            'disk' => $disk,
-            'size_original' => strlen($contenido),
-            'size_in_storage' => $sizeInStorage,
-            'lote_id' => $lote->id,
+            'size_mb' => round($sizeInStorage / 1024 / 1024, 2),
         ]);
 
-        // Crear registro de importación en estado PENDIENTE
+        // Crear registro de importación
         $importacion = Importacion::create([
             'lote_id' => $lote->id,
             'nombre_archivo' => $nombreArchivo,
@@ -216,49 +211,29 @@ class ImportacionController extends Controller
             'metadata' => [
                 'modo' => 'background',
                 'tamano_archivo' => $archivo->getSize(),
-                'tamano_en_storage' => $sizeInStorage,
                 'disk' => $disk,
                 'subido_en' => now()->toISOString(),
             ],
         ]);
 
-        // Actualizar totales del lote
+        // Actualizar lote
+        $lote->estado = 'procesando';
         $lote->total_archivos = $lote->importaciones()->count();
         $lote->save();
 
-        // Verificar si ya hay un job del lote en cola O si el lote está procesando
-        $hayJobEnCola = $this->loteYaTieneJobEnCola($lote->id);
-        $loteYaProcesando = $lote->estado === 'procesando';
-
-        if (!$hayJobEnCola && !$loteYaProcesando) {
-            // Encolar UN SOLO job para procesar TODO el lote
-            $lote->update(['estado' => 'procesando']);
-            ProcesarLoteJob::dispatch($lote->id);
-            
-            \Illuminate\Support\Facades\Log::info('ImportacionController: Job de lote encolado', [
-                'lote_id' => $lote->id,
-            ]);
-        }
+        // Encolar job para ESTE archivo
+        ProcesarImportacionJob::dispatch(
+            $importacion->id,
+            $rutaArchivo,
+            $disk
+        );
 
         return response()->json([
-            'mensaje' => 'Archivo recibido. El lote se está procesando en segundo plano.',
+            'mensaje' => 'Archivo recibido y en proceso.',
             'data' => new ImportacionResource($importacion),
             'lote' => new LoteResource($lote->fresh(['importaciones'])),
             'procesamiento' => 'background',
-            'job_encolado' => !$hayJobEnCola,
-            'instrucciones' => 'Consulte el estado del lote usando GET /api/lotes/' . $lote->id,
         ], 202);
-    }
-
-    /**
-     * Verifica si ya existe un job de lote en cola.
-     */
-    private function loteYaTieneJobEnCola(int $loteId): bool
-    {
-        return DB::table('jobs')
-            ->where('payload', 'like', '%ProcesarLoteJob%')
-            ->where('payload', 'like', '%"loteId";i:' . $loteId . ';%')
-            ->exists();
     }
 
     /**
@@ -529,22 +504,6 @@ class ImportacionController extends Controller
             ], 422);
         }
 
-        // Validar que la importación tiene un lote
-        if (!$importacion->lote_id) {
-            return response()->json([
-                'mensaje' => 'La importación no tiene un lote asociado',
-            ], 422);
-        }
-
-        // Verificar si ya hay un job del lote en cola
-        $hasJob = $this->loteYaTieneJobEnCola($importacion->lote_id);
-
-        if ($hasJob) {
-            return response()->json([
-                'mensaje' => 'Ya existe un job en cola para este lote',
-            ], 422);
-        }
-
         // Validar que el archivo existe
         if (empty($importacion->ruta_archivo)) {
             return response()->json([
@@ -566,7 +525,7 @@ class ImportacionController extends Controller
             ], 500);
         }
 
-        // Si estaba en "fallido", volver a "pendiente" para que el job del lote la procese
+        // Si estaba en "fallido", volver a "pendiente"
         if ($importacion->estado === 'fallido') {
             $importacion->update([
                 'estado' => 'pendiente',
@@ -576,16 +535,17 @@ class ImportacionController extends Controller
             ]);
         }
 
-        // Encolar job del lote
-        $lote = $importacion->lote;
-        $lote->update(['estado' => 'procesando']);
-        ProcesarLoteJob::dispatch($lote->id);
+        // Encolar job para ESTA importación
+        ProcesarImportacionJob::dispatch(
+            $importacion->id,
+            $importacion->ruta_archivo,
+            $disk
+        );
 
         return response()->json([
-            'mensaje' => 'Lote re-encolado exitosamente',
+            'mensaje' => 'Importación re-encolada exitosamente',
             'data' => [
                 'importacion_id' => $importacion->id,
-                'lote_id' => $lote->id,
                 'estado' => $importacion->fresh()->estado,
             ],
         ]);
