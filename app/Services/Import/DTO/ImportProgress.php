@@ -6,7 +6,9 @@ namespace App\Services\Import\DTO;
 
 /**
  * DTO para el progreso de una importación.
- * Permite resumir desde donde se quedó.
+ * 
+ * Permite resumir desde donde se quedó si el proceso se interrumpe.
+ * Almacena checkpoints de filas procesadas y contadores.
  */
 final class ImportProgress
 {
@@ -19,6 +21,10 @@ final class ImportProgress
         public array $errores = [],
     ) {}
 
+    // =========================================================================
+    // FACTORY METHODS
+    // =========================================================================
+
     /**
      * Crea un ImportProgress desde los metadata de una importación.
      */
@@ -29,17 +35,29 @@ final class ImportProgress
         }
 
         return new self(
-            lastProcessedRow: $metadata['last_processed_row'] ?? 0,
-            registrosExitosos: $metadata['checkpoint_exitosos'] ?? 0,
-            registrosFallidos: $metadata['checkpoint_fallidos'] ?? 0,
-            sinEmail: $metadata['checkpoint_sin_email'] ?? 0,
-            sinTelefono: $metadata['checkpoint_sin_telefono'] ?? 0,
+            lastProcessedRow: (int) ($metadata['last_processed_row'] ?? 0),
+            registrosExitosos: (int) ($metadata['checkpoint_exitosos'] ?? 0),
+            registrosFallidos: (int) ($metadata['checkpoint_fallidos'] ?? 0),
+            sinEmail: (int) ($metadata['checkpoint_sin_email'] ?? 0),
+            sinTelefono: (int) ($metadata['checkpoint_sin_telefono'] ?? 0),
             errores: $metadata['errores'] ?? [],
         );
     }
 
     /**
-     * Convierte a array para guardar en metadata.
+     * Crea una instancia vacía para empezar de cero.
+     */
+    public static function fresh(): self
+    {
+        return new self();
+    }
+
+    // =========================================================================
+    // CONVERSIÓN
+    // =========================================================================
+
+    /**
+     * Convierte a array para guardar en metadata de la importación.
      */
     public function toMetadata(): array
     {
@@ -52,8 +70,90 @@ final class ImportProgress
         ];
     }
 
+    // =========================================================================
+    // QUERIES
+    // =========================================================================
+
+    /**
+     * Verifica si una fila debe saltarse (ya fue procesada).
+     */
     public function shouldSkipRow(int $rowIndex): bool
     {
         return $rowIndex <= $this->lastProcessedRow;
+    }
+
+    /**
+     * Verifica si hay progreso previo (es un resume).
+     */
+    public function hasProgress(): bool
+    {
+        return $this->lastProcessedRow > 0;
+    }
+
+    /**
+     * Obtiene el total de registros procesados.
+     */
+    public function getTotalProcesados(): int
+    {
+        return $this->registrosExitosos + $this->registrosFallidos;
+    }
+
+    /**
+     * Calcula el porcentaje de éxito.
+     */
+    public function getSuccessRate(): float
+    {
+        $total = $this->getTotalProcesados();
+        
+        if ($total === 0) {
+            return 0.0;
+        }
+
+        return round(($this->registrosExitosos / $total) * 100, 2);
+    }
+
+    // =========================================================================
+    // BUILDERS (para crear nuevas instancias con valores actualizados)
+    // =========================================================================
+
+    /**
+     * Crea una nueva instancia con los contadores actualizados.
+     */
+    public function withUpdatedCounters(
+        int $currentRow,
+        int $exitosos,
+        int $fallidos,
+        int $sinEmail,
+        int $sinTelefono,
+    ): self {
+        return new self(
+            lastProcessedRow: $currentRow,
+            registrosExitosos: $exitosos,
+            registrosFallidos: $fallidos,
+            sinEmail: $sinEmail,
+            sinTelefono: $sinTelefono,
+            errores: $this->errores,
+        );
+    }
+
+    /**
+     * Crea una nueva instancia agregando un error.
+     */
+    public function withError(int $fila, array $errores): self
+    {
+        $newErrores = $this->errores;
+        $newErrores[] = [
+            'fila' => $fila,
+            'errores' => $errores,
+        ];
+
+        return new self(
+            lastProcessedRow: $this->lastProcessedRow,
+            registrosExitosos: $this->registrosExitosos,
+            registrosFallidos: $this->registrosFallidos,
+            sinEmail: $this->sinEmail,
+            sinTelefono: $this->sinTelefono,
+            errores: $newErrores,
+        );
     }
 }
