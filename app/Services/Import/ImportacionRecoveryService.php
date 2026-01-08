@@ -6,8 +6,10 @@ namespace App\Services\Import;
 
 use App\Jobs\ProcesarImportacionJob;
 use App\Models\Importacion;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 
 /**
  * Servicio de recuperación automática de importaciones "stuck".
@@ -22,17 +24,31 @@ use Illuminate\Support\Facades\Log;
  */
 final class ImportacionRecoveryService
 {
-    /**
-     * Minutos sin actualización para considerar una importación como "stuck".
-     * Debe ser mayor que el intervalo de checkpoints (cada ~38 segundos a 130 reg/s).
-     */
+    // =========================================================================
+    // CONFIGURACIÓN
+    // =========================================================================
+
+    /** Minutos sin actualización para considerar una importación como "stuck" */
     private const STUCK_THRESHOLD_MINUTES = 3;
 
-    /**
-     * Máximo de importaciones a recuperar por ejecución.
-     * Previene sobrecarga si hay muchas stuck.
-     */
+    /** Máximo de importaciones a recuperar por ejecución */
     private const MAX_RECOVERIES_PER_RUN = 5;
+
+    /** Tolerancia de registros para considerar importación completada */
+    private const COMPLETION_TOLERANCE_RECORDS = 10;
+
+    /** Porcentaje mínimo procesado para considerar completada */
+    private const COMPLETION_THRESHOLD_PERCENTAGE = 0.99;
+
+    /** Mínimo de registros exitosos para aplicar regla de porcentaje */
+    private const MIN_RECORDS_FOR_PERCENTAGE_RULE = 1000;
+
+    /** Delay en segundos antes de re-encolar (evita race conditions) */
+    private const REQUEUE_DELAY_SECONDS = 5;
+
+    // =========================================================================
+    // API PÚBLICA
+    // =========================================================================
 
     /**
      * Detecta y recupera importaciones stuck.
@@ -45,33 +61,40 @@ final class ImportacionRecoveryService
         
         if ($stuckImportaciones->isEmpty()) {
             Log::info('ImportacionRecoveryService: No hay importaciones stuck');
-            return ['recovered' => 0, 'importaciones' => []];
+            return $this->buildRecoveryResult([]);
         }
 
-        $recovered = [];
+        $recoveredIds = $this->processStuckImportaciones($stuckImportaciones);
 
-        foreach ($stuckImportaciones as $importacion) {
-            if ($this->tryRecoverImportacion($importacion)) {
-                $recovered[] = $importacion->id;
-            }
-        }
+        $this->logRecoveryResult($stuckImportaciones->count(), $recoveredIds);
 
-        Log::info('ImportacionRecoveryService: Recovery completado', [
-            'total_stuck' => $stuckImportaciones->count(),
-            'recovered' => count($recovered),
-            'importacion_ids' => $recovered,
-        ]);
-
-        return [
-            'recovered' => count($recovered),
-            'importaciones' => $recovered,
-        ];
+        return $this->buildRecoveryResult($recoveredIds);
     }
 
     /**
-     * Encuentra importaciones que están "stuck" (procesando sin updates recientes).
+     * Obtiene estadísticas de importaciones para health check.
      */
-    private function findStuckImportaciones()
+    public function getHealthStats(): array
+    {
+        return [
+            'importaciones_por_estado' => $this->getImportacionesPorEstado(),
+            'stuck_count' => $this->getStuckCount(),
+            'jobs_in_queue' => $this->getJobsInQueue(),
+            'threshold_minutes' => self::STUCK_THRESHOLD_MINUTES,
+            'checked_at' => now()->toISOString(),
+        ];
+    }
+
+    // =========================================================================
+    // BÚSQUEDA DE IMPORTACIONES STUCK
+    // =========================================================================
+
+    /**
+     * Encuentra importaciones que están "stuck" (procesando sin updates recientes).
+     * 
+     * @return Collection<int, Importacion>
+     */
+    private function findStuckImportaciones(): Collection
     {
         $threshold = now()->subMinutes(self::STUCK_THRESHOLD_MINUTES);
 
@@ -90,39 +113,35 @@ final class ImportacionRecoveryService
      */
     private function tryRecoverImportacion(Importacion $importacion): bool
     {
-        // Verificar si ya hay un job en cola para esta importación
         if ($this->hasExistingJob($importacion->id)) {
-            Log::info('ImportacionRecoveryService: Job ya existe en cola', [
-                'importacion_id' => $importacion->id,
-            ]);
+            $this->logJobAlreadyExists($importacion->id);
             return false;
         }
 
-        // Verificar que el archivo aún existe
         if (!$this->validateFileExists($importacion)) {
-            // CASO ESPECIAL: Si el archivo no existe pero hay registros procesados,
-            // probablemente el proceso terminó exitosamente pero murió antes de markAsCompleted()
-            // En ese caso, marcamos como completado, no como fallido.
-            if ($this->shouldMarkAsCompleted($importacion)) {
-                Log::info('ImportacionRecoveryService: Archivo no existe pero hay registros, marcando como completado', [
-                    'importacion_id' => $importacion->id,
-                    'registros_exitosos' => $importacion->registros_exitosos,
-                    'total_registros' => $importacion->total_registros,
-                ]);
-                $this->markAsCompleted($importacion);
-                return true;
-            }
-            
-            Log::warning('ImportacionRecoveryService: Archivo no encontrado, marcando como fallido', [
-                'importacion_id' => $importacion->id,
-                'ruta_archivo' => $importacion->ruta_archivo,
-            ]);
-            $this->markAsFailed($importacion, 'Archivo no encontrado durante recovery');
-            return false;
+            return $this->handleMissingFile($importacion);
         }
 
-        // Re-encolar el job
         return $this->requeue($importacion);
+    }
+
+    /**
+     * Maneja el caso donde el archivo no existe.
+     * 
+     * Si la importación parece completa (tiene registros procesados), la marca como completada.
+     * Si no, la marca como fallida.
+     */
+    private function handleMissingFile(Importacion $importacion): bool
+    {
+        if ($this->shouldMarkAsCompleted($importacion)) {
+            $this->logCompletingWithoutFile($importacion);
+            $this->markAsCompleted($importacion);
+            return true;
+        }
+        
+        $this->logFileMissing($importacion);
+        $this->markAsFailed($importacion, 'Archivo no encontrado durante recovery');
+        return false;
     }
     
     /**
@@ -138,26 +157,33 @@ final class ImportacionRecoveryService
         $exitosos = $importacion->registros_exitosos ?? 0;
         $total = $importacion->total_registros ?? 0;
         $fallidos = $importacion->registros_fallidos ?? 0;
-        
-        // Si no hay registros procesados, no está completo
-        if ($exitosos === 0 && $total === 0) {
+        $procesados = $exitosos + $fallidos;
+
+        if ($this->hasNoRecordsProcessed($exitosos, $total)) {
             return false;
         }
-        
-        // Si exitosos + fallidos >= total - 10, consideramos que terminó
-        // (tolerancia de 10 registros por posibles off-by-one en conteo)
-        $procesados = $exitosos + $fallidos;
-        
-        if ($total > 0 && $procesados >= ($total - 10)) {
-            return true;
+
+        return $this->isWithinCompletionTolerance($procesados, $total)
+            || $this->meetsPercentageThreshold($exitosos, $procesados, $total);
+    }
+
+    private function hasNoRecordsProcessed(int $exitosos, int $total): bool
+    {
+        return $exitosos === 0 && $total === 0;
+    }
+
+    private function isWithinCompletionTolerance(int $procesados, int $total): bool
+    {
+        return $total > 0 && $procesados >= ($total - self::COMPLETION_TOLERANCE_RECORDS);
+    }
+
+    private function meetsPercentageThreshold(int $exitosos, int $procesados, int $total): bool
+    {
+        if ($exitosos <= self::MIN_RECORDS_FOR_PERCENTAGE_RULE || $total === 0) {
+            return false;
         }
-        
-        // Si tiene muchos exitosos (> 1000) y el total es similar, también
-        if ($exitosos > 1000 && $total > 0 && ($procesados / $total) > 0.99) {
-            return true;
-        }
-        
-        return false;
+
+        return ($procesados / $total) > self::COMPLETION_THRESHOLD_PERCENTAGE;
     }
     
     /**
@@ -217,11 +243,7 @@ final class ImportacionRecoveryService
             'cerrado_en' => $todasCompletadas ? now() : null,
         ]);
 
-        Log::info('ImportacionRecoveryService: Lote actualizado por recovery', [
-            'lote_id' => $lote->id,
-            'estado' => $estadoLote,
-            'total_registros' => $totalRegistros,
-        ]);
+        $this->logLoteUpdated($lote->id, $estadoLote, $totalRegistros);
     }
 
     /**
@@ -251,13 +273,9 @@ final class ImportacionRecoveryService
         }
 
         try {
-            $disk = \Illuminate\Support\Facades\Storage::disk('gcs');
-            return $disk->exists($importacion->ruta_archivo);
+            return Storage::disk('gcs')->exists($importacion->ruta_archivo);
         } catch (\Exception $e) {
-            Log::warning('ImportacionRecoveryService: Error verificando archivo', [
-                'importacion_id' => $importacion->id,
-                'error' => $e->getMessage(),
-            ]);
+            $this->logFileCheckError($importacion, $e);
             return false;
         }
     }
@@ -270,36 +288,34 @@ final class ImportacionRecoveryService
         try {
             $checkpoint = $importacion->metadata['last_processed_row'] ?? 0;
             
-            Log::info('ImportacionRecoveryService: Re-encolando importación', [
-                'importacion_id' => $importacion->id,
-                'checkpoint' => $checkpoint,
-                'minutos_sin_update' => now()->diffInMinutes($importacion->updated_at),
-            ]);
-
-            // Actualizar timestamp para indicar que el recovery lo tocó
-            $importacion->update([
-                'metadata' => array_merge($importacion->metadata ?? [], [
-                    'recovery_at' => now()->toISOString(),
-                    'recovery_from_checkpoint' => $checkpoint,
-                ]),
-            ]);
-
-            // Dispatch con delay de 5 segundos para evitar race conditions
-            ProcesarImportacionJob::dispatch(
-                $importacion->id,
-                $importacion->ruta_archivo,
-                'gcs'
-            )->delay(now()->addSeconds(5));
+            $this->logRequeuing($importacion, $checkpoint);
+            $this->updateRecoveryMetadata($importacion, $checkpoint);
+            $this->dispatchWithDelay($importacion);
 
             return true;
-
         } catch (\Exception $e) {
-            Log::error('ImportacionRecoveryService: Error re-encolando', [
-                'importacion_id' => $importacion->id,
-                'error' => $e->getMessage(),
-            ]);
+            $this->logRequeueError($importacion, $e);
             return false;
         }
+    }
+
+    private function updateRecoveryMetadata(Importacion $importacion, int $checkpoint): void
+    {
+        $importacion->update([
+            'metadata' => array_merge($importacion->metadata ?? [], [
+                'recovery_at' => now()->toISOString(),
+                'recovery_from_checkpoint' => $checkpoint,
+            ]),
+        ]);
+    }
+
+    private function dispatchWithDelay(Importacion $importacion): void
+    {
+        ProcesarImportacionJob::dispatch(
+            $importacion->id,
+            $importacion->ruta_archivo,
+            'gcs'
+        )->delay(now()->addSeconds(self::REQUEUE_DELAY_SECONDS));
     }
 
     /**
@@ -317,31 +333,140 @@ final class ImportacionRecoveryService
         ]);
     }
 
+    // =========================================================================
+    // HELPERS PARA HEALTH STATS
+    // =========================================================================
+
     /**
-     * Obtiene estadísticas de importaciones para health check.
+     * @return array<string, int>
      */
-    public function getHealthStats(): array
+    private function getImportacionesPorEstado(): array
     {
-        $stats = DB::table('importaciones')
+        return DB::table('importaciones')
             ->select('estado', DB::raw('count(*) as count'))
             ->groupBy('estado')
             ->pluck('count', 'estado')
             ->toArray();
+    }
 
-        $stuckCount = Importacion::where('estado', 'procesando')
+    private function getStuckCount(): int
+    {
+        return Importacion::where('estado', 'procesando')
             ->where('updated_at', '<', now()->subMinutes(self::STUCK_THRESHOLD_MINUTES))
             ->count();
+    }
 
-        $jobsInQueue = DB::table('jobs')
+    private function getJobsInQueue(): int
+    {
+        return DB::table('jobs')
             ->where('payload', 'like', '%ProcesarImportacionJob%')
             ->count();
+    }
 
+    // =========================================================================
+    // HELPERS PARA RECOVERY
+    // =========================================================================
+
+    /**
+     * @param Collection<int, Importacion> $importaciones
+     * @return array<int>
+     */
+    private function processStuckImportaciones(Collection $importaciones): array
+    {
+        $recovered = [];
+
+        foreach ($importaciones as $importacion) {
+            if ($this->tryRecoverImportacion($importacion)) {
+                $recovered[] = $importacion->id;
+            }
+        }
+
+        return $recovered;
+    }
+
+    /**
+     * @param array<int> $recoveredIds
+     */
+    private function logRecoveryResult(int $totalStuck, array $recoveredIds): void
+    {
+        Log::info('ImportacionRecoveryService: Recovery completado', [
+            'total_stuck' => $totalStuck,
+            'recovered' => count($recoveredIds),
+            'importacion_ids' => $recoveredIds,
+        ]);
+    }
+
+    /**
+     * @param array<int> $recoveredIds
+     * @return array{recovered: int, importaciones: array<int>}
+     */
+    private function buildRecoveryResult(array $recoveredIds): array
+    {
         return [
-            'importaciones_por_estado' => $stats,
-            'stuck_count' => $stuckCount,
-            'jobs_in_queue' => $jobsInQueue,
-            'threshold_minutes' => self::STUCK_THRESHOLD_MINUTES,
-            'checked_at' => now()->toISOString(),
+            'recovered' => count($recoveredIds),
+            'importaciones' => $recoveredIds,
         ];
+    }
+
+    // =========================================================================
+    // LOGGING
+    // =========================================================================
+
+    private function logJobAlreadyExists(int $importacionId): void
+    {
+        Log::info('ImportacionRecoveryService: Job ya existe en cola', [
+            'importacion_id' => $importacionId,
+        ]);
+    }
+
+    private function logCompletingWithoutFile(Importacion $importacion): void
+    {
+        Log::info('ImportacionRecoveryService: Archivo no existe pero hay registros, marcando como completado', [
+            'importacion_id' => $importacion->id,
+            'registros_exitosos' => $importacion->registros_exitosos,
+            'total_registros' => $importacion->total_registros,
+        ]);
+    }
+
+    private function logFileMissing(Importacion $importacion): void
+    {
+        Log::warning('ImportacionRecoveryService: Archivo no encontrado, marcando como fallido', [
+            'importacion_id' => $importacion->id,
+            'ruta_archivo' => $importacion->ruta_archivo,
+        ]);
+    }
+
+    private function logRequeuing(Importacion $importacion, int $checkpoint): void
+    {
+        Log::info('ImportacionRecoveryService: Re-encolando importación', [
+            'importacion_id' => $importacion->id,
+            'checkpoint' => $checkpoint,
+            'minutos_sin_update' => now()->diffInMinutes($importacion->updated_at),
+        ]);
+    }
+
+    private function logRequeueError(Importacion $importacion, \Exception $e): void
+    {
+        Log::error('ImportacionRecoveryService: Error re-encolando', [
+            'importacion_id' => $importacion->id,
+            'error' => $e->getMessage(),
+        ]);
+    }
+
+    private function logLoteUpdated(int $loteId, string $estado, int $totalRegistros): void
+    {
+        Log::info('ImportacionRecoveryService: Lote actualizado por recovery', [
+            'lote_id' => $loteId,
+            'estado' => $estado,
+            'total_registros' => $totalRegistros,
+        ]);
+    }
+
+    private function logFileCheckError(Importacion $importacion, \Exception $e): void
+    {
+        Log::warning('ImportacionRecoveryService: Error verificando archivo', [
+            'importacion_id' => $importacion->id,
+            'error' => $e->getMessage(),
+        ]);
     }
 }
