@@ -8,30 +8,24 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Servicio para verificar prospectos existentes.
+ * Servicio de cache para prospectos existentes.
+ * Carga emails y teléfonos en memoria para búsqueda O(1).
  * 
- * VERSIÓN 2: Ya NO carga todo en memoria.
- * Usa queries directas a la BD con índices.
- * 
- * Esto es más lento por registro pero NO consume memoria proporcional
- * a la cantidad de prospectos existentes.
+ * Single Responsibility: Solo maneja el cache de identificadores de prospectos.
  */
 final class ProspectoCacheService
 {
-    /** 
-     * Cache local solo para el archivo actual (detectar duplicados dentro del mismo archivo)
-     * @var array<string, bool> 
-     */
-    private array $emailsEnArchivo = [];
+    /** @var array<string, int> email => prospecto_id */
+    private array $emailIndex = [];
     
-    /** @var array<string, bool> */
-    private array $telefonosEnArchivo = [];
+    /** @var array<string, int> telefono => prospecto_id */
+    private array $telefonoIndex = [];
     
     private bool $loaded = false;
 
     /**
-     * "Carga" inicial - ahora solo marca como listo.
-     * Ya no cargamos todos los prospectos en memoria.
+     * Carga todos los emails y teléfonos existentes en memoria.
+     * Debe llamarse una vez antes de procesar el archivo.
      */
     public function loadExistingProspectos(): void
     {
@@ -39,138 +33,98 @@ final class ProspectoCacheService
             return;
         }
 
+        $startTime = microtime(true);
+        
+        $this->loadEmails();
+        $this->loadTelefonos();
+        
         $this->loaded = true;
         
-        // Contar para estadísticas
-        $emailCount = DB::table('prospectos')->whereNotNull('email')->count();
-        $telefonoCount = DB::table('prospectos')->whereNotNull('telefono')->count();
+        $elapsed = round(microtime(true) - $startTime, 2);
         
-        Log::info('ProspectoCacheService: Iniciado (modo query directo)', [
-            'prospectos_con_email' => $emailCount,
-            'prospectos_con_telefono' => $telefonoCount,
+        Log::info('ProspectoCacheService: Cache cargado', [
+            'emails_count' => count($this->emailIndex),
+            'telefonos_count' => count($this->telefonoIndex),
+            'tiempo_segundos' => $elapsed,
             'memoria_mb' => round(memory_get_usage(true) / 1024 / 1024, 2),
         ]);
     }
 
     /**
      * Busca un prospecto existente por email o teléfono.
-     * Ahora usa queries directas en lugar de cache en memoria.
+     * Complejidad: O(1)
      * 
      * @return int|null ID del prospecto o null si no existe
      */
     public function findExistingProspectoId(?string $email, ?string $telefono): ?int
     {
-        // Primero verificar duplicados dentro del mismo archivo
-        if ($email !== null && isset($this->emailsEnArchivo[$email])) {
-            return -1; // Indicar que es duplicado (ya está pendiente de insertar)
-        }
-        
-        if ($telefono !== null && isset($this->telefonosEnArchivo[$telefono])) {
-            return -1;
+        // Prioridad: email > teléfono
+        if ($email !== null && isset($this->emailIndex[$email])) {
+            return $this->emailIndex[$email];
         }
 
-        // Buscar en BD por email
-        if ($email !== null) {
-            $existing = DB::table('prospectos')
-                ->where('email', $email)
-                ->value('id');
-            
-            if ($existing) {
-                return (int) $existing;
-            }
-        }
-
-        // Buscar en BD por teléfono
-        if ($telefono !== null) {
-            $existing = DB::table('prospectos')
-                ->where('telefono', $telefono)
-                ->value('id');
-            
-            if ($existing) {
-                return (int) $existing;
-            }
+        if ($telefono !== null && isset($this->telefonoIndex[$telefono])) {
+            return $this->telefonoIndex[$telefono];
         }
 
         return null;
     }
 
     /**
-     * Registra un nuevo prospecto en el cache del archivo actual.
-     * Solo para detectar duplicados dentro del mismo archivo.
+     * Registra un nuevo prospecto en el cache.
+     * Usado para detectar duplicados dentro del mismo archivo.
      */
     public function registerNewProspecto(?string $email, ?string $telefono, int $id = -1): void
     {
         if ($email !== null) {
-            $this->emailsEnArchivo[$email] = true;
+            $this->emailIndex[$email] = $id;
         }
         
         if ($telefono !== null) {
-            $this->telefonosEnArchivo[$telefono] = true;
+            $this->telefonoIndex[$telefono] = $id;
         }
     }
 
     /**
-     * Verifica si un email ya existe (en BD o pendiente de crear en este archivo).
+     * Verifica si un email ya existe (en BD o pendiente de crear).
      */
     public function emailExists(?string $email): bool
     {
-        if ($email === null) {
-            return false;
-        }
-        
-        // Duplicado dentro del archivo
-        if (isset($this->emailsEnArchivo[$email])) {
-            return true;
-        }
-        
-        // Existe en BD
-        return DB::table('prospectos')->where('email', $email)->exists();
+        return $email !== null && isset($this->emailIndex[$email]);
     }
 
     /**
-     * Verifica si un teléfono ya existe (en BD o pendiente de crear en este archivo).
+     * Verifica si un teléfono ya existe (en BD o pendiente de crear).
      */
     public function telefonoExists(?string $telefono): bool
     {
-        if ($telefono === null) {
-            return false;
-        }
-        
-        // Duplicado dentro del archivo
-        if (isset($this->telefonosEnArchivo[$telefono])) {
-            return true;
-        }
-        
-        // Existe en BD
-        return DB::table('prospectos')->where('telefono', $telefono)->exists();
+        return $telefono !== null && isset($this->telefonoIndex[$telefono]);
+    }
+
+    private function loadEmails(): void
+    {
+        $this->emailIndex = DB::table('prospectos')
+            ->whereNotNull('email')
+            ->where('email', '!=', '')
+            ->pluck('id', 'email')
+            ->toArray();
+    }
+
+    private function loadTelefonos(): void
+    {
+        $this->telefonoIndex = DB::table('prospectos')
+            ->whereNotNull('telefono')
+            ->where('telefono', '!=', '')
+            ->pluck('id', 'telefono')
+            ->toArray();
     }
 
     public function getStats(): array
     {
         return [
-            'emails_en_archivo' => count($this->emailsEnArchivo),
-            'telefonos_en_archivo' => count($this->telefonosEnArchivo),
+            'emails_count' => count($this->emailIndex),
+            'telefonos_count' => count($this->telefonoIndex),
             'loaded' => $this->loaded,
-            'modo' => 'query_directo',
         ];
-    }
-
-    /**
-     * Limpia la cache del archivo actual.
-     */
-    public function clear(): void
-    {
-        $emailCount = count($this->emailsEnArchivo);
-        $telefonoCount = count($this->telefonosEnArchivo);
-        
-        $this->emailsEnArchivo = [];
-        $this->telefonosEnArchivo = [];
-        $this->loaded = false;
-        
-        Log::info('ProspectoCacheService: Cache de archivo limpiado', [
-            'emails_liberados' => $emailCount,
-            'telefonos_liberados' => $telefonoCount,
-            'memoria_mb' => round(memory_get_usage(true) / 1024 / 1024, 2),
-        ]);
     }
 }

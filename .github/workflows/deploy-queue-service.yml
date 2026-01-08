@@ -114,7 +114,7 @@ jobs:
             --platform managed \
             --no-allow-unauthenticated \
             --port 8080 \
-            --memory 4Gi \
+            --memory 2Gi \
             --cpu 2 \
             --min-instances ${{ steps.env.outputs.MIN_INSTANCES }} \
             --max-instances ${{ steps.env.outputs.MAX_INSTANCES }} \

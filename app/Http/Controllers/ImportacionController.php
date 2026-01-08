@@ -13,7 +13,6 @@ use App\Models\Lote;
 use App\Services\Import\ImportacionRecoveryService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Maatwebsite\Excel\Facades\Excel;
 
@@ -166,9 +165,7 @@ class ImportacionController extends Controller
 
     /**
      * Procesa archivos grandes en background.
-     * UN ARCHIVO = UN JOB. Simple y funcional.
-     * 
-     * El frontend se encarga de esperar a que termine antes de subir otro.
+     * Sube a Cloud Storage y encola job para procesamiento.
      */
     private function procesarEnBackground($request, $archivo, string $nombreArchivo, Lote $lote): JsonResponse
     {
@@ -180,24 +177,7 @@ class ImportacionController extends Controller
         $disk = app()->environment('local') ? 'local' : 'gcs';
 
         // Subir archivo a storage
-        $contenido = file_get_contents($archivo->getRealPath());
-        $uploaded = Storage::disk($disk)->put($rutaArchivo, $contenido);
-        
-        if (!$uploaded) {
-            throw new \Exception("Error al subir archivo a {$disk}: {$rutaArchivo}");
-        }
-        
-        if (!Storage::disk($disk)->exists($rutaArchivo)) {
-            throw new \Exception("Archivo subido pero no encontrado en {$disk}: {$rutaArchivo}");
-        }
-        
-        $sizeInStorage = Storage::disk($disk)->size($rutaArchivo);
-        
-        Log::info('ImportacionController: Archivo subido', [
-            'nombre_archivo' => $nombreArchivo,
-            'ruta_archivo' => $rutaArchivo,
-            'size_mb' => round($sizeInStorage / 1024 / 1024, 2),
-        ]);
+        Storage::disk($disk)->put($rutaArchivo, file_get_contents($archivo->getRealPath()));
 
         // Crear registro de importación
         $importacion = Importacion::create([
@@ -212,16 +192,16 @@ class ImportacionController extends Controller
                 'modo' => 'background',
                 'tamano_archivo' => $archivo->getSize(),
                 'disk' => $disk,
-                'subido_en' => now()->toISOString(),
+                'encolado_en' => now()->toISOString(),
             ],
         ]);
 
-        // Actualizar lote
+        // Actualizar lote a procesando
         $lote->estado = 'procesando';
         $lote->total_archivos = $lote->importaciones()->count();
         $lote->save();
 
-        // Encolar job para ESTE archivo
+        // Encolar job para procesamiento
         ProcesarImportacionJob::dispatch(
             $importacion->id,
             $rutaArchivo,
@@ -229,10 +209,11 @@ class ImportacionController extends Controller
         );
 
         return response()->json([
-            'mensaje' => 'Archivo recibido y en proceso.',
+            'mensaje' => 'Archivo recibido. La importación se está procesando en segundo plano.',
             'data' => new ImportacionResource($importacion),
             'lote' => new LoteResource($lote->fresh(['importaciones'])),
             'procesamiento' => 'background',
+            'instrucciones' => 'Consulte el estado del lote usando GET /api/lotes/' . $lote->id,
         ], 202);
     }
 
@@ -504,6 +485,20 @@ class ImportacionController extends Controller
             ], 422);
         }
 
+        if ($importacion->estado === 'pendiente') {
+            // Verificar si ya hay un job en cola
+            $hasJob = DB::table('jobs')
+                ->where('payload', 'like', '%ProcesarImportacionJob%')
+                ->where('payload', 'like', '%"importacionId";i:' . $importacion->id . ';%')
+                ->exists();
+
+            if ($hasJob) {
+                return response()->json([
+                    'mensaje' => 'Ya existe un job en cola para esta importación',
+                ], 422);
+            }
+        }
+
         // Validar que el archivo existe
         if (empty($importacion->ruta_archivo)) {
             return response()->json([
@@ -525,17 +520,24 @@ class ImportacionController extends Controller
             ], 500);
         }
 
-        // Si estaba en "fallido", volver a "pendiente"
+        // Obtener checkpoint actual
+        $checkpoint = $importacion->metadata['last_processed_row'] ?? 0;
+
+        // Actualizar metadata
+        $importacion->update([
+            'metadata' => array_merge($importacion->metadata ?? [], [
+                'manual_retry_at' => now()->toISOString(),
+                'retry_from_checkpoint' => $checkpoint,
+            ]),
+        ]);
+
+        // Si estaba en estado "procesando", dejarlo así para que el job lo retome
+        // Si estaba en "fallido", volver a "procesando"
         if ($importacion->estado === 'fallido') {
-            $importacion->update([
-                'estado' => 'pendiente',
-                'metadata' => array_merge($importacion->metadata ?? [], [
-                    'manual_retry_at' => now()->toISOString(),
-                ]),
-            ]);
+            $importacion->update(['estado' => 'procesando']);
         }
 
-        // Encolar job para ESTA importación
+        // Encolar job
         ProcesarImportacionJob::dispatch(
             $importacion->id,
             $importacion->ruta_archivo,
@@ -546,7 +548,8 @@ class ImportacionController extends Controller
             'mensaje' => 'Importación re-encolada exitosamente',
             'data' => [
                 'importacion_id' => $importacion->id,
-                'estado' => $importacion->fresh()->estado,
+                'checkpoint' => $checkpoint,
+                'estado' => $importacion->estado,
             ],
         ]);
     }

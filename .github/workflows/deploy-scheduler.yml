@@ -12,8 +12,6 @@ on:
       - main
     paths:
       - 'app/Jobs/**'
-      - 'app/Console/**'
-      - 'routes/console.php'
       - 'bootstrap/app.php'
       - 'Dockerfile.scheduler'
       - '.github/workflows/deploy-scheduler.yml'

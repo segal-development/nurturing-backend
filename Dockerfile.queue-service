@@ -1,5 +1,12 @@
 # =============================================================================
-# Dockerfile para Cloud Run Service - Queue Worker Persistente
+# Dockerfile para Cloud Run Service - Queue Workers Persistentes
+# 
+# ARQUITECTURA DE COLAS:
+# - Cola 'default': Envíos de email/SMS, verificaciones, jobs rápidos
+# - Cola 'envios': Jobs de procesamiento de flujos
+# - Cola 'imports': Importaciones de prospectos (jobs largos, 100k+ registros)
+#
+# Cada cola tiene su propio worker para que no se bloqueen entre sí.
 # =============================================================================
 
 FROM php:8.3-cli-alpine
@@ -35,14 +42,50 @@ COPY . .
 RUN composer dump-autoload --optimize
 
 # =============================================================================
-# Configuración de Supervisor
+# Configuración de Supervisor - 3 Workers independientes
 # =============================================================================
 RUN mkdir -p /etc/supervisor.d /var/log
 
 COPY <<'EOF' /etc/supervisor.d/workers.ini
-[program:queue-worker]
+; =============================================================================
+; WORKER 1: Cola 'default' - Jobs rápidos (emails, SMS, verificaciones)
+; =============================================================================
+[program:worker-default]
 process_name=%(program_name)s
-command=php /app/artisan queue:work database --sleep=3 --tries=3 --timeout=3600 --memory=3500
+command=php /app/artisan queue:work database --queue=default --sleep=3 --tries=3 --timeout=300 --memory=512
+autostart=true
+autorestart=true
+stopasgroup=true
+killasgroup=true
+numprocs=1
+redirect_stderr=true
+stdout_logfile=/dev/stdout
+stdout_logfile_maxbytes=0
+stopwaitsecs=30
+
+; =============================================================================
+; WORKER 2: Cola 'envios' - Procesamiento de flujos de envío
+; =============================================================================
+[program:worker-envios]
+process_name=%(program_name)s
+command=php /app/artisan queue:work database --queue=envios --sleep=3 --tries=3 --timeout=600 --memory=512
+autostart=true
+autorestart=true
+stopasgroup=true
+killasgroup=true
+numprocs=1
+redirect_stderr=true
+stdout_logfile=/dev/stdout
+stdout_logfile_maxbytes=0
+stopwaitsecs=60
+
+; =============================================================================
+; WORKER 3: Cola 'imports' - Importaciones de prospectos (jobs largos)
+; Configuración especial: más memoria, timeout largo, 1 solo worker
+; =============================================================================
+[program:worker-imports]
+process_name=%(program_name)s
+command=php /app/artisan queue:work database --queue=imports --sleep=3 --tries=3 --timeout=7200 --memory=1536
 autostart=true
 autorestart=true
 stopasgroup=true
@@ -53,6 +96,9 @@ stdout_logfile=/dev/stdout
 stdout_logfile_maxbytes=0
 stopwaitsecs=3600
 
+; =============================================================================
+; HEALTH CHECK SERVER - Requerido por Cloud Run
+; =============================================================================
 [program:healthcheck-server]
 process_name=%(program_name)s
 command=php -S 0.0.0.0:8080 /app/health-server.php
@@ -74,13 +120,24 @@ if ($uri === '/' || $uri === '/health' || $uri === '/healthz') {
     header('Content-Type: application/json');
     http_response_code(200);
     
-    $workers = (int) trim(shell_exec('pgrep -f "queue:work" | wc -l') ?? '0');
+    // Contar workers por tipo
+    $defaultWorkers = (int) trim(shell_exec('pgrep -f "queue=default" | wc -l') ?? '0');
+    $enviosWorkers = (int) trim(shell_exec('pgrep -f "queue=envios" | wc -l') ?? '0');
+    $importsWorkers = (int) trim(shell_exec('pgrep -f "queue=imports" | wc -l') ?? '0');
     
     echo json_encode([
         'status' => 'healthy',
-        'service' => 'nurturing-queue-worker',
-        'workers_running' => $workers,
+        'service' => 'nurturing-queue-workers',
+        'workers' => [
+            'default' => $defaultWorkers,
+            'envios' => $enviosWorkers,
+            'imports' => $importsWorkers,
+        ],
+        'total_workers' => $defaultWorkers + $enviosWorkers + $importsWorkers,
         'timestamp' => date('c'),
+        'uptime' => file_exists('/tmp/start_time') 
+            ? (time() - (int)file_get_contents('/tmp/start_time')) . 's'
+            : 'unknown'
     ]);
     exit;
 }
@@ -97,12 +154,22 @@ COPY <<'ENTRYPOINT' /entrypoint.sh
 set -e
 
 echo "=============================================="
-echo "=== Cloud Run Service: Queue Worker v4.1  ==="
+echo "=== Cloud Run Service: Queue Workers v4.0 ==="
+echo "=== Multi-Queue Architecture              ==="
 echo "=============================================="
 echo "Timestamp: $(date -Iseconds)"
+echo ""
+echo "Workers:"
+echo "  - default: emails, SMS, jobs rápidos"
+echo "  - envios:  procesamiento de flujos"
+echo "  - imports: importaciones de prospectos"
+echo ""
+echo "=============================================="
 
+# Guardar timestamp de inicio
 date +%s > /tmp/start_time
 
+# Iniciar supervisor en foreground
 exec /usr/bin/supervisord -n -c /etc/supervisord.conf
 ENTRYPOINT
 
@@ -111,6 +178,7 @@ RUN chmod +x /entrypoint.sh
 # Configuración base de supervisor
 RUN echo -e "[supervisord]\nnodaemon=true\nlogfile=/dev/null\nlogfile_maxbytes=0\npidfile=/tmp/supervisord.pid\n\n[include]\nfiles = /etc/supervisor.d/*.ini" > /etc/supervisord.conf
 
+# Puerto para Cloud Run (OBLIGATORIO)
 EXPOSE 8080
 
 ENTRYPOINT ["/entrypoint.sh"]

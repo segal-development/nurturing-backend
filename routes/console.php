@@ -1,6 +1,8 @@
 <?php
 
+use App\Services\Import\ImportacionRecoveryService;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schedule;
 
@@ -22,20 +24,80 @@ Artisan::command('inspire', function () {
 |--------------------------------------------------------------------------
 | Scheduled Tasks
 |--------------------------------------------------------------------------
-|
-| NOTA: El recovery automático y otras tareas "inteligentes" fueron DESACTIVADAS
-| porque estaban marcando como fallidas importaciones que todavía no empezaban.
-|
-| El queue worker persistente (Cloud Run Service) es suficiente para procesar
-| todos los jobs secuencialmente sin intervención.
-|
 */
+
+// ============================================================================
+// RECOVERY AUTOMÁTICO DE IMPORTACIONES STUCK
+// Se ejecuta cada minuto para detectar y recuperar importaciones abandonadas
+// ============================================================================
+Schedule::call(function () {
+    Log::info('Scheduler: Iniciando verificación de importaciones stuck');
+    
+    $service = new ImportacionRecoveryService();
+    $result = $service->recoverStuckImportations();
+    
+    if ($result['recovered'] > 0) {
+        Log::warning('Scheduler: Recuperadas ' . $result['recovered'] . ' importaciones stuck', [
+            'importacion_ids' => $result['importaciones'],
+        ]);
+    }
+    
+    return $result;
+})->everyMinute()
+  ->name('importaciones:auto-recovery')
+  ->withoutOverlapping();
+
+// ============================================================================
+// VERIFICACIÓN DE IMPORTACIONES PENDIENTES
+// Detecta importaciones pendientes sin job en cola y las re-encola
+// ============================================================================
+Schedule::call(function () {
+    $pendientes = \App\Models\Importacion::where('estado', 'pendiente')
+        ->where('created_at', '<', now()->subMinutes(2)) // Más de 2 minutos pendiente
+        ->whereNotNull('ruta_archivo')
+        ->get();
+    
+    if ($pendientes->isEmpty()) {
+        return ['requeued' => 0];
+    }
+    
+    $requeued = [];
+    
+    foreach ($pendientes as $importacion) {
+        // Verificar si ya hay un job en cola
+        $hasJob = DB::table('jobs')
+            ->where('payload', 'like', '%ProcesarImportacionJob%')
+            ->where('payload', 'like', '%"importacionId";i:' . $importacion->id . ';%')
+            ->exists();
+        
+        if ($hasJob) {
+            continue;
+        }
+        
+        // Re-encolar
+        $disk = $importacion->metadata['disk'] ?? 'gcs';
+        
+        \App\Jobs\ProcesarImportacionJob::dispatch(
+            $importacion->id,
+            $importacion->ruta_archivo,
+            $disk
+        );
+        
+        $requeued[] = $importacion->id;
+        
+        Log::warning('Scheduler: Re-encolada importación pendiente sin job', [
+            'importacion_id' => $importacion->id,
+        ]);
+    }
+    
+    return ['requeued' => count($requeued), 'importaciones' => $requeued];
+})->everyMinute()
+  ->name('importaciones:check-pendientes')
+  ->withoutOverlapping();
 
 // ============================================================================
 // ACTUALIZACIÓN DE ESTADO DE LOTES
 // Recalcula totales de lotes con importaciones activas
-// Esta es la ÚNICA tarea que se mantiene porque solo recalcula números, 
-// no modifica estados de importaciones
 // ============================================================================
 Schedule::call(function () {
     $lotesActivos = \App\Models\Lote::whereIn('estado', ['abierto', 'procesando'])
@@ -49,3 +111,17 @@ Schedule::call(function () {
 })->everyMinute()
   ->name('lotes:recalcular-totales')
   ->withoutOverlapping();
+
+// ============================================================================
+// PROCESAR COLA DE JOBS
+// Si hay jobs pendientes, los procesa directamente
+// Esto es un fallback cuando el queue worker de Cloud Run no está corriendo
+// ============================================================================
+Schedule::command('queue:work --stop-when-empty --tries=1 --timeout=0 --max-jobs=10')
+  ->everyMinute()
+  ->name('queue:process-pending')
+  ->withoutOverlapping()
+  ->when(function () {
+      // Solo ejecutar si hay jobs en cola
+      return DB::table('jobs')->exists();
+  });
