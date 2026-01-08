@@ -173,9 +173,18 @@ class ProcesarLoteJob implements ShouldQueue
 
         try {
             // Descargar archivo
+            Log::info('ProcesarLoteJob: Descargando archivo...', [
+                'importacion_id' => $importacion->id
+            ]);
             $tempPath = $this->downloadFile($importacion);
             
             // Actualizar metadata
+            Log::info('ProcesarLoteJob: Archivo descargado, iniciando procesamiento...', [
+                'importacion_id' => $importacion->id,
+                'file_size_mb' => round(filesize($tempPath) / 1024 / 1024, 2),
+                'memoria_mb' => round(memory_get_usage(true) / 1024 / 1024, 2)
+            ]);
+            
             $importacion->update([
                 'metadata' => array_merge($importacion->metadata ?? [], [
                     'procesamiento_iniciado_en' => now()->toISOString(),
@@ -184,7 +193,15 @@ class ProcesarLoteJob implements ShouldQueue
             ]);
 
             // Procesar con el servicio existente
+            Log::info('ProcesarLoteJob: Creando ProspectoImportService...', [
+                'importacion_id' => $importacion->id
+            ]);
             $service = new ProspectoImportService($importacion, $tempPath);
+            
+            Log::info('ProcesarLoteJob: Iniciando import()...', [
+                'importacion_id' => $importacion->id,
+                'memoria_mb' => round(memory_get_usage(true) / 1024 / 1024, 2)
+            ]);
             $service->import();
 
             // Verificar que se marcó como completado
