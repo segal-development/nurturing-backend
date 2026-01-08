@@ -278,6 +278,10 @@ class ProcesarImportacionJob implements ShouldQueue
 
     /**
      * Actualiza el lote después de completar una importación.
+     * 
+     * IMPORTANTE: Solo recalcula totales, NO cierra el lote automáticamente.
+     * El lote debe ser cerrado manualmente por el usuario via POST /api/lotes/{id}/cerrar.
+     * Esto permite agregar múltiples archivos al mismo lote.
      */
     private function updateLoteAfterComplete(Importacion $importacion): void
     {
@@ -298,23 +302,24 @@ class ProcesarImportacionJob implements ShouldQueue
         $registrosExitosos = $importaciones->sum('registros_exitosos');
         $registrosFallidos = $importaciones->sum('registros_fallidos');
         
-        $todasCompletadas = $importaciones->every(fn ($imp) => in_array($imp->estado, ['completado', 'fallido']));
-        $algunaFallida = $importaciones->contains(fn ($imp) => $imp->estado === 'fallido');
+        // Determinar estado del lote basado en importaciones en proceso
+        // NOTA: El lote queda en "abierto" o "procesando", NUNCA se cierra automáticamente
+        $hayProcesando = $importaciones->contains(fn ($imp) => $imp->estado === 'procesando');
+        $hayPendientes = $importaciones->contains(fn ($imp) => $imp->estado === 'pendiente');
         
-        $estadoLote = $lote->estado;
-        if ($todasCompletadas) {
-            $estadoLote = $algunaFallida ? 'fallido' : 'completado';
-        }
+        // Si hay alguna importación procesando o pendiente, el lote está procesando
+        // Si todas terminaron, el lote queda en "abierto" (listo para más archivos)
+        $estadoLote = ($hayProcesando || $hayPendientes) ? 'procesando' : 'abierto';
 
         $lote->update([
             'total_registros' => $totalRegistros,
             'registros_exitosos' => $registrosExitosos,
             'registros_fallidos' => $registrosFallidos,
             'estado' => $estadoLote,
-            'cerrado_en' => $todasCompletadas ? now() : null,
+            // NO actualizamos cerrado_en - eso solo lo hace el cierre manual
         ]);
 
-        Log::info('ProcesarImportacionJob: Lote actualizado', [
+        Log::info('ProcesarImportacionJob: Lote actualizado (sin cierre automático)', [
             'lote_id' => $lote->id,
             'estado' => $estadoLote,
         ]);

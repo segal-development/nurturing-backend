@@ -87,7 +87,11 @@ class Lote extends Model
     }
 
     /**
-     * Actualiza el estado del lote basado en sus importaciones
+     * Actualiza el estado del lote basado en sus importaciones.
+     * 
+     * IMPORTANTE: NO cierra el lote automáticamente (completado/fallido).
+     * El lote solo puede cerrarse manualmente via POST /api/lotes/{id}/cerrar.
+     * Esto permite agregar múltiples archivos al mismo lote.
      */
     public function actualizarEstado(): void
     {
@@ -98,16 +102,17 @@ class Lote extends Model
             return;
         }
 
-        $todosProcesando = $importaciones->every(fn($i) => $i->estado === 'procesando');
-        $todosCompletados = $importaciones->every(fn($i) => $i->estado === 'completado');
-        $algunoFallido = $importaciones->contains(fn($i) => $i->estado === 'fallido');
-        $algunoProcesando = $importaciones->contains(fn($i) => $i->estado === 'procesando' || $i->estado === 'pendiente');
+        // Si el lote ya está cerrado (completado/fallido), no cambiar estado
+        // Solo el endpoint de cierre manual puede cambiar estos estados
+        if (in_array($this->estado, ['completado', 'fallido'])) {
+            return;
+        }
 
-        if ($algunoFallido && !$algunoProcesando) {
-            $this->estado = 'fallido';
-        } elseif ($todosCompletados) {
-            $this->estado = 'completado';
-        } elseif ($algunoProcesando || $todosProcesando) {
+        $algunoProcesando = $importaciones->contains(fn($i) => in_array($i->estado, ['procesando', 'pendiente']));
+
+        // Solo alternamos entre "procesando" y "abierto"
+        // NUNCA cerramos automáticamente
+        if ($algunoProcesando) {
             $this->estado = 'procesando';
         } else {
             $this->estado = 'abierto';
