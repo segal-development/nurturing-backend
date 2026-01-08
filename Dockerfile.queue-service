@@ -17,6 +17,9 @@ RUN apk add --no-cache \
 # Instalar extensiones PHP
 RUN docker-php-ext-install pdo pdo_pgsql pgsql zip gd bcmath pcntl
 
+# Configurar PHP para archivos grandes - aumentar límite de memoria
+RUN echo "memory_limit=512M" > /usr/local/etc/php/conf.d/memory.ini
+
 # Instalar Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 

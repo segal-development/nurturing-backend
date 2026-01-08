@@ -238,6 +238,9 @@ class ProcesarImportacionJob implements ShouldQueue
             // Cleanup DESPUÉS de asegurar que el estado está bien
             $this->cleanup($tempPath);
             
+            // Forzar liberación de memoria después de procesar archivo grande
+            $this->forceMemoryCleanup();
+            
             Log::info('ProcesarImportacionJob: Procesamiento completado', [
                 'importacion_id' => $this->importacionId,
                 'registros_procesados' => $service->getRowsProcessed(),
@@ -245,6 +248,7 @@ class ProcesarImportacionJob implements ShouldQueue
                 'fallidos' => $service->getRegistrosFallidos(),
                 'estado_final' => $importacion->fresh()->estado,
                 'memoria_peak_mb' => round(memory_get_peak_usage(true) / 1024 / 1024, 2),
+                'memoria_actual_mb' => round(memory_get_usage(true) / 1024 / 1024, 2),
             ]);
 
             return true;
@@ -431,6 +435,26 @@ class ProcesarImportacionJob implements ShouldQueue
             'reason' => $reason,
         ]);
         $this->delete();
+    }
+
+    /**
+     * Fuerza limpieza de memoria después de procesar archivo grande.
+     * Esto ayuda a evitar que la memoria acumulada cause OOM en el siguiente job.
+     */
+    private function forceMemoryCleanup(): void
+    {
+        // Limpiar cualquier referencia en memoria
+        if (function_exists('gc_collect_cycles')) {
+            gc_collect_cycles();
+        }
+        
+        // Forzar garbage collection
+        gc_mem_caches();
+        
+        Log::info('ProcesarImportacionJob: Memoria limpiada', [
+            'importacion_id' => $this->importacionId,
+            'memoria_despues_gc_mb' => round(memory_get_usage(true) / 1024 / 1024, 2),
+        ]);
     }
 
     /**
