@@ -77,7 +77,10 @@ class LoteController extends Controller
     }
 
     /**
-     * Cerrar/Finalizar un lote (no permite más archivos)
+     * Cerrar/Finalizar un lote manualmente (no permite más archivos)
+     * 
+     * Este método es llamado cuando el usuario clickea "Finalizar carga" en el frontend.
+     * Permite cerrar el lote aunque haya importaciones fallidas.
      */
     public function cerrar(Lote $lote): JsonResponse
     {
@@ -87,19 +90,40 @@ class LoteController extends Controller
             ], 422);
         }
 
+        // Verificar si hay importaciones procesando o pendientes
+        $importaciones = $lote->importaciones()->get();
+        $hayProcesando = $importaciones->contains(fn($i) => in_array($i->estado, ['procesando', 'pendiente']));
+        
+        if ($hayProcesando) {
+            return response()->json([
+                'mensaje' => 'No se puede cerrar el lote mientras hay importaciones en proceso',
+                'importaciones_pendientes' => $importaciones
+                    ->filter(fn($i) => in_array($i->estado, ['procesando', 'pendiente']))
+                    ->map(fn($i) => ['id' => $i->id, 'nombre' => $i->nombre_archivo, 'estado' => $i->estado]),
+            ], 422);
+        }
+
         // Recalcular totales antes de cerrar
         $lote->recalcularTotales();
 
-        // Si todas las importaciones están completas, marcar como completado
-        $todasCompletadas = $lote->importaciones->every(fn($i) => $i->estado === 'completado');
+        // Determinar estado final basado en las importaciones
+        $algunaFallida = $importaciones->contains(fn($i) => $i->estado === 'fallido');
+        $todasFallidas = $importaciones->every(fn($i) => $i->estado === 'fallido');
         
-        if ($todasCompletadas) {
+        // Si todas fallaron -> fallido, si algunas fallaron -> completado (parcial), si ninguna falló -> completado
+        if ($todasFallidas && $importaciones->count() > 0) {
+            $lote->estado = 'fallido';
+        } else {
             $lote->estado = 'completado';
-            $lote->save();
         }
+        
+        $lote->cerrado_en = now();
+        $lote->save();
 
         return response()->json([
-            'mensaje' => 'Lote actualizado',
+            'mensaje' => $algunaFallida 
+                ? 'Lote cerrado con algunas importaciones fallidas' 
+                : 'Lote cerrado exitosamente',
             'data' => new LoteResource($lote->fresh(['importaciones'])),
         ]);
     }

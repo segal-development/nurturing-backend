@@ -182,7 +182,10 @@ final class ImportCheckpointManager
 
     /**
      * Actualiza el lote padre cuando una importación termina.
-     * Recalcula totales y determina si el lote está completado.
+     * 
+     * IMPORTANTE: Solo recalcula totales, NO cierra el lote automáticamente.
+     * El lote debe ser cerrado manualmente por el usuario via API.
+     * Esto permite agregar múltiples archivos al mismo lote.
      */
     private function updateLoteIfExists(): void
     {
@@ -205,26 +208,24 @@ final class ImportCheckpointManager
         $registrosExitosos = $importaciones->sum('registros_exitosos');
         $registrosFallidos = $importaciones->sum('registros_fallidos');
         
-        // Determinar estado del lote
-        $todasCompletadas = $importaciones->every(fn ($imp) => in_array($imp->estado, ['completado', 'fallido']));
-        $algunaFallida = $importaciones->contains(fn ($imp) => $imp->estado === 'fallido');
+        // Determinar estado del lote basado en importaciones en proceso
+        // NOTA: El lote queda en "abierto" o "procesando", NUNCA se cierra automáticamente
+        $hayProcesando = $importaciones->contains(fn ($imp) => $imp->estado === 'procesando');
+        $hayPendientes = $importaciones->contains(fn ($imp) => $imp->estado === 'pendiente');
         
-        $estadoLote = $lote->estado;
-        if ($todasCompletadas) {
-            $estadoLote = $algunaFallida ? 'fallido' : 'completado';
-        } elseif ($importaciones->contains(fn ($imp) => $imp->estado === 'procesando')) {
-            $estadoLote = 'procesando';
-        }
+        // Si hay alguna importación procesando o pendiente, el lote está procesando
+        // Si todas terminaron, el lote queda en "abierto" (listo para más archivos)
+        $estadoLote = ($hayProcesando || $hayPendientes) ? 'procesando' : 'abierto';
 
         $lote->update([
             'total_registros' => $totalRegistros,
             'registros_exitosos' => $registrosExitosos,
             'registros_fallidos' => $registrosFallidos,
             'estado' => $estadoLote,
-            'cerrado_en' => $todasCompletadas ? now() : null,
+            // NO actualizamos cerrado_en - eso solo lo hace el cierre manual
         ]);
 
-        Log::info('ImportCheckpointManager: Lote actualizado', [
+        Log::info('ImportCheckpointManager: Lote actualizado (sin cierre automático)', [
             'lote_id' => $lote->id,
             'estado' => $estadoLote,
             'total_registros' => $totalRegistros,
