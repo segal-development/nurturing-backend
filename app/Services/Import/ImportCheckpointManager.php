@@ -5,20 +5,40 @@ declare(strict_types=1);
 namespace App\Services\Import;
 
 use App\Models\Importacion;
+use App\Models\Lote;
 use App\Services\Import\DTO\ImportProgress;
+use App\Services\Import\DTO\ImportResult;
 use Illuminate\Support\Facades\Log;
 
 /**
  * Maneja los checkpoints de importación para soportar resume.
- * Guarda el progreso periódicamente para poder continuar si se interrumpe.
  * 
- * Single Responsibility: Solo maneja persistencia de checkpoints.
+ * Responsabilidades:
+ * - Guardar progreso periódicamente (checkpoints)
+ * - Enviar heartbeats para indicar que el proceso está vivo
+ * - Marcar importaciones como completadas/fallidas
+ * - Actualizar el lote padre cuando corresponde
+ * 
+ * @see ImportProgress DTO que maneja el estado del progreso
  */
 final class ImportCheckpointManager
 {
-    private const CHECKPOINT_EVERY_N_ROWS = 5000;
-    private const HEARTBEAT_EVERY_N_ROWS = 1000;
+    // =========================================================================
+    // CONFIGURACIÓN
+    // =========================================================================
+
+    /** Guardar checkpoint completo cada N filas */
+    private const CHECKPOINT_INTERVAL = 5000;
+    
+    /** Enviar heartbeat (touch) cada N filas */
+    private const HEARTBEAT_INTERVAL = 1000;
+    
+    /** Máximo de errores a almacenar (para no consumir memoria) */
     private const MAX_ERRORS_STORED = 100;
+
+    // =========================================================================
+    // ESTADO
+    // =========================================================================
 
     private Importacion $importacion;
     private ImportProgress $progress;
@@ -28,16 +48,33 @@ final class ImportCheckpointManager
     /** @var array<array{fila: int, errores: array}> */
     private array $errores = [];
 
+    // =========================================================================
+    // CONSTRUCTOR
+    // =========================================================================
+
     public function __construct(Importacion $importacion)
     {
         $this->importacion = $importacion;
-        $this->progress = ImportProgress::fromMetadata($importacion->metadata);
-        $this->lastCheckpointRow = $this->progress->lastProcessedRow;
-        $this->errores = $this->progress->errores;
+        $this->initializeFromExistingProgress();
     }
 
     /**
-     * Verifica si se debe saltar una fila (ya procesada en una ejecución anterior).
+     * Inicializa el estado desde el progreso existente (para resume).
+     */
+    private function initializeFromExistingProgress(): void
+    {
+        $this->progress = ImportProgress::fromMetadata($this->importacion->metadata);
+        $this->lastCheckpointRow = $this->progress->lastProcessedRow;
+        $this->lastHeartbeatRow = $this->progress->lastProcessedRow;
+        $this->errores = $this->progress->errores;
+    }
+
+    // =========================================================================
+    // CONSULTAS
+    // =========================================================================
+
+    /**
+     * Verifica si una fila debe saltarse (ya procesada en ejecución anterior).
      */
     public function shouldSkipRow(int $rowIndex): bool
     {
@@ -53,8 +90,27 @@ final class ImportCheckpointManager
     }
 
     /**
-     * Actualiza el progreso y guarda checkpoint si es necesario.
-     * También envía heartbeat para indicar que el proceso sigue vivo.
+     * Obtiene la última fila procesada.
+     */
+    public function getLastProcessedRow(): int
+    {
+        return $this->progress->lastProcessedRow;
+    }
+
+    /**
+     * Verifica si esta es una importación que se está resumiendo.
+     */
+    public function isResuming(): bool
+    {
+        return $this->progress->hasProgress();
+    }
+
+    // =========================================================================
+    // ACTUALIZACIÓN DE PROGRESO
+    // =========================================================================
+
+    /**
+     * Actualiza el progreso y guarda checkpoint/heartbeat si corresponde.
      */
     public function updateProgress(
         int $currentRow,
@@ -63,47 +119,48 @@ final class ImportCheckpointManager
         int $sinEmail,
         int $sinTelefono,
     ): void {
-        $this->progress = new ImportProgress(
-            lastProcessedRow: $currentRow,
-            registrosExitosos: $exitosos,
-            registrosFallidos: $fallidos,
-            sinEmail: $sinEmail,
-            sinTelefono: $sinTelefono,
-            errores: $this->errores,
+        $this->progress = $this->progress->withUpdatedCounters(
+            $currentRow,
+            $exitosos,
+            $fallidos,
+            $sinEmail,
+            $sinTelefono,
         );
 
-        // Guardar checkpoint completo cada N filas
-        if ($currentRow - $this->lastCheckpointRow >= self::CHECKPOINT_EVERY_N_ROWS) {
+        $this->handleCheckpointOrHeartbeat($currentRow);
+    }
+
+    /**
+     * Decide si guardar checkpoint o enviar heartbeat.
+     */
+    private function handleCheckpointOrHeartbeat(int $currentRow): void
+    {
+        $rowsSinceCheckpoint = $currentRow - $this->lastCheckpointRow;
+        $rowsSinceHeartbeat = $currentRow - $this->lastHeartbeatRow;
+
+        if ($rowsSinceCheckpoint >= self::CHECKPOINT_INTERVAL) {
             $this->saveCheckpoint();
             $this->lastCheckpointRow = $currentRow;
-            $this->lastHeartbeatRow = $currentRow; // Reset heartbeat también
+            $this->lastHeartbeatRow = $currentRow;
+            return;
         }
-        // Heartbeat ligero (solo updated_at) cada M filas
-        elseif ($currentRow - $this->lastHeartbeatRow >= self::HEARTBEAT_EVERY_N_ROWS) {
+
+        if ($rowsSinceHeartbeat >= self::HEARTBEAT_INTERVAL) {
             $this->sendHeartbeat();
             $this->lastHeartbeatRow = $currentRow;
         }
     }
 
-    /**
-     * Envía un heartbeat ligero (solo actualiza updated_at).
-     * Esto indica que el proceso sigue vivo sin el overhead de guardar todo el metadata.
-     */
-    private function sendHeartbeat(): void
-    {
-        try {
-            $this->importacion->touch();
-        } catch (\Exception $e) {
-            // Silenciar errores de heartbeat - no son críticos
-        }
-    }
+    // =========================================================================
+    // ERRORES
+    // =========================================================================
 
     /**
-     * Agrega un error (limitado para no consumir memoria).
+     * Agrega un error de fila (limitado para no consumir memoria).
      */
     public function addError(int $fila, array $errores): void
     {
-        if (count($this->errores) >= self::MAX_ERRORS_STORED) {
+        if ($this->hasReachedErrorLimit()) {
             return;
         }
 
@@ -113,125 +170,132 @@ final class ImportCheckpointManager
         ];
     }
 
+    private function hasReachedErrorLimit(): bool
+    {
+        return count($this->errores) >= self::MAX_ERRORS_STORED;
+    }
+
+    // =========================================================================
+    // PERSISTENCIA
+    // =========================================================================
+
+    /**
+     * Guarda el total estimado de filas al inicio.
+     */
+    public function saveEstimatedTotal(int $estimatedRows): void
+    {
+        $this->updateMetadata(['total_estimado' => $estimatedRows]);
+        
+        $this->logInfo('Total estimado guardado', [
+            'total_estimado' => $estimatedRows,
+        ]);
+    }
+
     /**
      * Guarda el checkpoint actual en la BD.
      */
     public function saveCheckpoint(): void
     {
         try {
-            $metadata = array_merge(
-                $this->importacion->metadata ?? [],
-                $this->progress->toMetadata(),
-                ['checkpoint_at' => now()->toISOString()]
-            );
-
             $this->importacion->update([
                 'total_registros' => $this->progress->lastProcessedRow,
                 'registros_exitosos' => $this->progress->registrosExitosos,
                 'registros_fallidos' => $this->progress->registrosFallidos,
-                'metadata' => $metadata,
+                'metadata' => $this->buildCheckpointMetadata(),
             ]);
 
-            Log::info('ImportCheckpointManager: Checkpoint guardado', [
-                'importacion_id' => $this->importacion->id,
+            $this->logInfo('Checkpoint guardado', [
                 'row' => $this->progress->lastProcessedRow,
                 'exitosos' => $this->progress->registrosExitosos,
             ]);
         } catch (\Exception $e) {
-            Log::warning('ImportCheckpointManager: Error guardando checkpoint', [
-                'error' => $e->getMessage(),
-            ]);
+            $this->logWarning('Error guardando checkpoint', $e);
         }
     }
 
-    /**
-     * Marca la importación como completada.
-     */
-    public function markAsCompleted(int $totalRows, int $exitosos, int $fallidos, int $sinEmail, int $sinTelefono): void
+    private function buildCheckpointMetadata(): array
     {
-        $estado = ($fallidos > 0 && $exitosos === 0) ? 'fallido' : 'completado';
+        return array_merge(
+            $this->importacion->metadata ?? [],
+            $this->progress->toMetadata(),
+            ['checkpoint_at' => now()->toISOString()]
+        );
+    }
+
+    /**
+     * Envía heartbeat ligero (solo updated_at).
+     */
+    private function sendHeartbeat(): void
+    {
+        try {
+            $this->importacion->touch();
+        } catch (\Exception) {
+            // Silenciar - heartbeats no son críticos
+        }
+    }
+
+    // =========================================================================
+    // FINALIZACIÓN
+    // =========================================================================
+
+    /**
+     * Marca la importación como completada con el resultado final.
+     */
+    public function markAsCompleted(ImportResult $result): void
+    {
+        $estado = $result->getEstadoFinal();
 
         $this->importacion->update([
             'estado' => $estado,
-            'total_registros' => $totalRows,
-            'registros_exitosos' => $exitosos,
-            'registros_fallidos' => $fallidos,
-            'metadata' => array_merge(
-                $this->importacion->metadata ?? [],
-                [
-                    'errores' => $this->errores,
-                    'registros_sin_email' => $sinEmail,
-                    'registros_sin_telefono' => $sinTelefono,
-                    'completado_en' => now()->toISOString(),
-                    'last_processed_row' => $totalRows,
-                ]
-            ),
+            'total_registros' => $result->totalRows,
+            'registros_exitosos' => $result->registrosExitosos,
+            'registros_fallidos' => $result->registrosFallidos,
+            'metadata' => $this->buildCompletionMetadata($result),
         ]);
 
-        Log::info('ImportCheckpointManager: Importación completada', [
-            'importacion_id' => $this->importacion->id,
+        $this->logInfo('Importación completada', [
             'estado' => $estado,
-            'total' => $totalRows,
-            'exitosos' => $exitosos,
-            'fallidos' => $fallidos,
+            'total' => $result->totalRows,
+            'exitosos' => $result->registrosExitosos,
+            'fallidos' => $result->registrosFallidos,
         ]);
 
-        // Actualizar el lote si existe
         $this->updateLoteIfExists();
     }
 
     /**
-     * Actualiza el lote padre cuando una importación termina.
-     * 
-     * IMPORTANTE: Solo recalcula totales, NO cierra el lote automáticamente.
-     * El lote debe ser cerrado manualmente por el usuario via API.
-     * Esto permite agregar múltiples archivos al mismo lote.
+     * Marca la importación como completada con parámetros individuales.
+     * @deprecated Use markAsCompleted(ImportResult) instead
      */
-    private function updateLoteIfExists(): void
+    public function markAsCompletedLegacy(
+        int $totalRows,
+        int $exitosos,
+        int $fallidos,
+        int $sinEmail,
+        int $sinTelefono
+    ): void {
+        $result = ImportResult::create(
+            $totalRows,
+            $exitosos,
+            $fallidos,
+            $sinEmail,
+            $sinTelefono,
+            0, // creados - no disponible en legacy
+            0, // actualizados - no disponible en legacy
+            $this->errores,
+            0.0 // tiempo - no disponible en legacy
+        );
+
+        $this->markAsCompleted($result);
+    }
+
+    private function buildCompletionMetadata(ImportResult $result): array
     {
-        // Refrescar para obtener el lote_id actualizado
-        $this->importacion->refresh();
-        
-        if (!$this->importacion->lote_id) {
-            return;
-        }
-
-        $lote = $this->importacion->lote;
-        if (!$lote) {
-            return;
-        }
-
-        // Recalcular totales del lote basado en todas sus importaciones
-        $importaciones = $lote->importaciones()->get();
-        
-        $totalRegistros = $importaciones->sum('total_registros');
-        $registrosExitosos = $importaciones->sum('registros_exitosos');
-        $registrosFallidos = $importaciones->sum('registros_fallidos');
-        
-        // Determinar estado del lote basado en importaciones en proceso
-        // NOTA: El lote queda en "abierto" o "procesando", NUNCA se cierra automáticamente
-        $hayProcesando = $importaciones->contains(fn ($imp) => $imp->estado === 'procesando');
-        $hayPendientes = $importaciones->contains(fn ($imp) => $imp->estado === 'pendiente');
-        
-        // Si hay alguna importación procesando o pendiente, el lote está procesando
-        // Si todas terminaron, el lote queda en "abierto" (listo para más archivos)
-        $estadoLote = ($hayProcesando || $hayPendientes) ? 'procesando' : 'abierto';
-
-        $lote->update([
-            'total_registros' => $totalRegistros,
-            'registros_exitosos' => $registrosExitosos,
-            'registros_fallidos' => $registrosFallidos,
-            'estado' => $estadoLote,
-            // NO actualizamos cerrado_en - eso solo lo hace el cierre manual
-        ]);
-
-        Log::info('ImportCheckpointManager: Lote actualizado (sin cierre automático)', [
-            'lote_id' => $lote->id,
-            'estado' => $estadoLote,
-            'total_registros' => $totalRegistros,
-            'importaciones_completadas' => $importaciones->filter(fn ($imp) => $imp->estado === 'completado')->count(),
-            'importaciones_total' => $importaciones->count(),
-        ]);
+        return array_merge(
+            $this->importacion->metadata ?? [],
+            $result->toMetadata(),
+            ['errores' => $this->errores]
+        );
     }
 
     /**
@@ -241,46 +305,121 @@ final class ImportCheckpointManager
     {
         $this->importacion->update([
             'estado' => 'fallido',
-            'metadata' => array_merge(
-                $this->importacion->metadata ?? [],
-                $this->progress->toMetadata(),
-                [
-                    'error' => $error,
-                    'error_en' => now()->toISOString(),
-                ]
-            ),
+            'metadata' => $this->buildFailureMetadata($error),
+        ]);
+
+        $this->logInfo('Importación fallida', ['error' => $error]);
+    }
+
+    private function buildFailureMetadata(string $error): array
+    {
+        return array_merge(
+            $this->importacion->metadata ?? [],
+            $this->progress->toMetadata(),
+            [
+                'error' => $error,
+                'error_en' => now()->toISOString(),
+            ]
+        );
+    }
+
+    // =========================================================================
+    // ACTUALIZACIÓN DE LOTE
+    // =========================================================================
+
+    /**
+     * Actualiza el lote padre cuando una importación termina.
+     * 
+     * IMPORTANTE: Solo recalcula totales, NO cierra el lote automáticamente.
+     * El lote solo se cierra via POST /api/lotes/{id}/cerrar.
+     */
+    private function updateLoteIfExists(): void
+    {
+        $this->importacion->refresh();
+        
+        $lote = $this->getLoteIfExists();
+        if ($lote === null) {
+            return;
+        }
+
+        $this->recalcularTotalesLote($lote);
+    }
+
+    private function getLoteIfExists(): ?Lote
+    {
+        if (!$this->importacion->lote_id) {
+            return null;
+        }
+
+        return $this->importacion->lote;
+    }
+
+    private function recalcularTotalesLote(Lote $lote): void
+    {
+        $importaciones = $lote->importaciones()->get();
+        
+        $totales = $this->calcularTotalesImportaciones($importaciones);
+        $estadoLote = $this->determinarEstadoLote($importaciones);
+
+        $lote->update([
+            'total_registros' => $totales['registros'],
+            'registros_exitosos' => $totales['exitosos'],
+            'registros_fallidos' => $totales['fallidos'],
+            'estado' => $estadoLote,
+        ]);
+
+        $this->logInfo('Lote actualizado (sin cierre automático)', [
+            'lote_id' => $lote->id,
+            'estado' => $estadoLote,
+            'total_registros' => $totales['registros'],
         ]);
     }
 
-    public function getLastProcessedRow(): int
+    private function calcularTotalesImportaciones($importaciones): array
     {
-        return $this->progress->lastProcessedRow;
+        return [
+            'registros' => $importaciones->sum('total_registros'),
+            'exitosos' => $importaciones->sum('registros_exitosos'),
+            'fallidos' => $importaciones->sum('registros_fallidos'),
+        ];
     }
 
-    /**
-     * Guarda el total estimado de filas al inicio del procesamiento.
-     * Esto permite al frontend mostrar una barra de progreso precisa.
-     */
-    public function saveEstimatedTotal(int $estimatedRows): void
+    private function determinarEstadoLote($importaciones): string
+    {
+        $hayActivas = $importaciones->contains(
+            fn ($imp) => in_array($imp->estado, ['procesando', 'pendiente'])
+        );
+
+        return $hayActivas ? 'procesando' : 'abierto';
+    }
+
+    // =========================================================================
+    // HELPERS
+    // =========================================================================
+
+    private function updateMetadata(array $data): void
     {
         try {
-            $metadata = array_merge(
-                $this->importacion->metadata ?? [],
-                ['total_estimado' => $estimatedRows]
-            );
-
-            $this->importacion->update([
-                'metadata' => $metadata,
-            ]);
-
-            Log::info('ImportCheckpointManager: Total estimado guardado', [
-                'importacion_id' => $this->importacion->id,
-                'total_estimado' => $estimatedRows,
-            ]);
+            $metadata = array_merge($this->importacion->metadata ?? [], $data);
+            $this->importacion->update(['metadata' => $metadata]);
         } catch (\Exception $e) {
-            Log::warning('ImportCheckpointManager: Error guardando total estimado', [
-                'error' => $e->getMessage(),
-            ]);
+            $this->logWarning('Error actualizando metadata', $e);
         }
+    }
+
+    private function logInfo(string $message, array $context = []): void
+    {
+        Log::info("ImportCheckpointManager: {$message}", array_merge(
+            ['importacion_id' => $this->importacion->id],
+            $context
+        ));
+    }
+
+    private function logWarning(string $message, \Exception $e): void
+    {
+        Log::warning("ImportCheckpointManager: {$message}", [
+            'importacion_id' => $this->importacion->id,
+            'error' => $e->getMessage(),
+        ]);
     }
 }
