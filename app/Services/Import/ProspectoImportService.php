@@ -251,10 +251,15 @@ final class ProspectoImportService
 
     private function logStart(): void
     {
+        $estimatedRows = $this->rowReader->estimateTotalRows();
+        
         Log::info('ProspectoImportService: Iniciando importación', [
             'file_size_mb' => $this->rowReader->getFileSizeMb(),
-            'estimated_rows' => $this->rowReader->estimateTotalRows(),
+            'estimated_rows' => $estimatedRows,
         ]);
+        
+        // Guardar total_estimado en metadata para que el frontend pueda mostrar progreso
+        $this->checkpointManager->saveEstimatedTotal($estimatedRows);
     }
 
     private function logComplete(): void

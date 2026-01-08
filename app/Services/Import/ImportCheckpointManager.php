@@ -255,4 +255,31 @@ final class ImportCheckpointManager
     {
         return $this->progress->lastProcessedRow;
     }
+
+    /**
+     * Guarda el total estimado de filas al inicio del procesamiento.
+     * Esto permite al frontend mostrar una barra de progreso precisa.
+     */
+    public function saveEstimatedTotal(int $estimatedRows): void
+    {
+        try {
+            $metadata = array_merge(
+                $this->importacion->metadata ?? [],
+                ['total_estimado' => $estimatedRows]
+            );
+
+            $this->importacion->update([
+                'metadata' => $metadata,
+            ]);
+
+            Log::info('ImportCheckpointManager: Total estimado guardado', [
+                'importacion_id' => $this->importacion->id,
+                'total_estimado' => $estimatedRows,
+            ]);
+        } catch (\Exception $e) {
+            Log::warning('ImportCheckpointManager: Error guardando total estimado', [
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
 }
