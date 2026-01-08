@@ -291,7 +291,7 @@ class ImportacionController extends Controller
     private function obtenerOCrearLote(ImportarProspectosRequest $request): Lote
     {
         if ($request->filled('lote_id')) {
-            return $this->obtenerLoteExistente($request->input('lote_id'));
+            return $this->obtenerLoteExistente((int) $request->input('lote_id'));
         }
 
         return $this->crearNuevoLote($request);
