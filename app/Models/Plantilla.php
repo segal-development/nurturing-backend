@@ -251,7 +251,7 @@ class Plantilla extends Model
         $italica = $comp['italica'] ?? false;
 
         $textStyle = sprintf(
-            'font-family: Arial, Helvetica, sans-serif; font-size: %dpx; color: %s; line-height: 1.6; margin: 0;%s%s',
+            'font-family: Arial, Helvetica, sans-serif; font-size: %dpx; color: %s; line-height: 1.6; margin: 0; white-space: pre-line;%s%s',
             $tamano,
             $color,
             $negrita ? ' font-weight: bold;' : ' font-weight: normal;',
@@ -431,7 +431,7 @@ class Plantilla extends Model
         
         // Texto principal del footer
         $html .= sprintf(
-            '<p style="font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: %s; margin: 0 0 10px 0; line-height: 1.5;">%s</p>',
+            '<p style="font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: %s; margin: 0 0 10px 0; line-height: 1.5; white-space: pre-line;">%s</p>',
             $colorTexto,
             nl2br(htmlspecialchars($texto))
         );
