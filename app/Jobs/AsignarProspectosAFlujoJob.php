@@ -28,55 +28,121 @@ class AsignarProspectosAFlujoJob implements ShouldQueue
     /**
      * Execute the job.
      * Procesa la asignación de prospectos en chunks para optimizar memoria y performance.
+     * Actualiza el progreso en cada chunk para que el frontend pueda mostrarlo.
      */
     public function handle(): void
     {
-        $chunkSize = 1000; // Procesar 1000 registros a la vez
+        $chunkSize = 1000;
         $totalProspectos = count($this->prospectoIds);
         $chunks = array_chunk($this->prospectoIds, $chunkSize);
+        $totalChunks = count($chunks);
         $totalProcesados = 0;
+
+        $inicioTimestamp = now();
 
         Log::info('🚀 Iniciando asignación de prospectos', [
             'flujo_id' => $this->flujo->id,
             'total_prospectos' => $totalProspectos,
-            'chunks' => count($chunks),
+            'chunks' => $totalChunks,
         ]);
 
-        $now = now();
+        // Inicializar progreso en metadata
+        $this->actualizarProgreso(0, $totalProspectos, $totalChunks, 0, $inicioTimestamp);
 
         foreach ($chunks as $index => $chunk) {
-            // Preparar datos para insert masivo
-            $data = array_map(function ($prospectoId) use ($now) {
+            $data = array_map(function ($prospectoId) use ($inicioTimestamp) {
                 return [
                     'flujo_id' => $this->flujo->id,
                     'prospecto_id' => $prospectoId,
                     'canal_asignado' => $this->canalAsignado,
                     'estado' => 'pendiente',
                     'etapa_actual_id' => null,
-                    'fecha_inicio' => $now,
-                    'created_at' => $now,
-                    'updated_at' => $now,
+                    'fecha_inicio' => $inicioTimestamp,
+                    'created_at' => $inicioTimestamp,
+                    'updated_at' => $inicioTimestamp,
                 ];
             }, $chunk);
 
-            // Insert masivo del chunk
             ProspectoEnFlujo::insert($data);
 
             $totalProcesados += count($chunk);
+            $chunkActual = $index + 1;
+
+            // Actualizar progreso en cada chunk
+            $this->actualizarProgreso(
+                $totalProcesados,
+                $totalProspectos,
+                $totalChunks,
+                $chunkActual,
+                $inicioTimestamp
+            );
 
             Log::info('📊 Chunk procesado', [
                 'flujo_id' => $this->flujo->id,
-                'chunk' => $index + 1,
-                'total_chunks' => count($chunks),
+                'chunk' => $chunkActual,
+                'total_chunks' => $totalChunks,
                 'procesados' => $totalProcesados,
                 'porcentaje' => round(($totalProcesados / $totalProspectos) * 100, 2),
             ]);
         }
 
-        // Actualizar metadata del flujo con el conteo real
+        // Finalizar con estado completado
+        $this->finalizarProcesamiento($totalProspectos, $inicioTimestamp);
+
+        Log::info('✅ Asignación de prospectos completada', [
+            'flujo_id' => $this->flujo->id,
+            'total_procesados' => $totalProcesados,
+            'duracion' => now()->diffInSeconds($inicioTimestamp).' segundos',
+        ]);
+    }
+
+    /**
+     * Actualiza el progreso del procesamiento en la metadata del flujo.
+     */
+    private function actualizarProgreso(
+        int $procesados,
+        int $total,
+        int $totalChunks,
+        int $chunkActual,
+        \Carbon\Carbon $inicio
+    ): void {
+        $porcentaje = $total > 0 ? round(($procesados / $total) * 100, 2) : 0;
+        $segundosTranscurridos = now()->diffInSeconds($inicio);
+
+        // Estimar tiempo restante basado en velocidad actual
+        $velocidadPorSegundo = $segundosTranscurridos > 0 ? $procesados / $segundosTranscurridos : 0;
+        $restantes = $total - $procesados;
+        $segundosRestantes = $velocidadPorSegundo > 0 ? (int) ceil($restantes / $velocidadPorSegundo) : null;
+
+        $this->flujo->refresh();
+        $this->flujo->update([
+            'metadata' => array_merge($this->flujo->metadata ?? [], [
+                'progreso' => [
+                    'procesados' => $procesados,
+                    'total' => $total,
+                    'porcentaje' => $porcentaje,
+                    'chunk_actual' => $chunkActual,
+                    'total_chunks' => $totalChunks,
+                    'inicio' => $inicio->toISOString(),
+                    'ultima_actualizacion' => now()->toISOString(),
+                    'segundos_transcurridos' => $segundosTranscurridos,
+                    'segundos_restantes_estimados' => $segundosRestantes,
+                    'velocidad_por_segundo' => round($velocidadPorSegundo, 2),
+                ],
+            ]),
+        ]);
+    }
+
+    /**
+     * Finaliza el procesamiento y actualiza la metadata final.
+     */
+    private function finalizarProcesamiento(int $totalProspectos, \Carbon\Carbon $inicio): void
+    {
         $conteoEmail = $this->canalAsignado === 'email' ? $totalProspectos : 0;
         $conteoSms = $this->canalAsignado === 'sms' ? $totalProspectos : 0;
+        $duracionSegundos = now()->diffInSeconds($inicio);
 
+        $this->flujo->refresh();
         $this->flujo->update([
             'estado_procesamiento' => 'completado',
             'metadata' => array_merge($this->flujo->metadata ?? [], [
@@ -86,17 +152,20 @@ class AsignarProspectosAFlujoJob implements ShouldQueue
                     'prospectos_sms' => $conteoSms,
                 ],
                 'procesamiento' => [
-                    'inicio' => $now->toISOString(),
+                    'inicio' => $inicio->toISOString(),
                     'fin' => now()->toISOString(),
-                    'duracion_segundos' => now()->diffInSeconds($now),
+                    'duracion_segundos' => $duracionSegundos,
+                ],
+                'progreso' => [
+                    'procesados' => $totalProspectos,
+                    'total' => $totalProspectos,
+                    'porcentaje' => 100,
+                    'completado' => true,
+                    'inicio' => $inicio->toISOString(),
+                    'fin' => now()->toISOString(),
+                    'duracion_segundos' => $duracionSegundos,
                 ],
             ]),
-        ]);
-
-        Log::info('✅ Asignación de prospectos completada', [
-            'flujo_id' => $this->flujo->id,
-            'total_procesados' => $totalProcesados,
-            'duracion' => now()->diffInSeconds($now).' segundos',
         ]);
     }
 

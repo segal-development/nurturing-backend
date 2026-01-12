@@ -317,6 +317,95 @@ class FlujoController extends Controller
     }
 
     /**
+     * Get processing progress for a flujo.
+     * Used by frontend for polling during background prospect assignment.
+     */
+    public function progreso(Flujo $flujo): JsonResponse
+    {
+        $progreso = $flujo->metadata['progreso'] ?? null;
+        $estado = $flujo->estado_procesamiento ?? 'pendiente';
+
+        // Si no hay progreso y estado es pendiente/completado, generar respuesta simple
+        if ($progreso === null) {
+            $totalProspectos = $flujo->prospectosEnFlujo()->count();
+
+            return response()->json([
+                'data' => [
+                    'flujo_id' => $flujo->id,
+                    'estado' => $estado,
+                    'en_proceso' => false,
+                    'completado' => $estado === 'completado',
+                    'progreso' => [
+                        'procesados' => $totalProspectos,
+                        'total' => $totalProspectos,
+                        'porcentaje' => 100,
+                    ],
+                ],
+            ]);
+        }
+
+        $enProceso = $estado === 'procesando';
+        $completado = $estado === 'completado' || ($progreso['completado'] ?? false);
+
+        return response()->json([
+            'data' => [
+                'flujo_id' => $flujo->id,
+                'estado' => $estado,
+                'en_proceso' => $enProceso,
+                'completado' => $completado,
+                'fallido' => $estado === 'fallido',
+                'progreso' => [
+                    'procesados' => $progreso['procesados'] ?? 0,
+                    'total' => $progreso['total'] ?? 0,
+                    'porcentaje' => $progreso['porcentaje'] ?? 0,
+                    'chunk_actual' => $progreso['chunk_actual'] ?? 0,
+                    'total_chunks' => $progreso['total_chunks'] ?? 0,
+                    'velocidad_por_segundo' => $progreso['velocidad_por_segundo'] ?? 0,
+                    'segundos_transcurridos' => $progreso['segundos_transcurridos'] ?? 0,
+                    'segundos_restantes_estimados' => $progreso['segundos_restantes_estimados'] ?? null,
+                    'inicio' => $progreso['inicio'] ?? null,
+                    'fin' => $progreso['fin'] ?? null,
+                    'ultima_actualizacion' => $progreso['ultima_actualizacion'] ?? null,
+                ],
+                'mensaje' => $this->generarMensajeProgreso($estado, $progreso),
+            ],
+        ]);
+    }
+
+    /**
+     * Generate a human-readable progress message.
+     */
+    private function generarMensajeProgreso(string $estado, ?array $progreso): string
+    {
+        if ($estado === 'fallido') {
+            return 'El procesamiento falló. Intenta de nuevo.';
+        }
+
+        if ($estado === 'completado' || ($progreso['completado'] ?? false)) {
+            $duracion = $progreso['duracion_segundos'] ?? 0;
+
+            return "Procesamiento completado en {$duracion} segundos.";
+        }
+
+        if ($estado === 'procesando' && $progreso) {
+            $porcentaje = $progreso['porcentaje'] ?? 0;
+            $procesados = number_format($progreso['procesados'] ?? 0);
+            $total = number_format($progreso['total'] ?? 0);
+            $restante = $progreso['segundos_restantes_estimados'] ?? null;
+
+            $mensaje = "Procesando: {$procesados} de {$total} ({$porcentaje}%)";
+
+            if ($restante !== null) {
+                $mensaje .= " - ~{$restante}s restantes";
+            }
+
+            return $mensaje;
+        }
+
+        return 'Esperando inicio del procesamiento...';
+    }
+
+    /**
      * Get available filter options for creating flujos.
      */
     public function opcionesCreacion(): JsonResponse

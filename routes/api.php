@@ -60,6 +60,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/flujos/opciones-filtrado', [FlujoController::class, 'opcionesFiltrado']);
     Route::post('/flujos/debug-payload', [FlujoController::class, 'debugPayload']); // TEMPORAL
     Route::post('/flujos/crear-con-prospectos', [FlujoController::class, 'crearFlujoConProspectos']);
+    Route::get('/flujos/{flujo}/progreso', [FlujoController::class, 'progreso']);
     Route::post('/flujos/{flujo}/agregar-prospectos', [FlujoController::class, 'agregarProspectos']);
     Route::apiResource('flujos', FlujoController::class);
 
