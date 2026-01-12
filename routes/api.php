@@ -12,6 +12,7 @@ use App\Http\Controllers\LoteController;
 use App\Http\Controllers\PlantillaController;
 use App\Http\Controllers\ProspectoController;
 use App\Http\Controllers\TestingController;
+use App\Http\Controllers\TipoProspectoController;
 use App\Http\Controllers\TrackingController;
 use Illuminate\Support\Facades\Route;
 
@@ -32,6 +33,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/prospectos/estadisticas', [ProspectoController::class, 'estadisticas']);
     Route::get('/prospectos/opciones-filtrado', [ProspectoController::class, 'opcionesFiltrado']);
     Route::apiResource('prospectos', ProspectoController::class);
+
+    // Rutas de Tipos de Prospecto (categorías por monto)
+    Route::get('/tipos-prospecto', [TipoProspectoController::class, 'index']);
 
     // Rutas de Lotes (agrupación de importaciones)
     Route::get('/lotes/abiertos', [LoteController::class, 'abiertos']);
