@@ -11,10 +11,13 @@ return new class extends Migration
      */
     public function up(): void
     {
+        if (Schema::hasColumn('flujos', 'estado_procesamiento')) {
+            return;
+        }
+
         Schema::table('flujos', function (Blueprint $table) {
-            $table->enum('estado_procesamiento', ['pendiente', 'procesando', 'completado', 'fallido'])
+            $table->string('estado_procesamiento', 20)
                 ->default('pendiente')
-                ->after('activo')
                 ->index();
         });
     }
