@@ -571,12 +571,13 @@ class FlujoController extends Controller
 
     /**
      * Asigna los prospectos al flujo con el canal correspondiente.
+     * Para grandes volúmenes (>100), despacha un Job en background.
      *
-     * @return array{total: int, email: int, sms: int}
+     * @return array{total: int, email: int, sms: int, is_async: bool}
      */
     private function asignarProspectosAlFlujo(Flujo $flujo, array $prospectoIds, CanalEnvio $canalEnvio, bool $selectAllFromOrigin = false): array
     {
-        $conteo = ['total' => 0, 'email' => 0, 'sms' => 0];
+        $conteo = ['total' => 0, 'email' => 0, 'sms' => 0, 'is_async' => false];
 
         // Si se solicita seleccionar todos del origen, buscarlos automáticamente
         if ($selectAllFromOrigin) {
@@ -593,10 +594,26 @@ class FlujoController extends Controller
             return $conteo;
         }
 
-        // En FlowBuilder, el canal se define por etapa, no por prospecto
-        // Todos los prospectos reciben el canal inferido del flujo
         $canalAsignado = $this->determinarCanalParaProspectos($canalEnvio);
+        $totalProspectos = count($prospectoIds);
 
+        // Umbral para procesamiento async: más de 100 prospectos
+        if ($totalProspectos > 100) {
+            // Procesar en background
+            \App\Jobs\AsignarProspectosAFlujoJob::dispatch($flujo, $prospectoIds, $canalAsignado);
+
+            // Marcar flujo como "procesando"
+            $flujo->update(['estado_procesamiento' => 'procesando']);
+
+            // Retornar conteo estimado
+            $conteo['total'] = $totalProspectos;
+            $conteo[$canalAsignado] = $totalProspectos;
+            $conteo['is_async'] = true;
+
+            return $conteo;
+        }
+
+        // Procesamiento síncrono para cantidades pequeñas
         foreach ($prospectoIds as $prospectoId) {
             ProspectoEnFlujo::create([
                 'flujo_id' => $flujo->id,
@@ -610,6 +627,8 @@ class FlujoController extends Controller
             $conteo['total']++;
             $conteo[$canalAsignado]++;
         }
+
+        $flujo->update(['estado_procesamiento' => 'completado']);
 
         return $conteo;
     }
@@ -706,13 +725,18 @@ class FlujoController extends Controller
     {
         $flujo->load(['tipoProspecto', 'user']);
 
+        $mensaje = $conteoProspectos['is_async'] ?? false
+            ? 'Flujo creado exitosamente. Los prospectos se están asignando en segundo plano.'
+            : 'Flujo creado exitosamente';
+
         return response()->json([
-            'mensaje' => 'Flujo creado exitosamente',
+            'mensaje' => $mensaje,
             'data' => $flujo,
             'resumen' => [
                 'total_prospectos' => $conteoProspectos['total'],
                 'prospectos_email' => $conteoProspectos['email'],
                 'prospectos_sms' => $conteoProspectos['sms'],
+                'procesamiento_async' => $conteoProspectos['is_async'] ?? false,
             ],
             'costos' => [
                 'email_costo_unitario' => $costos['email_unitario'],

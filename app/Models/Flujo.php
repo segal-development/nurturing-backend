@@ -22,6 +22,7 @@ class Flujo extends Model
         'descripcion',
         'canal_envio',
         'activo',
+        'estado_procesamiento',
         'user_id',
         'metadata',
         'config_visual',
@@ -165,12 +166,12 @@ class Flujo extends Model
         // Prioridad 1: Usar etapas de la base de datos
         $etapasDb = $this->flujoEtapas()->get(['tipo_mensaje'])->toArray();
 
-        if (!empty($etapasDb)) {
+        if (! empty($etapasDb)) {
             return $resolver->resolveFromStages($etapasDb);
         }
 
         // Prioridad 2: Usar estructura guardada en config_structure
-        if (!empty($this->config_structure)) {
+        if (! empty($this->config_structure)) {
             return $resolver->resolveFromStructure($this->config_structure);
         }
 
@@ -180,7 +181,7 @@ class Flujo extends Model
 
     /**
      * Recalcula y actualiza el canal_envio basándose en las etapas.
-     * 
+     *
      * @return bool True si se actualizó, false si no hubo cambios
      */
     public function recalcularCanalEnvio(): bool
