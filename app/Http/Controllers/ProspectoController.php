@@ -12,6 +12,64 @@ use Illuminate\Http\Request;
 class ProspectoController extends Controller
 {
     /**
+     * Get count of prospectos matching filters (without loading data).
+     */
+    public function count(Request $request): JsonResponse
+    {
+        $query = Prospecto::query();
+
+        // Aplicar los mismos filtros que en index()
+        if ($request->filled('lote_id')) {
+            $query->whereHas('importacion', function ($q) use ($request) {
+                $q->where('lote_id', $request->input('lote_id'));
+            });
+        }
+
+        if ($request->filled('importacion_id')) {
+            $query->where('importacion_id', $request->input('importacion_id'));
+        }
+
+        if ($request->filled('origen')) {
+            $query->whereHas('importacion', function ($q) use ($request) {
+                $q->where('origen', $request->input('origen'));
+            });
+        }
+
+        if ($request->filled('estado')) {
+            $query->where('estado', $request->input('estado'));
+        }
+
+        if ($request->filled('tipo_prospecto_id')) {
+            $query->where('tipo_prospecto_id', $request->input('tipo_prospecto_id'));
+        }
+
+        if ($request->filled('monto_deuda_min')) {
+            $query->where('monto_deuda', '>=', $request->input('monto_deuda_min'));
+        }
+
+        if ($request->filled('monto_deuda_max')) {
+            $query->where('monto_deuda', '<=', $request->input('monto_deuda_max'));
+        }
+
+        if ($request->filled('search')) {
+            $search = $request->input('search');
+            $query->where(function ($q) use ($search) {
+                $q->where('nombre', 'like', "%{$search}%")
+                    ->orWhere('email', 'like', "%{$search}%")
+                    ->orWhere('telefono', 'like', "%{$search}%");
+            });
+        }
+
+        $total = $query->count();
+
+        return response()->json([
+            'data' => [
+                'total' => $total,
+            ],
+        ]);
+    }
+
+    /**
      * Display a listing of the resource.
      */
     public function index(Request $request): JsonResponse
@@ -229,6 +287,7 @@ class ProspectoController extends Controller
             ->get()
             ->map(function ($lote) {
                 $totalProspectos = $lote->importaciones->sum('prospectos_count');
+
                 return [
                     'id' => $lote->id,
                     'nombre' => $lote->nombre,
@@ -238,7 +297,7 @@ class ProspectoController extends Controller
                     'total_registros' => $lote->total_registros,
                     'registros_exitosos' => $lote->registros_exitosos,
                     'created_at' => $lote->created_at?->timezone('America/Santiago')->format('d/m/Y H:i:s'),
-                    'importaciones' => $lote->importaciones->map(fn($i) => [
+                    'importaciones' => $lote->importaciones->map(fn ($i) => [
                         'id' => $i->id,
                         'nombre_archivo' => $i->nombre_archivo,
                         'estado' => $i->estado,

@@ -6,9 +6,6 @@ use App\Enums\CanalEnvio;
 use App\Models\Configuracion;
 use App\Models\Flujo;
 use App\Models\FlujoCondicion;
-use App\Models\FlujoEtapa;
-use App\Models\FlujoNodoFinal;
-use App\Models\FlujoRamificacion;
 use App\Models\Prospecto;
 use App\Models\ProspectoEnFlujo;
 use App\Models\TipoProspecto;
@@ -21,8 +18,8 @@ class FlujoController extends Controller
 {
     public function __construct(
         private readonly CanalEnvioResolver $canalEnvioResolver
-    ) {
-    }
+    ) {}
+
     /**
      * Display a listing of flujos.
      */
@@ -481,7 +478,7 @@ class FlujoController extends Controller
 
             $structure = $request->input('structure', []);
             $canalEnvioInferido = $this->inferirCanalEnvioDesdeEstructura($structure);
-            
+
             $flujo = $this->crearFlujoBase($request, $tipoProspecto, $canalEnvioInferido);
 
             $this->guardarEstructuraSiExiste($flujo, $structure);
@@ -489,7 +486,8 @@ class FlujoController extends Controller
             $conteoProspectos = $this->asignarProspectosAlFlujo(
                 $flujo,
                 $request->input('prospectos.ids_seleccionados', []),
-                $canalEnvioInferido
+                $canalEnvioInferido,
+                $request->boolean('prospectos.select_all_from_origin', false)
             );
 
             $costos = $this->calcularYGuardarCostos($flujo, $conteoProspectos, $request);
@@ -533,7 +531,7 @@ class FlujoController extends Controller
         // Buscar por nombre exacto o similar
         return TipoProspecto::where('id', $input)
             ->orWhere('nombre', $input)
-            ->orWhere('nombre', 'LIKE', '%' . str_replace('-', ' ', $input) . '%')
+            ->orWhere('nombre', 'LIKE', '%'.str_replace('-', ' ', $input).'%')
             ->first();
     }
 
@@ -573,12 +571,23 @@ class FlujoController extends Controller
 
     /**
      * Asigna los prospectos al flujo con el canal correspondiente.
-     * 
+     *
      * @return array{total: int, email: int, sms: int}
      */
-    private function asignarProspectosAlFlujo(Flujo $flujo, array $prospectoIds, CanalEnvio $canalEnvio): array
+    private function asignarProspectosAlFlujo(Flujo $flujo, array $prospectoIds, CanalEnvio $canalEnvio, bool $selectAllFromOrigin = false): array
     {
         $conteo = ['total' => 0, 'email' => 0, 'sms' => 0];
+
+        // Si se solicita seleccionar todos del origen, buscarlos automáticamente
+        if ($selectAllFromOrigin) {
+            $prospectoIds = Prospecto::query()
+                ->where('tipo_prospecto_id', $flujo->tipo_prospecto_id)
+                ->whereHas('importacion', function ($query) use ($flujo) {
+                    $query->where('origen', $flujo->origen);
+                })
+                ->pluck('id')
+                ->toArray();
+        }
 
         if (empty($prospectoIds)) {
             return $conteo;
@@ -620,7 +629,7 @@ class FlujoController extends Controller
 
     /**
      * Calcula los costos y guarda la metadata del flujo.
-     * 
+     *
      * @return array{email_unitario: float, sms_unitario: float, total_email: float, total_sms: float, total: float}
      */
     private function calcularYGuardarCostos(

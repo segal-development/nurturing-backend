@@ -41,6 +41,7 @@ class CrearFlujoConProspectosRequest extends FormRequest
             'prospectos.ids_seleccionados' => ['nullable', 'array', 'min:1'],
             'prospectos.ids_seleccionados.*' => ['nullable', 'integer', 'exists:prospectos,id'],
             'prospectos.total_disponibles' => ['nullable', 'integer', 'min:0'],
+            'prospectos.select_all_from_origin' => ['nullable', 'boolean'],
 
             // Tipo de mensaje (opcional para FlowBuilder)
             'tipo_mensaje' => ['nullable', 'array'],
