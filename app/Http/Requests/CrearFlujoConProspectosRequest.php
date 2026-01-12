@@ -37,8 +37,8 @@ class CrearFlujoConProspectosRequest extends FormRequest
 
             // Prospectos
             'prospectos' => ['nullable', 'array'],
-            'prospectos.total_seleccionados' => ['nullable', 'integer', 'min:1'],
-            'prospectos.ids_seleccionados' => ['nullable', 'array', 'min:1'],
+            'prospectos.total_seleccionados' => ['nullable', 'integer', 'min:0'],
+            'prospectos.ids_seleccionados' => ['nullable', 'array'],
             'prospectos.ids_seleccionados.*' => ['nullable', 'integer', 'exists:prospectos,id'],
             'prospectos.total_disponibles' => ['nullable', 'integer', 'min:0'],
             'prospectos.select_all_from_origin' => ['nullable', 'boolean'],
@@ -92,11 +92,12 @@ class CrearFlujoConProspectosRequest extends FormRequest
     }
 
     /**
-     * Validate that percentages add up to 100 when tipo is 'ambos'.
+     * Custom validations after regular validation rules.
      */
     public function withValidator($validator): void
     {
         $validator->after(function ($validator) {
+            // Validate percentages for 'ambos' type
             if ($this->input('tipo_mensaje.tipo') === 'ambos') {
                 $emailPercentage = $this->input('tipo_mensaje.email_percentage', 0);
                 $smsPercentage = $this->input('tipo_mensaje.sms_percentage', 0);
@@ -107,6 +108,17 @@ class CrearFlujoConProspectosRequest extends FormRequest
                         'Los porcentajes de email y SMS deben sumar 100%.'
                     );
                 }
+            }
+
+            // Validate that at least one prospect selection method is used
+            $idsSeleccionados = $this->input('prospectos.ids_seleccionados', []);
+            $selectAllFromOrigin = $this->boolean('prospectos.select_all_from_origin', false);
+
+            if (empty($idsSeleccionados) && ! $selectAllFromOrigin) {
+                $validator->errors()->add(
+                    'prospectos',
+                    'Debe seleccionar al menos un prospecto o usar "Seleccionar Todos del Origen".'
+                );
             }
         });
     }
