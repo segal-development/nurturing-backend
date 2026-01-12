@@ -25,10 +25,10 @@ class CrearFlujoConProspectosRequest extends FormRequest
     {
         return [
             // Flujo
-            'flujo' => ['nullable', 'array'],
+            'flujo' => ['required', 'array'],
             'flujo.nombre' => ['nullable', 'string', 'max:255'],
             'flujo.descripcion' => ['nullable', 'string'],
-            'flujo.tipo_prospecto' => ['nullable', 'string', 'max:255'],
+            'flujo.tipo_prospecto' => ['required'], // Puede ser int (ID) o string (nombre)
             'flujo.activo' => ['nullable', 'boolean'],
 
             // Origen
