@@ -31,6 +31,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Rutas de Prospectos
     Route::get('/prospectos/count', [ProspectoController::class, 'count']);
+    Route::get('/prospectos/conteo-por-tipo', [ProspectoController::class, 'conteoPorTipo']);
     Route::get('/prospectos/estadisticas', [ProspectoController::class, 'estadisticas']);
     Route::get('/prospectos/opciones-filtrado', [ProspectoController::class, 'opcionesFiltrado']);
     Route::apiResource('prospectos', ProspectoController::class);

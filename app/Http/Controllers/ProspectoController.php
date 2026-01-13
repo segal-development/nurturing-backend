@@ -70,6 +70,149 @@ class ProspectoController extends Controller
     }
 
     /**
+     * Get prospect counts grouped by debt type (tipo_prospecto).
+     *
+     * Returns total count and breakdown by each debt category,
+     * supporting filters by origen, lote_id, estado, etc.
+     */
+    public function conteoPorTipo(Request $request): JsonResponse
+    {
+        $baseQuery = $this->buildFilteredQuery($request);
+
+        $total = $baseQuery->count();
+        $conteosPorTipo = $this->getConteoPorTipoDeuda($request);
+        $tiposDisponibles = $this->getTiposProspectoActivos();
+
+        return response()->json([
+            'data' => [
+                'total' => $total,
+                'por_tipo' => $this->formatConteosPorTipo($conteosPorTipo, $tiposDisponibles),
+            ],
+        ]);
+    }
+
+    /**
+     * Build base query with common filters applied.
+     */
+    private function buildFilteredQuery(Request $request): \Illuminate\Database\Eloquent\Builder
+    {
+        $query = Prospecto::query();
+
+        $this->applyLoteFilter($query, $request);
+        $this->applyImportacionFilter($query, $request);
+        $this->applyOrigenFilter($query, $request);
+        $this->applyEstadoFilter($query, $request);
+        $this->applySearchFilter($query, $request);
+
+        return $query;
+    }
+
+    private function applyLoteFilter(\Illuminate\Database\Eloquent\Builder $query, Request $request): void
+    {
+        if (! $request->filled('lote_id')) {
+            return;
+        }
+
+        $query->whereHas('importacion', function ($q) use ($request) {
+            $q->where('lote_id', $request->input('lote_id'));
+        });
+    }
+
+    private function applyImportacionFilter(\Illuminate\Database\Eloquent\Builder $query, Request $request): void
+    {
+        if (! $request->filled('importacion_id')) {
+            return;
+        }
+
+        $query->where('importacion_id', $request->input('importacion_id'));
+    }
+
+    private function applyOrigenFilter(\Illuminate\Database\Eloquent\Builder $query, Request $request): void
+    {
+        if (! $request->filled('origen')) {
+            return;
+        }
+
+        $query->whereHas('importacion', function ($q) use ($request) {
+            $q->where('origen', $request->input('origen'));
+        });
+    }
+
+    private function applyEstadoFilter(\Illuminate\Database\Eloquent\Builder $query, Request $request): void
+    {
+        if (! $request->filled('estado')) {
+            return;
+        }
+
+        $query->where('estado', $request->input('estado'));
+    }
+
+    private function applySearchFilter(\Illuminate\Database\Eloquent\Builder $query, Request $request): void
+    {
+        if (! $request->filled('search')) {
+            return;
+        }
+
+        $search = $request->input('search');
+        $query->where(function ($q) use ($search) {
+            $q->where('nombre', 'like', "%{$search}%")
+                ->orWhere('email', 'like', "%{$search}%")
+                ->orWhere('telefono', 'like', "%{$search}%");
+        });
+    }
+
+    /**
+     * Get prospect counts grouped by tipo_prospecto with filters applied.
+     */
+    private function getConteoPorTipoDeuda(Request $request): \Illuminate\Support\Collection
+    {
+        $query = Prospecto::query()
+            ->selectRaw('tipo_prospecto_id, COUNT(*) as total')
+            ->groupBy('tipo_prospecto_id');
+
+        $this->applyLoteFilter($query, $request);
+        $this->applyImportacionFilter($query, $request);
+        $this->applyOrigenFilter($query, $request);
+        $this->applyEstadoFilter($query, $request);
+        $this->applySearchFilter($query, $request);
+
+        return $query->get()->keyBy('tipo_prospecto_id');
+    }
+
+    /**
+     * Get all active tipo_prospecto records ordered by orden.
+     */
+    private function getTiposProspectoActivos(): \Illuminate\Support\Collection
+    {
+        return \App\Models\TipoProspecto::query()
+            ->where('activo', true)
+            ->orderBy('orden')
+            ->get();
+    }
+
+    /**
+     * Format conteos with tipo_prospecto info, ensuring all types are included.
+     *
+     * @return array<int, array{id: int, nombre: string, total: int, monto_min: int|null, monto_max: int|null}>
+     */
+    private function formatConteosPorTipo(
+        \Illuminate\Support\Collection $conteos,
+        \Illuminate\Support\Collection $tipos
+    ): array {
+        return $tipos->map(function ($tipo) use ($conteos) {
+            $conteo = $conteos->get($tipo->id);
+
+            return [
+                'id' => $tipo->id,
+                'nombre' => $tipo->nombre,
+                'total' => $conteo?->total ?? 0,
+                'monto_min' => $tipo->monto_min,
+                'monto_max' => $tipo->monto_max,
+            ];
+        })->values()->toArray();
+    }
+
+    /**
      * Display a listing of the resource.
      */
     public function index(Request $request): JsonResponse
