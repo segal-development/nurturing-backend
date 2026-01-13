@@ -15,7 +15,7 @@ class ProspectoFactory extends Factory
             'email' => fake()->unique()->safeEmail(),
             'telefono' => '+569'.fake()->numerify('########'),
             'estado' => 'activo',
-            'monto_deuda' => fake()->randomFloat(2, 0, 500000),
+            'monto_deuda' => fake()->numberBetween(0, 500000),
             'fecha_ultimo_contacto' => fake()->dateTimeBetween('-1 year', 'now'),
             'metadata' => null,
         ];

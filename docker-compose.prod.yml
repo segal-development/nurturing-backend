@@ -86,6 +86,26 @@ services:
     networks:
       - laravel-network
 
+  # Worker dedicado para envíos masivos (cola 'envios')
+  # Procesa los jobs de EnviarEmailEtapaProspectoJob y EnviarSmsEtapaProspectoJob
+  # Escalable: podés aumentar replicas para mayor throughput
+  queue-envios:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    container_name: laravel-queue-envios
+    restart: unless-stopped
+    command: php artisan queue:work database --queue=envios --sleep=3 --tries=3 --max-time=3600 --timeout=120
+    volumes:
+      - ./:/var/www
+      - ./storage:/var/www/storage
+      - ./.env.docker:/var/www/.env
+    depends_on:
+      - postgres
+      - app
+    networks:
+      - laravel-network
+
   # Scheduler para ejecutar tareas programadas de Laravel
   scheduler:
     build:

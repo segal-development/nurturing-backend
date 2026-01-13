@@ -2,24 +2,61 @@
 
 namespace Tests\Unit\Jobs;
 
+use App\Jobs\EnviarEmailEtapaProspectoJob;
 use App\Jobs\EnviarEtapaJob;
+use App\Jobs\EnviarSmsEtapaProspectoJob;
 use App\Models\Flujo;
 use App\Models\FlujoEjecucion;
 use App\Models\FlujoEjecucionEtapa;
-use App\Services\EnvioService;
+use App\Models\Prospecto;
+use App\Models\TipoProspecto;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Support\Facades\Queue;
-use Mockery;
+use Illuminate\Support\Facades\Bus;
 use Tests\TestCase;
 
 class EnviarEtapaJobTest extends TestCase
 {
     use RefreshDatabase;
 
-    protected function tearDown(): void
+    private Flujo $flujo;
+
+    private FlujoEjecucion $ejecucion;
+
+    private FlujoEjecucionEtapa $etapaEjecucion;
+
+    private Prospecto $prospecto;
+
+    protected function setUp(): void
     {
-        Mockery::close();
-        parent::tearDown();
+        parent::setUp();
+
+        // Create base entities for tests
+        $this->flujo = Flujo::factory()->create([
+            'config_structure' => [
+                'stages' => [
+                    ['id' => 'stage1', 'type' => 'stage', 'label' => 'Etapa 1'],
+                ],
+                'branches' => [],
+            ],
+        ]);
+
+        $this->ejecucion = FlujoEjecucion::factory()->create([
+            'flujo_id' => $this->flujo->id,
+            'estado' => 'pending',
+        ]);
+
+        $this->etapaEjecucion = FlujoEjecucionEtapa::factory()->create([
+            'flujo_ejecucion_id' => $this->ejecucion->id,
+            'estado' => 'pending',
+        ]);
+
+        // Create a real prospecto to satisfy foreign key constraints
+        $tipoProspecto = TipoProspecto::factory()->create();
+        $this->prospecto = Prospecto::factory()->create([
+            'tipo_prospecto_id' => $tipoProspecto->id,
+            'email' => 'test@example.com',
+            'telefono' => '+56912345678',
+        ]);
     }
 
     /** @test */
@@ -59,303 +96,154 @@ class EnviarEtapaJobTest extends TestCase
     /** @test */
     public function job_actualiza_estado_a_executing_al_iniciar(): void
     {
-        $flujo = Flujo::factory()->create();
-        $ejecucion = FlujoEjecucion::factory()->create([
-            'flujo_id' => $flujo->id,
-            'estado' => 'pending',
-        ]);
-
-        $etapaEjecucion = FlujoEjecucionEtapa::factory()->create([
-            'flujo_ejecucion_id' => $ejecucion->id,
-            'estado' => 'pending',
-        ]);
-
-        $envioService = Mockery::mock(EnvioService::class);
-        $envioService->shouldReceive('enviar')
-            ->once()
-            ->andReturn([
-                'mensaje' => [
-                    'messageID' => 12345,
-                    'Recipients' => 3,
-                ],
-            ]);
+        Bus::fake();
 
         $job = new EnviarEtapaJob(
-            flujoEjecucionId: $ejecucion->id,
-            etapaEjecucionId: $etapaEjecucion->id,
+            flujoEjecucionId: $this->ejecucion->id,
+            etapaEjecucionId: $this->etapaEjecucion->id,
             stage: [
                 'id' => 'stage1',
                 'label' => 'Etapa 1',
                 'tipo_mensaje' => 'email',
                 'plantilla_mensaje' => 'Hola {nombre}',
             ],
-            prospectoIds: [1, 2, 3]
+            prospectoIds: [$this->prospecto->id]
         );
 
-        $job->handle($envioService);
+        $job->handle();
 
-        $this->assertEquals('executing', $etapaEjecucion->fresh()->estado);
+        $this->assertEquals('executing', $this->etapaEjecucion->fresh()->estado);
     }
 
     /** @test */
-    public function job_actualiza_estado_a_completed_cuando_termina_exitosamente(): void
+    public function job_despacha_batch_para_email(): void
     {
-        $flujo = Flujo::factory()->create();
-        $ejecucion = FlujoEjecucion::factory()->create([
-            'flujo_id' => $flujo->id,
-            'estado' => 'pending',
-        ]);
-
-        $etapaEjecucion = FlujoEjecucionEtapa::factory()->create([
-            'flujo_ejecucion_id' => $ejecucion->id,
-            'estado' => 'pending',
-        ]);
-
-        $envioService = Mockery::mock(EnvioService::class);
-        $envioService->shouldReceive('enviar')
-            ->once()
-            ->andReturn([
-                'mensaje' => [
-                    'messageID' => 12345,
-                    'Recipients' => 3,
-                ],
-            ]);
+        Bus::fake();
 
         $job = new EnviarEtapaJob(
-            flujoEjecucionId: $ejecucion->id,
-            etapaEjecucionId: $etapaEjecucion->id,
+            flujoEjecucionId: $this->ejecucion->id,
+            etapaEjecucionId: $this->etapaEjecucion->id,
             stage: [
                 'id' => 'stage1',
+                'label' => 'Etapa 1',
                 'tipo_mensaje' => 'email',
-                'plantilla_mensaje' => 'Hola',
+                'plantilla_mensaje' => 'Hola {nombre}',
             ],
-            prospectoIds: [1, 2, 3]
+            prospectoIds: [$this->prospecto->id]
         );
 
-        $job->handle($envioService);
+        $job->handle();
 
-        $etapaActualizada = $etapaEjecucion->fresh();
-        $this->assertEquals('completed', $etapaActualizada->estado);
-        $this->assertNotNull($etapaActualizada->message_id);
-        $this->assertEquals(12345, $etapaActualizada->message_id);
+        Bus::assertBatched(function ($batch) {
+            return $batch->jobs->count() === 1
+                && $batch->jobs->first() instanceof EnviarEmailEtapaProspectoJob;
+        });
     }
 
     /** @test */
-    public function job_registra_job_completado_en_flujo_jobs(): void
+    public function job_despacha_batch_para_sms(): void
     {
-        $flujo = Flujo::factory()->create();
-        $ejecucion = FlujoEjecucion::factory()->create(['flujo_id' => $flujo->id]);
-        $etapaEjecucion = FlujoEjecucionEtapa::factory()->create(['flujo_ejecucion_id' => $ejecucion->id]);
-
-        $envioService = Mockery::mock(EnvioService::class);
-        $envioService->shouldReceive('enviar')->andReturn([
-            'mensaje' => ['messageID' => 12345],
-        ]);
+        Bus::fake();
 
         $job = new EnviarEtapaJob(
-            flujoEjecucionId: $ejecucion->id,
-            etapaEjecucionId: $etapaEjecucion->id,
-            stage: ['id' => 'stage1', 'tipo_mensaje' => 'email'],
-            prospectoIds: [1]
+            flujoEjecucionId: $this->ejecucion->id,
+            etapaEjecucionId: $this->etapaEjecucion->id,
+            stage: [
+                'id' => 'stage1',
+                'label' => 'Etapa 1',
+                'tipo_mensaje' => 'sms',
+                'plantilla_mensaje' => 'Hola {nombre}',
+            ],
+            prospectoIds: [$this->prospecto->id]
         );
 
-        $job->handle($envioService);
+        $job->handle();
+
+        Bus::assertBatched(function ($batch) {
+            return $batch->jobs->count() === 1
+                && $batch->jobs->first() instanceof EnviarSmsEtapaProspectoJob;
+        });
+    }
+
+    /** @test */
+    public function job_registra_flujo_job_al_despachar_batch(): void
+    {
+        Bus::fake();
+
+        $job = new EnviarEtapaJob(
+            flujoEjecucionId: $this->ejecucion->id,
+            etapaEjecucionId: $this->etapaEjecucion->id,
+            stage: ['id' => 'stage1', 'tipo_mensaje' => 'email'],
+            prospectoIds: [$this->prospecto->id]
+        );
+
+        $job->handle();
 
         $this->assertDatabaseHas('flujo_jobs', [
-            'flujo_ejecucion_id' => $ejecucion->id,
-            'job_type' => 'enviar_etapa',
-            'estado' => 'completed',
+            'flujo_ejecucion_id' => $this->ejecucion->id,
+            'job_type' => 'enviar_etapa_batch',
+            'estado' => 'processing',
         ]);
-    }
-
-    /** @test */
-    public function job_lanza_excepcion_si_no_hay_message_id(): void
-    {
-        $this->expectException(\Exception::class);
-        $this->expectExceptionMessage('No se recibió messageID de AthenaCampaign');
-
-        $flujo = Flujo::factory()->create();
-        $ejecucion = FlujoEjecucion::factory()->create(['flujo_id' => $flujo->id]);
-        $etapaEjecucion = FlujoEjecucionEtapa::factory()->create(['flujo_ejecucion_id' => $ejecucion->id]);
-
-        $envioService = Mockery::mock(EnvioService::class);
-        $envioService->shouldReceive('enviar')->andReturn([
-            'mensaje' => [], // Sin messageID
-        ]);
-
-        $job = new EnviarEtapaJob(
-            flujoEjecucionId: $ejecucion->id,
-            etapaEjecucionId: $etapaEjecucion->id,
-            stage: ['id' => 'stage1', 'tipo_mensaje' => 'email'],
-            prospectoIds: [1]
-        );
-
-        $job->handle($envioService);
-    }
-
-    /** @test */
-    public function job_marca_etapa_como_failed_cuando_hay_error(): void
-    {
-        $flujo = Flujo::factory()->create();
-        $ejecucion = FlujoEjecucion::factory()->create(['flujo_id' => $flujo->id]);
-        $etapaEjecucion = FlujoEjecucionEtapa::factory()->create(['flujo_ejecucion_id' => $ejecucion->id]);
-
-        $envioService = Mockery::mock(EnvioService::class);
-        $envioService->shouldReceive('enviar')->andThrow(new \Exception('Error de envío'));
-
-        $job = new EnviarEtapaJob(
-            flujoEjecucionId: $ejecucion->id,
-            etapaEjecucionId: $etapaEjecucion->id,
-            stage: ['id' => 'stage1', 'tipo_mensaje' => 'email'],
-            prospectoIds: [1]
-        );
-
-        try {
-            $job->handle($envioService);
-        } catch (\Exception $e) {
-            // Esperado
-        }
-
-        $this->assertEquals('failed', $etapaEjecucion->fresh()->estado);
     }
 
     /** @test */
     public function job_no_procesa_etapa_ya_completada(): void
     {
-        $flujo = Flujo::factory()->create();
-        $ejecucion = FlujoEjecucion::factory()->create(['flujo_id' => $flujo->id]);
-        $etapaEjecucion = FlujoEjecucionEtapa::factory()->create([
-            'flujo_ejecucion_id' => $ejecucion->id,
-            'estado' => 'completed', // Ya completada
-        ]);
+        Bus::fake();
 
-        $envioService = Mockery::mock(EnvioService::class);
-        $envioService->shouldReceive('enviar')->never();
+        $this->etapaEjecucion->update(['estado' => 'completed']);
 
         $job = new EnviarEtapaJob(
-            flujoEjecucionId: $ejecucion->id,
-            etapaEjecucionId: $etapaEjecucion->id,
+            flujoEjecucionId: $this->ejecucion->id,
+            etapaEjecucionId: $this->etapaEjecucion->id,
             stage: ['id' => 'stage1', 'tipo_mensaje' => 'email'],
-            prospectoIds: [1]
+            prospectoIds: [$this->prospecto->id]
         );
 
-        $job->handle($envioService);
-    }
+        $job->handle();
 
-    /** @test */
-    public function job_encola_siguiente_etapa_si_existe(): void
-    {
-        Queue::fake();
-
-        $flujo = Flujo::factory()->create([
-            'config_structure' => [
-                'stages' => [
-                    ['id' => 'stage1', 'type' => 'stage'],
-                    ['id' => 'stage2', 'type' => 'stage', 'tiempo_espera' => 2],
-                ],
-                'branches' => [
-                    ['source_node_id' => 'stage1', 'target_node_id' => 'stage2'],
-                ],
-            ],
-        ]);
-
-        $ejecucion = FlujoEjecucion::factory()->create(['flujo_id' => $flujo->id]);
-        $etapaEjecucion = FlujoEjecucionEtapa::factory()->create(['flujo_ejecucion_id' => $ejecucion->id]);
-
-        $envioService = Mockery::mock(EnvioService::class);
-        $envioService->shouldReceive('enviar')->andReturn([
-            'mensaje' => ['messageID' => 12345],
-        ]);
-
-        $job = new EnviarEtapaJob(
-            flujoEjecucionId: $ejecucion->id,
-            etapaEjecucionId: $etapaEjecucion->id,
-            stage: ['id' => 'stage1', 'tipo_mensaje' => 'email'],
-            prospectoIds: [1],
-            branches: $flujo->config_structure['branches']
-        );
-
-        $job->handle($envioService);
-
-        Queue::assertPushed(EnviarEtapaJob::class, 1);
-    }
-
-    /** @test */
-    public function job_encola_verificacion_de_condicion_si_siguiente_es_condicion(): void
-    {
-        Queue::fake();
-
-        $flujo = Flujo::factory()->create([
-            'config_structure' => [
-                'stages' => [
-                    ['id' => 'stage1', 'type' => 'stage'],
-                ],
-            ],
-            'config_visual' => [
-                'stages' => [
-                    ['id' => 'condition1', 'type' => 'condition'],
-                ],
-                'branches' => [
-                    ['source_node_id' => 'stage1', 'target_node_id' => 'condition1'],
-                ],
-            ],
-        ]);
-
-        $ejecucion = FlujoEjecucion::factory()->create(['flujo_id' => $flujo->id]);
-        $etapaEjecucion = FlujoEjecucionEtapa::factory()->create(['flujo_ejecucion_id' => $ejecucion->id]);
-
-        $envioService = Mockery::mock(EnvioService::class);
-        $envioService->shouldReceive('enviar')->andReturn([
-            'mensaje' => ['messageID' => 12345],
-        ]);
-
-        $stages = array_merge(
-            $flujo->config_structure['stages'] ?? [],
-            $flujo->config_visual['stages'] ?? []
-        );
-
-        $job = new EnviarEtapaJob(
-            flujoEjecucionId: $ejecucion->id,
-            etapaEjecucionId: $etapaEjecucion->id,
-            stage: ['id' => 'stage1', 'tipo_mensaje' => 'email', 'tiempo_verificacion_condicion' => 24],
-            prospectoIds: [1],
-            branches: $flujo->config_visual['branches']
-        );
-
-        $this->app->instance('stages', $stages);
-
-        // Mockear el método procesarSiguientePaso sería ideal aquí
-        // Por ahora solo verificamos que el job fue creado correctamente
-        $this->assertInstanceOf(EnviarEtapaJob::class, $job);
+        Bus::assertNothingBatched();
     }
 
     /** @test */
     public function job_maneja_arrays_vacios_de_prospectos(): void
     {
-        $envioService = Mockery::mock(EnvioService::class);
-        $envioService->shouldReceive('enviar')
-            ->with(
-                Mockery::any(),
-                [], // Array vacío
-                Mockery::any(),
-                Mockery::any()
-            )
-            ->andReturn(['mensaje' => ['messageID' => 12345]]);
-
-        $flujo = Flujo::factory()->create();
-        $ejecucion = FlujoEjecucion::factory()->create(['flujo_id' => $flujo->id]);
-        $etapaEjecucion = FlujoEjecucionEtapa::factory()->create(['flujo_ejecucion_id' => $ejecucion->id]);
+        Bus::fake();
 
         $job = new EnviarEtapaJob(
-            flujoEjecucionId: $ejecucion->id,
-            etapaEjecucionId: $etapaEjecucion->id,
+            flujoEjecucionId: $this->ejecucion->id,
+            etapaEjecucionId: $this->etapaEjecucion->id,
             stage: ['id' => 'stage1', 'tipo_mensaje' => 'email'],
-            prospectoIds: [] // Array vacío
+            prospectoIds: []
         );
 
-        $job->handle($envioService);
+        $job->handle();
 
-        $this->assertEquals('completed', $etapaEjecucion->fresh()->estado);
+        // With empty prospectos, should mark as completed without batch
+        Bus::assertNothingBatched();
+        $this->assertEquals('completed', $this->etapaEjecucion->fresh()->estado);
+    }
+
+    /** @test */
+    public function job_puede_ser_creado_con_branches_para_siguiente_etapa(): void
+    {
+        $branches = [
+            ['source_node_id' => 'stage1', 'target_node_id' => 'stage2'],
+        ];
+
+        $job = new EnviarEtapaJob(
+            flujoEjecucionId: $this->ejecucion->id,
+            etapaEjecucionId: $this->etapaEjecucion->id,
+            stage: ['id' => 'stage1', 'tipo_mensaje' => 'email'],
+            prospectoIds: [$this->prospecto->id],
+            branches: $branches
+        );
+
+        // Verify the job stores branches for processing next step
+        $this->assertInstanceOf(EnviarEtapaJob::class, $job);
+        $this->assertCount(1, $job->branches);
+        $this->assertEquals('stage1', $job->branches[0]['source_node_id']);
+        $this->assertEquals('stage2', $job->branches[0]['target_node_id']);
     }
 
     /** @test */
@@ -368,7 +256,8 @@ class EnviarEtapaJobTest extends TestCase
             prospectoIds: [1]
         );
 
-        $this->assertEquals(300, $job->timeout);
+        // Timeout is 120 seconds now (batch dispatcher only)
+        $this->assertEquals(120, $job->timeout);
     }
 
     /** @test */
@@ -395,5 +284,71 @@ class EnviarEtapaJobTest extends TestCase
         );
 
         $this->assertEquals([60, 300, 900], $job->backoff);
+    }
+
+    /** @test */
+    public function job_crea_prospecto_en_flujo_si_no_existe(): void
+    {
+        Bus::fake();
+
+        // Verify no ProspectoEnFlujo exists
+        $this->assertDatabaseMissing('prospecto_en_flujo', [
+            'prospecto_id' => $this->prospecto->id,
+            'flujo_id' => $this->flujo->id,
+        ]);
+
+        $job = new EnviarEtapaJob(
+            flujoEjecucionId: $this->ejecucion->id,
+            etapaEjecucionId: $this->etapaEjecucion->id,
+            stage: [
+                'id' => 'stage1',
+                'tipo_mensaje' => 'email',
+                'plantilla_mensaje' => 'Test',
+            ],
+            prospectoIds: [$this->prospecto->id]
+        );
+
+        $job->handle();
+
+        // Now ProspectoEnFlujo should exist
+        $this->assertDatabaseHas('prospecto_en_flujo', [
+            'prospecto_id' => $this->prospecto->id,
+            'flujo_id' => $this->flujo->id,
+            'canal_asignado' => 'email',
+        ]);
+    }
+
+    /** @test */
+    public function job_despacha_multiple_jobs_para_multiple_prospectos(): void
+    {
+        Bus::fake();
+
+        // Create additional prospectos
+        $tipoProspecto = TipoProspecto::first();
+        $prospecto2 = Prospecto::factory()->create([
+            'tipo_prospecto_id' => $tipoProspecto->id,
+            'email' => 'test2@example.com',
+        ]);
+        $prospecto3 = Prospecto::factory()->create([
+            'tipo_prospecto_id' => $tipoProspecto->id,
+            'email' => 'test3@example.com',
+        ]);
+
+        $job = new EnviarEtapaJob(
+            flujoEjecucionId: $this->ejecucion->id,
+            etapaEjecucionId: $this->etapaEjecucion->id,
+            stage: [
+                'id' => 'stage1',
+                'tipo_mensaje' => 'email',
+                'plantilla_mensaje' => 'Test',
+            ],
+            prospectoIds: [$this->prospecto->id, $prospecto2->id, $prospecto3->id]
+        );
+
+        $job->handle();
+
+        Bus::assertBatched(function ($batch) {
+            return $batch->jobs->count() === 3;
+        });
     }
 }

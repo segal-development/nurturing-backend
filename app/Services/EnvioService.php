@@ -27,6 +27,7 @@ class EnvioService
     private function generarUrlPixelTracking(string $token): string
     {
         $baseUrl = config('app.url', 'http://localhost');
+
         return "{$baseUrl}/track/open/{$token}";
     }
 
@@ -36,7 +37,7 @@ class EnvioService
     private function inyectarPixelTracking(string $html, string $trackingToken): string
     {
         $pixelUrl = $this->generarUrlPixelTracking($trackingToken);
-        
+
         // Pixel invisible 1x1
         $pixelHtml = sprintf(
             '<img src="%s" width="1" height="1" alt="" style="display:block;width:1px;height:1px;border:0;" />',
@@ -45,36 +46,36 @@ class EnvioService
 
         // Insertar antes del cierre de </body> si existe, o al final
         if (stripos($html, '</body>') !== false) {
-            return str_ireplace('</body>', $pixelHtml . '</body>', $html);
+            return str_ireplace('</body>', $pixelHtml.'</body>', $html);
         }
 
         // Si no hay </body>, agregar al final
-        return $html . $pixelHtml;
+        return $html.$pixelHtml;
     }
 
     /**
      * Reemplaza las URLs en el HTML con URLs de tracking
-     * 
-     * @param string $html HTML del email
-     * @param int $envioId ID del envío
+     *
+     * @param  string  $html  HTML del email
+     * @param  int  $envioId  ID del envío
      * @return string HTML con URLs reemplazadas
      */
     private function reemplazarUrlsConTracking(string $html, int $envioId): string
     {
         $baseUrl = config('app.url', 'http://localhost');
-        
+
         // Patrón para encontrar enlaces <a href="...">
         $pattern = '/<a\s+([^>]*?)href=["\']([^"\']+)["\']([^>]*)>/i';
-        
+
         $html = preg_replace_callback($pattern, function ($matches) use ($envioId, $baseUrl) {
             $beforeHref = $matches[1];
             $url = $matches[2];
             $afterHref = $matches[3];
-            
+
             // No reemplazar:
             // - URLs que ya son de tracking
             // - mailto: links
-            // - tel: links  
+            // - tel: links
             // - URLs internas del sistema
             // - Anchors (#)
             if (
@@ -86,21 +87,21 @@ class EnvioService
             ) {
                 return $matches[0]; // Devolver sin cambios
             }
-            
+
             // Solo procesar URLs http/https válidas
-            if (!str_starts_with($url, 'http://') && !str_starts_with($url, 'https://')) {
+            if (! str_starts_with($url, 'http://') && ! str_starts_with($url, 'https://')) {
                 return $matches[0]; // Devolver sin cambios
             }
-            
+
             // Generar URL de tracking
             $urlId = substr(md5($url), 0, 8);
             $token = base64_encode("{$envioId}_{$urlId}");
             $urlEncoded = base64_encode($url);
             $trackingUrl = "{$baseUrl}/track/click/{$token}?url={$urlEncoded}";
-            
+
             return "<a {$beforeHref}href=\"{$trackingUrl}\"{$afterHref}>";
         }, $html);
-        
+
         return $html;
     }
 
@@ -139,9 +140,11 @@ class EnvioService
     }
 
     /**
-     * Envía emails a prospectos
-     * 
-     * @param bool $esHtml Si es true, envía como HTML; si false, como texto plano
+     * Envía emails a prospectos (modo síncrono - usar solo para volúmenes pequeños)
+     *
+     * @deprecated Use enviarEmailAProspecto() con jobs para volúmenes grandes
+     *
+     * @param  bool  $esHtml  Si es true, envía como HTML; si false, como texto plano
      */
     private function enviarEmail(
         \Illuminate\Support\Collection $prospectosEnFlujo,
@@ -170,81 +173,29 @@ class EnvioService
 
         // Enviar email a cada prospecto usando SMTP de Laravel
         foreach ($prospectosConEmail as $prospectoEnFlujo) {
-            $prospecto = $prospectoEnFlujo->prospecto;
-            $envio = null;
-
             try {
-                $asunto = $template['asunto'] ?? 'Mensaje de Grupo Segal';
-                $contenidoPersonalizado = $this->personalizarContenido($contenido, $prospecto);
+                $result = $this->enviarEmailAProspecto(
+                    prospectoEnFlujo: $prospectoEnFlujo,
+                    contenido: $contenido,
+                    asunto: $template['asunto'] ?? 'Mensaje de Grupo Segal',
+                    flujoId: $flujo?->id,
+                    etapaEjecucionId: $etapaEjecucionId,
+                    esHtml: $esHtml
+                );
 
-                // Generar token de tracking único para este envío
-                $trackingToken = $this->generarTrackingToken();
-
-                // Si es HTML, inyectar el pixel de tracking
-                $contenidoFinal = $contenidoPersonalizado;
-                if ($esHtml) {
-                    $contenidoFinal = $this->inyectarPixelTracking($contenidoPersonalizado, $trackingToken);
-                }
-
-                // Crear registro de envío como pendiente (necesitamos el ID para tracking de clicks)
-                $envio = Envio::create([
-                    'prospecto_id' => $prospecto->id,
-                    'prospecto_en_flujo_id' => $prospectoEnFlujo->id,
-                    'flujo_id' => $flujo?->id,
-                    'etapa_flujo_id' => null,
-                    'flujo_ejecucion_etapa_id' => $etapaEjecucionId,
-                    'asunto' => $asunto,
-                    'contenido_enviado' => $contenidoFinal,
-                    'canal' => 'email',
-                    'destinatario' => $prospecto->email,
-                    'tracking_token' => $trackingToken,
-                    'estado' => 'pendiente',
-                    'fecha_programada' => now(),
-                ]);
-
-                // Si es HTML, reemplazar URLs con URLs de tracking (ahora que tenemos el envio_id)
-                if ($esHtml) {
-                    $contenidoFinal = $this->reemplazarUrlsConTracking($contenidoFinal, $envio->id);
-                    // Actualizar el contenido guardado
-                    $envio->update(['contenido_enviado' => $contenidoFinal]);
-                }
-
-                // Enviar como HTML o texto plano según el tipo de contenido
-                if ($esHtml) {
-                    \Mail::html($contenidoFinal, function ($message) use ($prospecto, $asunto) {
-                        $message->to($prospecto->email, $prospecto->nombre)
-                            ->subject($asunto);
-                    });
+                if ($result['success']) {
+                    $exitosos++;
                 } else {
-                    \Mail::raw($contenidoFinal, function ($message) use ($prospecto, $asunto) {
-                        $message->to($prospecto->email, $prospecto->nombre)
-                            ->subject($asunto);
-                    });
+                    $errores[] = [
+                        'email' => $prospectoEnFlujo->prospecto->email,
+                        'error' => $result['error'],
+                    ];
                 }
-
-                // Marcar como enviado
-                $envio->marcarComoEnviado();
-                $exitosos++;
-
-                Log::info('EnvioService: Email enviado', [
-                    'email' => $prospecto->email,
-                    'envio_id' => $envio->id,
-                ]);
             } catch (\Exception $e) {
-                // Marcar como fallido si existe el registro
-                if ($envio) {
-                    $envio->marcarComoFallido($e->getMessage());
-                }
-
                 $errores[] = [
-                    'email' => $prospecto->email,
+                    'email' => $prospectoEnFlujo->prospecto->email ?? 'unknown',
                     'error' => $e->getMessage(),
                 ];
-
-                Log::error('EnvioService: Error al enviar email', [
-                    'email' => $prospecto->email,
-                    'error' => $e->getMessage(),
-                ]);
             }
         }
 
@@ -268,37 +219,317 @@ class EnvioService
     }
 
     /**
-     * Envía SMS a prospectos
+     * Envía un email a UN SOLO prospecto.
+     *
+     * Este método es el building block para procesamiento en batch.
+     * Incluye: personalización, tracking de aperturas, tracking de clicks.
+     *
+     * @param  \App\Models\ProspectoEnFlujo  $prospectoEnFlujo  El prospecto en flujo
+     * @param  string  $contenido  Contenido del email (puede tener variables)
+     * @param  string  $asunto  Asunto del email
+     * @param  int|null  $flujoId  ID del flujo
+     * @param  int|null  $etapaEjecucionId  ID de la etapa de ejecución
+     * @param  bool  $esHtml  Si el contenido es HTML
+     * @return array{success: bool, envio_id: int|null, error: string|null}
      */
-    private function enviarSms($prospectos, string $contenido): array
-    {
+    public function enviarEmailAProspecto(
+        \App\Models\ProspectoEnFlujo $prospectoEnFlujo,
+        string $contenido,
+        string $asunto,
+        ?int $flujoId = null,
+        ?int $etapaEjecucionId = null,
+        bool $esHtml = false
+    ): array {
+        $prospecto = $prospectoEnFlujo->prospecto;
+
+        if (empty($prospecto->email)) {
+            return [
+                'success' => false,
+                'envio_id' => null,
+                'error' => 'Prospecto no tiene email válido',
+            ];
+        }
+
+        $envio = null;
+
+        try {
+            $contenidoPersonalizado = $this->personalizarContenido($contenido, $prospecto);
+            $trackingToken = $this->generarTrackingToken();
+            $contenidoFinal = $this->prepararContenidoConTracking(
+                $contenidoPersonalizado,
+                $trackingToken,
+                $esHtml
+            );
+
+            $envio = $this->crearRegistroEnvio(
+                prospecto: $prospecto,
+                prospectoEnFlujo: $prospectoEnFlujo,
+                asunto: $asunto,
+                contenido: $contenidoFinal,
+                trackingToken: $trackingToken,
+                flujoId: $flujoId,
+                etapaEjecucionId: $etapaEjecucionId
+            );
+
+            // Si es HTML, agregar tracking de clicks (necesita envio_id)
+            if ($esHtml) {
+                $contenidoFinal = $this->reemplazarUrlsConTracking($contenidoFinal, $envio->id);
+                $envio->update(['contenido_enviado' => $contenidoFinal]);
+            }
+
+            $this->enviarPorSmtp($prospecto, $asunto, $contenidoFinal, $esHtml);
+            $envio->marcarComoEnviado();
+
+            Log::info('EnvioService: Email enviado', [
+                'email' => $prospecto->email,
+                'envio_id' => $envio->id,
+            ]);
+
+            return [
+                'success' => true,
+                'envio_id' => $envio->id,
+                'error' => null,
+            ];
+
+        } catch (\Exception $e) {
+            if ($envio) {
+                $envio->marcarComoFallido($e->getMessage());
+            }
+
+            Log::error('EnvioService: Error al enviar email', [
+                'email' => $prospecto->email ?? 'unknown',
+                'error' => $e->getMessage(),
+            ]);
+
+            return [
+                'success' => false,
+                'envio_id' => $envio?->id,
+                'error' => $e->getMessage(),
+            ];
+        }
+    }
+
+    /**
+     * Prepara el contenido del email con tracking de aperturas
+     */
+    private function prepararContenidoConTracking(
+        string $contenido,
+        string $trackingToken,
+        bool $esHtml
+    ): string {
+        if (! $esHtml) {
+            return $contenido;
+        }
+
+        return $this->inyectarPixelTracking($contenido, $trackingToken);
+    }
+
+    /**
+     * Crea el registro de Envio en la base de datos
+     */
+    private function crearRegistroEnvio(
+        Prospecto $prospecto,
+        \App\Models\ProspectoEnFlujo $prospectoEnFlujo,
+        string $asunto,
+        string $contenido,
+        string $trackingToken,
+        ?int $flujoId,
+        ?int $etapaEjecucionId
+    ): Envio {
+        return Envio::create([
+            'prospecto_id' => $prospecto->id,
+            'prospecto_en_flujo_id' => $prospectoEnFlujo->id,
+            'flujo_id' => $flujoId,
+            'etapa_flujo_id' => null,
+            'flujo_ejecucion_etapa_id' => $etapaEjecucionId,
+            'asunto' => $asunto,
+            'contenido_enviado' => $contenido,
+            'canal' => 'email',
+            'destinatario' => $prospecto->email,
+            'tracking_token' => $trackingToken,
+            'estado' => 'pendiente',
+            'fecha_programada' => now(),
+        ]);
+    }
+
+    /**
+     * Envía el email usando SMTP de Laravel
+     */
+    private function enviarPorSmtp(
+        Prospecto $prospecto,
+        string $asunto,
+        string $contenido,
+        bool $esHtml
+    ): void {
+        if ($esHtml) {
+            \Mail::html($contenido, function ($message) use ($prospecto, $asunto) {
+                $message->to($prospecto->email, $prospecto->nombre)
+                    ->subject($asunto);
+            });
+        } else {
+            \Mail::raw($contenido, function ($message) use ($prospecto, $asunto) {
+                $message->to($prospecto->email, $prospecto->nombre)
+                    ->subject($asunto);
+            });
+        }
+    }
+
+    /**
+     * Envía SMS a prospectos (modo síncrono - usar solo para volúmenes pequeños)
+     *
+     * @deprecated Use enviarSmsAProspecto() con jobs para volúmenes grandes
+     */
+    private function enviarSms(
+        \Illuminate\Support\Collection $prospectosEnFlujo,
+        string $contenido,
+        ?\App\Models\Flujo $flujo = null,
+        ?int $etapaEjecucionId = null
+    ): array {
         // Filtrar solo prospectos con teléfono
-        $prospectosConTelefono = $prospectos->filter(fn ($p) => ! empty($p->telefono));
+        $prospectosConTelefono = $prospectosEnFlujo->filter(function ($pef) {
+            return ! empty($pef->prospecto->telefono);
+        });
 
         if ($prospectosConTelefono->isEmpty()) {
             throw new \Exception('Ningún prospecto tiene teléfono válido');
         }
 
-        // Preparar destinatarios
-        $destinatarios = $prospectosConTelefono->map(function ($prospecto) {
-            return [
-                'telefono' => $prospecto->telefono,
-                'nombre' => $prospecto->nombre,
-            ];
-        })->toArray();
-
-        // Configurar mensaje para AthenaCampaign
-        $config = [
-            'tipo' => 'sms',
-            'destinatarios' => $destinatarios,
-            'contenido' => $contenido,
-        ];
-
         Log::info('EnvioService: Enviando SMS', [
-            'cantidad' => count($destinatarios),
+            'cantidad' => $prospectosConTelefono->count(),
         ]);
 
-        return $this->athenaService->enviarMensaje($config);
+        $exitosos = 0;
+        $errores = [];
+
+        foreach ($prospectosConTelefono as $prospectoEnFlujo) {
+            try {
+                $result = $this->enviarSmsAProspecto(
+                    prospectoEnFlujo: $prospectoEnFlujo,
+                    contenido: $contenido,
+                    flujoId: $flujo?->id,
+                    etapaEjecucionId: $etapaEjecucionId
+                );
+
+                if ($result['success']) {
+                    $exitosos++;
+                } else {
+                    $errores[] = [
+                        'telefono' => $prospectoEnFlujo->prospecto->telefono,
+                        'error' => $result['error'],
+                    ];
+                }
+            } catch (\Exception $e) {
+                $errores[] = [
+                    'telefono' => $prospectoEnFlujo->prospecto->telefono ?? 'unknown',
+                    'error' => $e->getMessage(),
+                ];
+            }
+        }
+
+        $messageId = rand(10000, 99999);
+
+        Log::info('EnvioService: Resumen de envío SMS', [
+            'exitosos' => $exitosos,
+            'errores' => count($errores),
+        ]);
+
+        return [
+            'error' => false,
+            'codigo' => 200,
+            'mensaje' => [
+                'messageID' => $messageId,
+                'Recipients' => $exitosos,
+                'Errores' => count($errores),
+            ],
+        ];
+    }
+
+    /**
+     * Envía un SMS a UN SOLO prospecto.
+     *
+     * Este método es el building block para procesamiento en batch.
+     *
+     * @param  \App\Models\ProspectoEnFlujo  $prospectoEnFlujo  El prospecto en flujo
+     * @param  string  $contenido  Contenido del SMS (puede tener variables)
+     * @param  int|null  $flujoId  ID del flujo
+     * @param  int|null  $etapaEjecucionId  ID de la etapa de ejecución
+     * @return array{success: bool, envio_id: int|null, error: string|null}
+     */
+    public function enviarSmsAProspecto(
+        \App\Models\ProspectoEnFlujo $prospectoEnFlujo,
+        string $contenido,
+        ?int $flujoId = null,
+        ?int $etapaEjecucionId = null
+    ): array {
+        $prospecto = $prospectoEnFlujo->prospecto;
+
+        if (empty($prospecto->telefono)) {
+            return [
+                'success' => false,
+                'envio_id' => null,
+                'error' => 'Prospecto no tiene teléfono válido',
+            ];
+        }
+
+        $envio = null;
+
+        try {
+            $contenidoPersonalizado = $this->personalizarContenido($contenido, $prospecto);
+
+            $envio = Envio::create([
+                'prospecto_id' => $prospecto->id,
+                'prospecto_en_flujo_id' => $prospectoEnFlujo->id,
+                'flujo_id' => $flujoId,
+                'etapa_flujo_id' => null,
+                'flujo_ejecucion_etapa_id' => $etapaEjecucionId,
+                'asunto' => null,
+                'contenido_enviado' => $contenidoPersonalizado,
+                'canal' => 'sms',
+                'destinatario' => $prospecto->telefono,
+                'estado' => 'pendiente',
+                'fecha_programada' => now(),
+            ]);
+
+            // Enviar SMS via AthenaCampaign
+            $response = $this->athenaService->enviarMensaje([
+                'tipo' => 'sms',
+                'destinatarios' => [[
+                    'telefono' => $prospecto->telefono,
+                    'nombre' => $prospecto->nombre,
+                ]],
+                'contenido' => $contenidoPersonalizado,
+            ]);
+
+            $envio->marcarComoEnviado();
+
+            Log::info('EnvioService: SMS enviado', [
+                'telefono' => $prospecto->telefono,
+                'envio_id' => $envio->id,
+            ]);
+
+            return [
+                'success' => true,
+                'envio_id' => $envio->id,
+                'error' => null,
+            ];
+
+        } catch (\Exception $e) {
+            if ($envio) {
+                $envio->marcarComoFallido($e->getMessage());
+            }
+
+            Log::error('EnvioService: Error al enviar SMS', [
+                'telefono' => $prospecto->telefono ?? 'unknown',
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return [
+                'success' => false,
+                'envio_id' => $envio?->id,
+                'error' => $e->getMessage(),
+            ];
+        }
     }
 
     /**

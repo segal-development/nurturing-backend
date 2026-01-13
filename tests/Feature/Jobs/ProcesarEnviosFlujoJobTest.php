@@ -370,4 +370,240 @@ class ProcesarEnviosFlujoJobTest extends TestCase
             return $emailJob->asunto === $asunto && $emailJob->contenido === $contenido;
         });
     }
+
+    // ============================================
+    // TESTS: Volumen masivo (20k+ registros)
+    // ============================================
+
+    /**
+     * @test
+     *
+     * @group volume
+     */
+    public function job_handles_1000_prospectos_efficiently(): void
+    {
+        Bus::fake([EnviarEmailProspectoJob::class]);
+
+        $flujo = Flujo::factory()->porEmail()->create([
+            'tipo_prospecto_id' => $this->tipoProspecto->id,
+            'user_id' => $this->user->id,
+        ]);
+
+        // Crear 1000 prospectos usando insert masivo para performance
+        $prospectos = Prospecto::factory()->count(1000)->create([
+            'tipo_prospecto_id' => $this->tipoProspecto->id,
+        ]);
+
+        foreach ($prospectos as $prospecto) {
+            ProspectoEnFlujo::factory()->porEmail()->pendiente()->create([
+                'flujo_id' => $flujo->id,
+                'prospecto_id' => $prospecto->id,
+            ]);
+        }
+
+        $startTime = microtime(true);
+
+        $job = new ProcesarEnviosFlujoJob($flujo->id);
+        $job->handle();
+
+        $executionTime = microtime(true) - $startTime;
+
+        // Verificar que se crearon todos los jobs
+        Bus::assertBatched(function ($batch) {
+            return $batch->jobs->count() === 1000;
+        });
+
+        // El job debería completarse en menos de 30 segundos
+        $this->assertLessThan(30, $executionTime, "Job took too long: {$executionTime}s");
+    }
+
+    /**
+     * @test
+     *
+     * @group volume
+     */
+    public function job_processes_in_correct_chunk_size(): void
+    {
+        // Verificar que la constante CHUNK_SIZE está configurada correctamente
+        $this->assertEquals(100, ProcesarEnviosFlujoJob::CHUNK_SIZE);
+    }
+
+    /**
+     * @test
+     *
+     * @group volume
+     */
+    public function job_handles_500_prospectos_with_mixed_channels(): void
+    {
+        Bus::fake([EnviarEmailProspectoJob::class, EnviarSmsProspectoJob::class]);
+
+        $flujo = Flujo::factory()->porAmbos()->create([
+            'tipo_prospecto_id' => $this->tipoProspecto->id,
+            'user_id' => $this->user->id,
+        ]);
+
+        // 300 email + 200 sms
+        $prospectosEmail = Prospecto::factory()->count(300)->create([
+            'tipo_prospecto_id' => $this->tipoProspecto->id,
+        ]);
+        $prospectosSms = Prospecto::factory()->count(200)->create([
+            'tipo_prospecto_id' => $this->tipoProspecto->id,
+        ]);
+
+        foreach ($prospectosEmail as $prospecto) {
+            ProspectoEnFlujo::factory()->porEmail()->pendiente()->create([
+                'flujo_id' => $flujo->id,
+                'prospecto_id' => $prospecto->id,
+            ]);
+        }
+
+        foreach ($prospectosSms as $prospecto) {
+            ProspectoEnFlujo::factory()->porSms()->pendiente()->create([
+                'flujo_id' => $flujo->id,
+                'prospecto_id' => $prospecto->id,
+            ]);
+        }
+
+        $job = new ProcesarEnviosFlujoJob($flujo->id);
+        $job->handle();
+
+        Bus::assertBatched(function ($batch) {
+            $emailJobs = $batch->jobs->filter(fn ($job) => $job instanceof EnviarEmailProspectoJob);
+            $smsJobs = $batch->jobs->filter(fn ($job) => $job instanceof EnviarSmsProspectoJob);
+
+            return $emailJobs->count() === 300 && $smsJobs->count() === 200;
+        });
+    }
+
+    /**
+     * @test
+     *
+     * @group volume
+     */
+    public function job_memory_usage_stays_reasonable_for_large_datasets(): void
+    {
+        Bus::fake([EnviarEmailProspectoJob::class]);
+
+        $flujo = Flujo::factory()->porEmail()->create([
+            'tipo_prospecto_id' => $this->tipoProspecto->id,
+            'user_id' => $this->user->id,
+        ]);
+
+        // Crear 500 prospectos
+        $prospectos = Prospecto::factory()->count(500)->create([
+            'tipo_prospecto_id' => $this->tipoProspecto->id,
+        ]);
+
+        foreach ($prospectos as $prospecto) {
+            ProspectoEnFlujo::factory()->porEmail()->pendiente()->create([
+                'flujo_id' => $flujo->id,
+                'prospecto_id' => $prospecto->id,
+            ]);
+        }
+
+        $memoryBefore = memory_get_usage(true);
+
+        $job = new ProcesarEnviosFlujoJob($flujo->id);
+        $job->handle();
+
+        $memoryAfter = memory_get_usage(true);
+        $memoryUsedMB = ($memoryAfter - $memoryBefore) / 1024 / 1024;
+
+        // No debería usar más de 50MB adicionales para 500 prospectos
+        $this->assertLessThan(50, $memoryUsedMB, "Memory usage too high: {$memoryUsedMB}MB");
+
+        Bus::assertBatched(function ($batch) {
+            return $batch->jobs->count() === 500;
+        });
+    }
+
+    /**
+     * @test
+     */
+    public function job_batch_is_named_correctly(): void
+    {
+        Bus::fake([EnviarEmailProspectoJob::class]);
+
+        $flujo = Flujo::factory()->porEmail()->create([
+            'tipo_prospecto_id' => $this->tipoProspecto->id,
+            'user_id' => $this->user->id,
+            'nombre' => 'Mi Flujo de Prueba',
+        ]);
+
+        $prospecto = Prospecto::factory()->create([
+            'tipo_prospecto_id' => $this->tipoProspecto->id,
+        ]);
+
+        ProspectoEnFlujo::factory()->porEmail()->pendiente()->create([
+            'flujo_id' => $flujo->id,
+            'prospecto_id' => $prospecto->id,
+        ]);
+
+        $job = new ProcesarEnviosFlujoJob($flujo->id);
+        $job->handle();
+
+        Bus::assertBatched(function ($batch) use ($flujo) {
+            return str_contains($batch->name, "Flujo {$flujo->id}");
+        });
+    }
+
+    /**
+     * @test
+     */
+    public function job_dispatches_to_envios_queue(): void
+    {
+        Bus::fake([EnviarEmailProspectoJob::class]);
+
+        $flujo = Flujo::factory()->porEmail()->create([
+            'tipo_prospecto_id' => $this->tipoProspecto->id,
+            'user_id' => $this->user->id,
+        ]);
+
+        $prospecto = Prospecto::factory()->create([
+            'tipo_prospecto_id' => $this->tipoProspecto->id,
+        ]);
+
+        ProspectoEnFlujo::factory()->porEmail()->pendiente()->create([
+            'flujo_id' => $flujo->id,
+            'prospecto_id' => $prospecto->id,
+        ]);
+
+        $job = new ProcesarEnviosFlujoJob($flujo->id);
+        $job->handle();
+
+        Bus::assertBatched(function ($batch) {
+            // El batch debería estar en la cola 'envios'
+            return ($batch->options['queue'] ?? null) === 'envios';
+        });
+    }
+
+    /**
+     * @test
+     */
+    public function job_allows_failures_in_batch(): void
+    {
+        Bus::fake([EnviarEmailProspectoJob::class]);
+
+        $flujo = Flujo::factory()->porEmail()->create([
+            'tipo_prospecto_id' => $this->tipoProspecto->id,
+            'user_id' => $this->user->id,
+        ]);
+
+        $prospecto = Prospecto::factory()->create([
+            'tipo_prospecto_id' => $this->tipoProspecto->id,
+        ]);
+
+        ProspectoEnFlujo::factory()->porEmail()->pendiente()->create([
+            'flujo_id' => $flujo->id,
+            'prospecto_id' => $prospecto->id,
+        ]);
+
+        $job = new ProcesarEnviosFlujoJob($flujo->id);
+        $job->handle();
+
+        Bus::assertBatched(function ($batch) {
+            // El batch debería permitir fallos (allowFailures)
+            return $batch->allowsFailures();
+        });
+    }
 }
