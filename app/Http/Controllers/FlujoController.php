@@ -323,7 +323,7 @@ class FlujoController extends Controller
     public function progreso(Flujo $flujo): JsonResponse
     {
         $progreso = $flujo->metadata['progreso'] ?? null;
-        $estado = $flujo->estado_procesamiento ?? 'pendiente';
+        $estadoBD = $flujo->estado_procesamiento ?? 'pendiente';
 
         // Si no hay progreso y estado es pendiente/completado, generar respuesta simple
         if ($progreso === null) {
@@ -332,9 +332,9 @@ class FlujoController extends Controller
             return response()->json([
                 'data' => [
                     'flujo_id' => $flujo->id,
-                    'estado' => $estado,
+                    'estado' => $estadoBD,
                     'en_proceso' => false,
-                    'completado' => $estado === 'completado',
+                    'completado' => $estadoBD === 'completado',
                     'progreso' => [
                         'procesados' => $totalProspectos,
                         'total' => $totalProspectos,
@@ -342,6 +342,22 @@ class FlujoController extends Controller
                     ],
                 ],
             ]);
+        }
+
+        // INTELIGENTE: Determinar estado real basado en actividad, no solo el campo de BD
+        // Esto maneja el caso donde el job se reintenta pero el estado quedó "fallido"
+        $porcentaje = $progreso['porcentaje'] ?? 0;
+        $ultimaActualizacion = isset($progreso['ultima_actualizacion'])
+            ? \Carbon\Carbon::parse($progreso['ultima_actualizacion'])
+            : null;
+        $tieneActividadReciente = $ultimaActualizacion && $ultimaActualizacion->diffInMinutes(now()) < 5;
+
+        // Si porcentaje < 100 y hay actividad en los últimos 5 min, está procesando
+        // aunque la BD diga "fallido" (puede ser un reintento en curso)
+        if ($porcentaje < 100 && $tieneActividadReciente && $estadoBD === 'fallido') {
+            $estado = 'procesando';
+        } else {
+            $estado = $estadoBD;
         }
 
         $enProceso = $estado === 'procesando';
