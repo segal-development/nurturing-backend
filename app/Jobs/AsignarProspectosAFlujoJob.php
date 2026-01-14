@@ -71,8 +71,12 @@ class AsignarProspectosAFlujoJob implements ShouldQueue
                 $intentos++;
 
                 try {
-                    // Reconectar antes de cada chunk para evitar timeouts de Cloud SQL
-                    DB::reconnect();
+                    // Solo reconectar en reintentos (no en el primer intento)
+                    // Esto evita agotar el pool de conexiones en instancias pequeñas
+                    if ($intentos > 1) {
+                        DB::reconnect();
+                        sleep(1); // Pequeña pausa antes de reintentar
+                    }
 
                     $data = array_map(function ($prospectoId) use ($inicioTimestamp) {
                         return [
@@ -92,14 +96,17 @@ class AsignarProspectosAFlujoJob implements ShouldQueue
                     $totalProcesados += count($chunk);
                     $chunkProcesado = true;
 
-                    // Actualizar progreso en cada chunk
-                    $this->actualizarProgreso(
-                        $totalProcesados,
-                        $totalProspectos,
-                        $totalChunks,
-                        $chunkActual,
-                        $inicioTimestamp
-                    );
+                    // Actualizar progreso cada 5 chunks para no saturar la BD
+                    // En datasets grandes (150+ chunks) esto reduce queries de 150 a 30
+                    if ($chunkActual % 5 === 0 || $chunkActual === $totalChunks) {
+                        $this->actualizarProgreso(
+                            $totalProcesados,
+                            $totalProspectos,
+                            $totalChunks,
+                            $chunkActual,
+                            $inicioTimestamp
+                        );
+                    }
 
                     Log::info('📊 Chunk procesado', [
                         'flujo_id' => $this->flujo->id,
