@@ -52,6 +52,12 @@ class AsignarProspectosAFlujoJob implements ShouldQueue
 
         $inicioTimestamp = now();
 
+        // IMPORTANTE: Resetear estado a "procesando" al iniciar/reiniciar el job
+        // Esto maneja el caso donde Laravel reintenta el job después de un fallo
+        // y el estado quedó como "fallido" del intento anterior
+        $this->flujo->refresh();
+        $this->flujo->update(['estado_procesamiento' => 'procesando']);
+
         Log::info('🚀 Iniciando asignación de prospectos', [
             'flujo_id' => $this->flujo->id,
             'total_prospectos' => $totalProspectos,
@@ -91,7 +97,8 @@ class AsignarProspectosAFlujoJob implements ShouldQueue
                         ];
                     }, $chunk);
 
-                    ProspectoEnFlujo::insert($data);
+                    // insertOrIgnore para manejar reintentos del job sin duplicados
+                    ProspectoEnFlujo::insertOrIgnore($data);
 
                     $totalProcesados += count($chunk);
                     $chunkProcesado = true;
