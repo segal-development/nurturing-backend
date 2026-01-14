@@ -688,8 +688,10 @@ class FlujoController extends Controller
 
         // Umbral para procesamiento async: más de 100 prospectos
         if ($totalProspectos > 100) {
-            // Procesar en background
-            \App\Jobs\AsignarProspectosAFlujoJob::dispatch($flujo, $prospectoIds, $canalAsignado);
+            // Procesar en background - afterCommit() espera a que la transacción termine
+            // para evitar race condition donde el job busca un flujo que aún no existe
+            \App\Jobs\AsignarProspectosAFlujoJob::dispatch($flujo, $prospectoIds, $canalAsignado)
+                ->afterCommit();
 
             // Marcar flujo como "procesando"
             $flujo->update(['estado_procesamiento' => 'procesando']);
