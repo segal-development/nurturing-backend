@@ -4,18 +4,25 @@ namespace App\Jobs;
 
 use App\Models\Flujo;
 use App\Models\ProspectoEnFlujo;
+use Illuminate\Contracts\Queue\ShouldBeUniqueUntilProcessing;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
-class AsignarProspectosAFlujoJob implements ShouldQueue
+class AsignarProspectosAFlujoJob implements ShouldQueue, ShouldBeUniqueUntilProcessing
 {
     use Queueable;
 
     public int $timeout = 1800; // 30 minutos para datasets grandes (300k+)
 
     public int $tries = 3; // 3 intentos en caso de fallo
+
+    /**
+     * Tiempo en segundos que el job se considera único.
+     * Previene duplicados si alguien intenta crear el mismo flujo múltiples veces.
+     */
+    public int $uniqueFor = 3600; // 1 hora
 
     /**
      * Número de registros por chunk.
@@ -36,6 +43,14 @@ class AsignarProspectosAFlujoJob implements ShouldQueue
         public array $prospectoIds,
         public string $canalAsignado
     ) {}
+
+    /**
+     * ID único para prevenir jobs duplicados del mismo flujo.
+     */
+    public function uniqueId(): string
+    {
+        return 'flujo-asignacion-'.$this->flujo->id;
+    }
 
     /**
      * Execute the job.
@@ -237,14 +252,29 @@ class AsignarProspectosAFlujoJob implements ShouldQueue
 
     /**
      * Handle a job failure.
+     * Solo se llama después de agotar todos los reintentos (tries).
      */
     public function failed(\Throwable $exception): void
     {
         Log::error('❌ Error al asignar prospectos al flujo', [
             'flujo_id' => $this->flujo->id,
+            'intento' => $this->attempts(),
+            'max_intentos' => $this->tries,
             'error' => $exception->getMessage(),
             'trace' => $exception->getTraceAsString(),
         ]);
+
+        // Refrescar para obtener el estado actual de la BD
+        $this->flujo->refresh();
+
+        // No sobrescribir si ya está completado (otro proceso pudo haberlo completado)
+        if ($this->flujo->estado_procesamiento === 'completado') {
+            Log::info('⚠️ Flujo ya completado, no marcando como fallido', [
+                'flujo_id' => $this->flujo->id,
+            ]);
+
+            return;
+        }
 
         // Marcar el flujo como fallido
         $this->flujo->update([
@@ -253,6 +283,7 @@ class AsignarProspectosAFlujoJob implements ShouldQueue
                 'error' => [
                     'mensaje' => $exception->getMessage(),
                     'fecha' => now()->toISOString(),
+                    'intento_final' => $this->attempts(),
                 ],
             ]),
         ]);
