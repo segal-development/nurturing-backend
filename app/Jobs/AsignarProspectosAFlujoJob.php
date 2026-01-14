@@ -6,15 +6,27 @@ use App\Models\Flujo;
 use App\Models\ProspectoEnFlujo;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 class AsignarProspectosAFlujoJob implements ShouldQueue
 {
     use Queueable;
 
-    public int $timeout = 600; // 10 minutos de timeout
+    public int $timeout = 1800; // 30 minutos para datasets grandes (300k+)
 
     public int $tries = 3; // 3 intentos en caso de fallo
+
+    /**
+     * Número de registros por chunk.
+     * 2000 es un buen balance entre velocidad y uso de memoria.
+     */
+    private const CHUNK_SIZE = 2000;
+
+    /**
+     * Máximo de reintentos por chunk individual.
+     */
+    private const MAX_CHUNK_RETRIES = 3;
 
     /**
      * Create a new job instance.
@@ -28,13 +40,13 @@ class AsignarProspectosAFlujoJob implements ShouldQueue
     /**
      * Execute the job.
      * Procesa la asignación de prospectos en chunks para optimizar memoria y performance.
+     * Reconecta a la BD entre chunks para evitar timeouts en Cloud SQL con datasets grandes.
      * Actualiza el progreso en cada chunk para que el frontend pueda mostrarlo.
      */
     public function handle(): void
     {
-        $chunkSize = 1000;
         $totalProspectos = count($this->prospectoIds);
-        $chunks = array_chunk($this->prospectoIds, $chunkSize);
+        $chunks = array_chunk($this->prospectoIds, self::CHUNK_SIZE);
         $totalChunks = count($chunks);
         $totalProcesados = 0;
 
@@ -44,46 +56,86 @@ class AsignarProspectosAFlujoJob implements ShouldQueue
             'flujo_id' => $this->flujo->id,
             'total_prospectos' => $totalProspectos,
             'chunks' => $totalChunks,
+            'chunk_size' => self::CHUNK_SIZE,
         ]);
 
         // Inicializar progreso en metadata
         $this->actualizarProgreso(0, $totalProspectos, $totalChunks, 0, $inicioTimestamp);
 
         foreach ($chunks as $index => $chunk) {
-            $data = array_map(function ($prospectoId) use ($inicioTimestamp) {
-                return [
-                    'flujo_id' => $this->flujo->id,
-                    'prospecto_id' => $prospectoId,
-                    'canal_asignado' => $this->canalAsignado,
-                    'estado' => 'pendiente',
-                    'etapa_actual_id' => null,
-                    'fecha_inicio' => $inicioTimestamp,
-                    'created_at' => $inicioTimestamp,
-                    'updated_at' => $inicioTimestamp,
-                ];
-            }, $chunk);
-
-            ProspectoEnFlujo::insert($data);
-
-            $totalProcesados += count($chunk);
             $chunkActual = $index + 1;
+            $chunkProcesado = false;
+            $intentos = 0;
 
-            // Actualizar progreso en cada chunk
-            $this->actualizarProgreso(
-                $totalProcesados,
-                $totalProspectos,
-                $totalChunks,
-                $chunkActual,
-                $inicioTimestamp
-            );
+            while (! $chunkProcesado && $intentos < self::MAX_CHUNK_RETRIES) {
+                $intentos++;
 
-            Log::info('📊 Chunk procesado', [
-                'flujo_id' => $this->flujo->id,
-                'chunk' => $chunkActual,
-                'total_chunks' => $totalChunks,
-                'procesados' => $totalProcesados,
-                'porcentaje' => round(($totalProcesados / $totalProspectos) * 100, 2),
-            ]);
+                try {
+                    // Reconectar antes de cada chunk para evitar timeouts de Cloud SQL
+                    DB::reconnect();
+
+                    $data = array_map(function ($prospectoId) use ($inicioTimestamp) {
+                        return [
+                            'flujo_id' => $this->flujo->id,
+                            'prospecto_id' => $prospectoId,
+                            'canal_asignado' => $this->canalAsignado,
+                            'estado' => 'pendiente',
+                            'etapa_actual_id' => null,
+                            'fecha_inicio' => $inicioTimestamp,
+                            'created_at' => $inicioTimestamp,
+                            'updated_at' => $inicioTimestamp,
+                        ];
+                    }, $chunk);
+
+                    ProspectoEnFlujo::insert($data);
+
+                    $totalProcesados += count($chunk);
+                    $chunkProcesado = true;
+
+                    // Actualizar progreso en cada chunk
+                    $this->actualizarProgreso(
+                        $totalProcesados,
+                        $totalProspectos,
+                        $totalChunks,
+                        $chunkActual,
+                        $inicioTimestamp
+                    );
+
+                    Log::info('📊 Chunk procesado', [
+                        'flujo_id' => $this->flujo->id,
+                        'chunk' => $chunkActual,
+                        'total_chunks' => $totalChunks,
+                        'procesados' => $totalProcesados,
+                        'porcentaje' => round(($totalProcesados / $totalProspectos) * 100, 2),
+                    ]);
+
+                } catch (\Throwable $e) {
+                    Log::warning('⚠️ Error en chunk, reintentando...', [
+                        'flujo_id' => $this->flujo->id,
+                        'chunk' => $chunkActual,
+                        'intento' => $intentos,
+                        'max_intentos' => self::MAX_CHUNK_RETRIES,
+                        'error' => $e->getMessage(),
+                    ]);
+
+                    // Esperar antes de reintentar (backoff exponencial)
+                    if ($intentos < self::MAX_CHUNK_RETRIES) {
+                        sleep(pow(2, $intentos)); // 2s, 4s, 8s
+                    }
+                }
+            }
+
+            // Si después de todos los intentos no se procesó, lanzar excepción
+            if (! $chunkProcesado) {
+                throw new \RuntimeException(
+                    "Chunk {$chunkActual} falló después de ".self::MAX_CHUNK_RETRIES.' intentos'
+                );
+            }
+
+            // Liberar memoria cada 10 chunks en datasets muy grandes
+            if ($chunkActual % 10 === 0) {
+                gc_collect_cycles();
+            }
         }
 
         // Finalizar con estado completado
