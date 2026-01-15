@@ -125,3 +125,19 @@ Schedule::command('queue:work --stop-when-empty --tries=1 --timeout=0 --max-jobs
       // Solo ejecutar si hay jobs en cola
       return DB::table('jobs')->exists();
   });
+
+// ============================================================================
+// AGREGACIÓN MENSUAL DE ENVÍOS
+// El día 1 de cada mes a las 3:00 AM, agrega estadísticas del mes anterior.
+// Esto pre-calcula totales para evitar COUNT(*) sobre millones de registros.
+// ============================================================================
+Schedule::command('envios:agregar-mensuales')
+  ->monthlyOn(1, '03:00')
+  ->name('envios:agregar-mensuales')
+  ->withoutOverlapping()
+  ->onSuccess(function () {
+      Log::info('Scheduler: Agregación mensual de envíos completada');
+  })
+  ->onFailure(function () {
+      Log::error('Scheduler: Falló la agregación mensual de envíos');
+  });
