@@ -676,57 +676,98 @@ class FlujoController extends Controller
 
     /**
      * Asigna los prospectos al flujo con el canal correspondiente.
-     * Para grandes volúmenes (>100), despacha un Job en background.
+     *
+     * Para grandes volúmenes o cuando se selecciona "todos del origen",
+     * despacha un Job en background usando criterios de query en lugar de IDs.
+     * Esto permite procesar millones de prospectos sin problemas de memoria.
      *
      * @return array{total: int, email: int, sms: int, is_async: bool}
      */
     private function asignarProspectosAlFlujo(Flujo $flujo, array $prospectoIds, CanalEnvio $canalEnvio, bool $selectAllFromOrigin = false): array
     {
         $conteo = ['total' => 0, 'email' => 0, 'sms' => 0, 'is_async' => false];
+        $canalAsignado = $this->determinarCanalParaProspectos($canalEnvio);
 
-        // Si se solicita seleccionar todos del origen, buscarlos automáticamente
+        // CASO 1: Seleccionar todos del origen → Usar Job con criterios (NO cargar IDs)
         if ($selectAllFromOrigin) {
-            $query = Prospecto::query()
-                ->whereHas('importacion', function ($query) use ($flujo) {
-                    $query->where('origen', $flujo->origen);
-                });
-
-            // Si el tipo NO es "Todos", filtrar por tipo específico
-            // Si es "Todos", no aplicar filtro de tipo (incluir todos los prospectos)
-            $tipoProspecto = $flujo->tipoProspecto;
-            if ($tipoProspecto && !$tipoProspecto->esTipoTodos()) {
-                $query->where('tipo_prospecto_id', $flujo->tipo_prospecto_id);
-            }
-
-            $prospectoIds = $query->pluck('id')->toArray();
+            return $this->asignarProspectosAsync($flujo, $canalAsignado, $selectAllFromOrigin);
         }
 
+        // CASO 2: IDs específicos seleccionados manualmente
         if (empty($prospectoIds)) {
             return $conteo;
         }
 
-        $canalAsignado = $this->determinarCanalParaProspectos($canalEnvio);
         $totalProspectos = count($prospectoIds);
 
-        // Umbral para procesamiento async: más de 100 prospectos
+        // Si son más de 100, procesar async
         if ($totalProspectos > 100) {
-            // Procesar en background - afterCommit() espera a que la transacción termine
-            // para evitar race condition donde el job busca un flujo que aún no existe
-            \App\Jobs\AsignarProspectosAFlujoJob::dispatch($flujo, $prospectoIds, $canalAsignado)
-                ->afterCommit();
-
-            // Marcar flujo como "procesando"
-            $flujo->update(['estado_procesamiento' => 'procesando']);
-
-            // Retornar conteo estimado
-            $conteo['total'] = $totalProspectos;
-            $conteo[$canalAsignado] = $totalProspectos;
-            $conteo['is_async'] = true;
-
-            return $conteo;
+            return $this->asignarProspectosAsyncConIds($flujo, $prospectoIds, $canalAsignado);
         }
 
-        // Procesamiento síncrono para cantidades pequeñas
+        // Procesamiento síncrono para cantidades pequeñas (<= 100)
+        return $this->asignarProspectosSync($flujo, $prospectoIds, $canalAsignado);
+    }
+
+    /**
+     * Asigna prospectos de forma asíncrona usando criterios (sin cargar IDs en memoria).
+     * Ideal para "seleccionar todos del origen" con cientos de miles de prospectos.
+     */
+    private function asignarProspectosAsync(Flujo $flujo, string $canalAsignado, bool $selectAllFromOrigin): array
+    {
+        // Crear criterios de selección (el Job construirá la query)
+        $criterios = \App\DTOs\CriteriosSeleccionProspectos::fromFlujoSelectAll($flujo);
+
+        // Obtener conteo estimado SIN cargar IDs en memoria
+        $totalEstimado = $this->contarProspectosPorCriterios($flujo);
+
+        if ($totalEstimado === 0) {
+            return ['total' => 0, 'email' => 0, 'sms' => 0, 'is_async' => false];
+        }
+
+        // Despachar Job con criterios (payload liviano)
+        \App\Jobs\AsignarProspectosAFlujoJob::dispatch($flujo, $criterios, $canalAsignado)
+            ->afterCommit();
+
+        $flujo->update(['estado_procesamiento' => 'procesando']);
+
+        return [
+            'total' => $totalEstimado,
+            'email' => $canalAsignado === 'email' ? $totalEstimado : 0,
+            'sms' => $canalAsignado === 'sms' ? $totalEstimado : 0,
+            'is_async' => true,
+        ];
+    }
+
+    /**
+     * Asigna prospectos de forma asíncrona con IDs específicos.
+     * Para selecciones manuales grandes (100-10000 prospectos).
+     */
+    private function asignarProspectosAsyncConIds(Flujo $flujo, array $prospectoIds, string $canalAsignado): array
+    {
+        $criterios = \App\DTOs\CriteriosSeleccionProspectos::fromProspectoIds($prospectoIds);
+        $totalProspectos = count($prospectoIds);
+
+        \App\Jobs\AsignarProspectosAFlujoJob::dispatch($flujo, $criterios, $canalAsignado)
+            ->afterCommit();
+
+        $flujo->update(['estado_procesamiento' => 'procesando']);
+
+        return [
+            'total' => $totalProspectos,
+            'email' => $canalAsignado === 'email' ? $totalProspectos : 0,
+            'sms' => $canalAsignado === 'sms' ? $totalProspectos : 0,
+            'is_async' => true,
+        ];
+    }
+
+    /**
+     * Asigna prospectos de forma síncrona (para cantidades pequeñas).
+     */
+    private function asignarProspectosSync(Flujo $flujo, array $prospectoIds, string $canalAsignado): array
+    {
+        $conteo = ['total' => 0, 'email' => 0, 'sms' => 0, 'is_async' => false];
+
         foreach ($prospectoIds as $prospectoId) {
             ProspectoEnFlujo::create([
                 'flujo_id' => $flujo->id,
@@ -744,6 +785,25 @@ class FlujoController extends Controller
         $flujo->update(['estado_procesamiento' => 'completado']);
 
         return $conteo;
+    }
+
+    /**
+     * Cuenta prospectos según criterios del flujo SIN cargar IDs.
+     */
+    private function contarProspectosPorCriterios(Flujo $flujo): int
+    {
+        $query = Prospecto::query()
+            ->whereHas('importacion', function ($q) use ($flujo) {
+                $q->where('origen', $flujo->origen);
+            });
+
+        // Solo filtrar por tipo si no es "Todos"
+        $tipoProspecto = $flujo->tipoProspecto;
+        if ($tipoProspecto && !$tipoProspecto->esTipoTodos()) {
+            $query->where('tipo_prospecto_id', $flujo->tipo_prospecto_id);
+        }
+
+        return $query->count();
     }
 
     /**
