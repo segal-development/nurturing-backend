@@ -141,3 +141,20 @@ Schedule::command('envios:agregar-mensuales')
   ->onFailure(function () {
       Log::error('Scheduler: Falló la agregación mensual de envíos');
   });
+
+// ============================================================================
+// LIMPIEZA MENSUAL DE DATOS
+// El día 1 de cada mes a las 5:00 AM (después de agregación).
+// Archiva prospectos inactivos y elimina envíos/registros viejos.
+// Política de retención: 3 meses.
+// ============================================================================
+Schedule::command('datos:limpiar --ejecutar')
+  ->monthlyOn(1, '05:00')
+  ->name('datos:limpiar')
+  ->withoutOverlapping()
+  ->onSuccess(function () {
+      Log::info('Scheduler: Limpieza mensual completada');
+  })
+  ->onFailure(function () {
+      Log::error('Scheduler: Falló la limpieza mensual');
+  });

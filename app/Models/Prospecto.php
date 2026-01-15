@@ -65,6 +65,16 @@ class Prospecto extends Model
         return $query->where('estado', 'inactivo');
     }
 
+    public function scopeArchivados($query)
+    {
+        return $query->where('estado', 'archivado');
+    }
+
+    public function scopeNoArchivados($query)
+    {
+        return $query->where('estado', '!=', 'archivado');
+    }
+
     public function scopeConvertidos($query)
     {
         return $query->where('estado', 'convertido');
@@ -90,6 +100,11 @@ class Prospecto extends Model
     public function isConvertido(): bool
     {
         return $this->estado === 'convertido';
+    }
+
+    public function isArchivado(): bool
+    {
+        return $this->estado === 'archivado';
     }
 
     public function getOrigenAttribute(): ?string
