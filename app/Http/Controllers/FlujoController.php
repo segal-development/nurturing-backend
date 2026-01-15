@@ -686,13 +686,19 @@ class FlujoController extends Controller
 
         // Si se solicita seleccionar todos del origen, buscarlos automáticamente
         if ($selectAllFromOrigin) {
-            $prospectoIds = Prospecto::query()
-                ->where('tipo_prospecto_id', $flujo->tipo_prospecto_id)
+            $query = Prospecto::query()
                 ->whereHas('importacion', function ($query) use ($flujo) {
                     $query->where('origen', $flujo->origen);
-                })
-                ->pluck('id')
-                ->toArray();
+                });
+
+            // Si el tipo NO es "Todos", filtrar por tipo específico
+            // Si es "Todos", no aplicar filtro de tipo (incluir todos los prospectos)
+            $tipoProspecto = $flujo->tipoProspecto;
+            if ($tipoProspecto && !$tipoProspecto->esTipoTodos()) {
+                $query->where('tipo_prospecto_id', $flujo->tipo_prospecto_id);
+            }
+
+            $prospectoIds = $query->pluck('id')->toArray();
         }
 
         if (empty($prospectoIds)) {

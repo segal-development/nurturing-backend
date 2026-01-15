@@ -10,6 +10,12 @@ class TipoProspecto extends Model
 {
     use HasFactory;
 
+    /**
+     * Nombre del tipo especial que representa "todos los tipos".
+     * Este tipo se usa para flujos que incluyen prospectos sin filtrar por deuda.
+     */
+    public const TIPO_TODOS = 'Todos';
+
     protected $table = 'tipo_prospecto';
 
     protected $fillable = [
@@ -68,5 +74,21 @@ class TipoProspecto extends Model
             ->ordenados()
             ->get()
             ->first(fn ($tipo) => $tipo->enRango($monto));
+    }
+
+    /**
+     * Verifica si este tipo es el tipo especial "Todos".
+     */
+    public function esTipoTodos(): bool
+    {
+        return strtolower($this->nombre) === strtolower(self::TIPO_TODOS);
+    }
+
+    /**
+     * Obtiene el tipo "Todos" de la base de datos.
+     */
+    public static function getTipoTodos(): ?self
+    {
+        return self::where('nombre', self::TIPO_TODOS)->first();
     }
 }
