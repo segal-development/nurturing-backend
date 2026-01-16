@@ -2,6 +2,7 @@
 
 namespace App\Jobs\Middleware;
 
+use App\Events\CircuitBreakerOpened;
 use Closure;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
@@ -209,15 +210,31 @@ class RateLimitedMiddleware
     {
         $circuitKey = "envio-circuit:{$this->channel}";
         $recoveryTime = config('envios.circuit_breaker.recovery_time', 60);
+        $threshold = config('envios.circuit_breaker.failure_threshold', 10);
+        $failureKey = "envio-failures:{$this->channel}";
+        $failures = (int) Cache::get($failureKey, 0);
 
+        // Store opened_at for monitoring
+        Cache::put("circuit_breaker:{$this->channel}:opened_at", now()->toIso8601String(), $recoveryTime);
+        Cache::put("circuit_breaker:{$this->channel}:failures", $failures, $recoveryTime);
         Cache::put($circuitKey, 'open', $recoveryTime);
 
         if (config('envios.monitoring.log_circuit_breaker', true)) {
             Log::error("RateLimitedMiddleware: Circuit breaker OPENED", [
                 'channel' => $this->channel,
+                'failures' => $failures,
+                'threshold' => $threshold,
                 'recovery_time' => $recoveryTime,
             ]);
         }
+
+        // Dispatch event for notifications
+        CircuitBreakerOpened::dispatch(
+            $this->channel,
+            $failures,
+            $threshold,
+            $recoveryTime
+        );
     }
 
     /**

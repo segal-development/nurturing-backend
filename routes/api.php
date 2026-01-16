@@ -9,6 +9,7 @@ use App\Http\Controllers\FlujoController;
 use App\Http\Controllers\FlujoEjecucionController;
 use App\Http\Controllers\ImportacionController;
 use App\Http\Controllers\LoteController;
+use App\Http\Controllers\MonitoreoController;
 use App\Http\Controllers\PlantillaController;
 use App\Http\Controllers\ProspectoController;
 use App\Http\Controllers\TestingController;
@@ -113,5 +114,17 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/condiciones-evaluadas/{flujoEjecucionId}', [TestingController::class, 'condicionesEvaluadas']);
         Route::get('/etapas-ejecucion/{flujoEjecucionId}', [TestingController::class, 'etapasEjecucion']);
         Route::get('/jobs/{flujoEjecucionId}', [TestingController::class, 'jobsEjecucion']);
+    });
+
+    // Rutas de Monitoreo del sistema de colas
+    Route::prefix('monitoreo')->group(function () {
+        Route::get('/dashboard', [MonitoreoController::class, 'dashboard']);
+        Route::get('/queue', [MonitoreoController::class, 'queueStatus']);
+        Route::get('/circuit-breaker', [MonitoreoController::class, 'circuitBreakerStatus']);
+        Route::post('/circuit-breaker/reset', [MonitoreoController::class, 'resetCircuitBreaker']);
+        Route::get('/rate-limits', [MonitoreoController::class, 'rateLimitStatus']);
+        Route::get('/health', [MonitoreoController::class, 'health']);
+        Route::post('/queue/retry-failed', [MonitoreoController::class, 'retryFailedJobs']);
+        Route::delete('/queue/failed', [MonitoreoController::class, 'clearFailedJobs']);
     });
 });

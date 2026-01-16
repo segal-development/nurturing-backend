@@ -127,4 +127,21 @@ return [
         'metrics_channel' => env('ENVIO_METRICS_CHANNEL', null),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Alerts Configuration
+    |--------------------------------------------------------------------------
+    |
+    | Configure external alerting when critical events occur.
+    |
+    */
+
+    'alerts' => [
+        // Slack webhook URL for critical alerts
+        'slack_webhook' => env('ENVIO_ALERT_SLACK_WEBHOOK', null),
+
+        // Email address for critical alerts
+        'email' => env('ENVIO_ALERT_EMAIL', null),
+    ],
+
 ];
