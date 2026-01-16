@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Jobs\Middleware\RateLimitedMiddleware;
 use App\Models\ProspectoEnFlujo;
 use App\Services\EnvioService;
 use Illuminate\Bus\Batchable;
@@ -16,9 +17,10 @@ use Illuminate\Support\Facades\Log;
  * para manejar grandes volúmenes de prospectos (20k-350k+) sin timeout.
  *
  * Características:
+ * - Rate limiting via RateLimitedMiddleware (configurable en config/envios.php)
+ * - Circuit breaker para manejar fallos del proveedor SMS
  * - Usa el trait Batchable para integrarse con Bus::batch()
  * - Reintentos automáticos con backoff exponencial
- * - Manejo robusto de errores
  */
 class EnviarSmsEtapaProspectoJob implements ShouldQueue
 {
@@ -27,12 +29,17 @@ class EnviarSmsEtapaProspectoJob implements ShouldQueue
     /**
      * The number of times the job may be attempted.
      */
-    public int $tries = 3;
+    public int $tries;
 
     /**
      * The number of seconds to wait before retrying the job.
      */
-    public int $backoff = 30;
+    public array $backoff;
+
+    /**
+     * Job timeout in seconds.
+     */
+    public int $timeout;
 
     /**
      * Create a new job instance.
@@ -42,7 +49,24 @@ class EnviarSmsEtapaProspectoJob implements ShouldQueue
         public string $contenido,
         public ?int $flujoId = null,
         public ?int $etapaEjecucionId = null
-    ) {}
+    ) {
+        // Load configuration from config/envios.php
+        $this->tries = config('envios.queue.tries', 3);
+        $this->backoff = config('envios.queue.backoff', [30, 60, 120]);
+        $this->timeout = config('envios.queue.timeout', 60);
+    }
+
+    /**
+     * Get the middleware the job should pass through.
+     *
+     * @return array<int, object>
+     */
+    public function middleware(): array
+    {
+        return [
+            new RateLimitedMiddleware('sms'),
+        ];
+    }
 
     /**
      * Execute the job.

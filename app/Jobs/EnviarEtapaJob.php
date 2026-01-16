@@ -237,7 +237,10 @@ class EnviarEtapaJob implements ShouldQueue
     }
 
     /**
-     * Dispatch the batch with callbacks for completion and errors
+     * Dispatch the batch with callbacks for completion and errors.
+     *
+     * Rate limiting is handled at the job level via RateLimitedMiddleware
+     * in EnviarEmailEtapaProspectoJob and EnviarSmsEtapaProspectoJob.
      */
     private function dispatchBatch(
         array $jobs,
@@ -281,6 +284,7 @@ class EnviarEtapaJob implements ShouldQueue
             'batch_id' => $batch->id,
             'total_jobs' => count($jobs),
             'etapa_ejecucion_id' => $this->etapaEjecucionId,
+            'rate_limiting' => 'Handled by RateLimitedMiddleware in individual jobs',
         ]);
 
         // Record job dispatch
