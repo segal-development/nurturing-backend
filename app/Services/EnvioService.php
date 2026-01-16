@@ -6,11 +6,13 @@ use App\Models\Envio;
 use App\Models\Prospecto;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use App\Services\DesuscripcionService;
 
 class EnvioService
 {
     public function __construct(
-        private AthenaCampaignService $athenaService
+        private AthenaCampaignService $athenaService,
+        private DesuscripcionService $desuscripcionService
     ) {}
 
     /**
@@ -250,6 +252,19 @@ class EnvioService
             ];
         }
 
+        // Verificar si el prospecto puede recibir emails (no desuscrito)
+        if (!$prospecto->puedeRecibirComunicacion('email')) {
+            Log::info('EnvioService: Prospecto desuscrito de emails', [
+                'prospecto_id' => $prospecto->id,
+                'email' => $prospecto->email,
+            ]);
+            return [
+                'success' => false,
+                'envio_id' => null,
+                'error' => 'Prospecto desuscrito de comunicaciones por email',
+            ];
+        }
+
         $envio = null;
 
         try {
@@ -258,7 +273,9 @@ class EnvioService
             $contenidoFinal = $this->prepararContenidoConTracking(
                 $contenidoPersonalizado,
                 $trackingToken,
-                $esHtml
+                $esHtml,
+                $prospecto->id,
+                $flujoId
             );
 
             $envio = $this->crearRegistroEnvio(
@@ -310,18 +327,42 @@ class EnvioService
     }
 
     /**
-     * Prepara el contenido del email con tracking de aperturas
+     * Prepara el contenido del email con tracking de aperturas y footer de desuscripción
      */
     private function prepararContenidoConTracking(
         string $contenido,
         string $trackingToken,
-        bool $esHtml
+        bool $esHtml,
+        int $prospectoId,
+        ?int $flujoId = null
     ): string {
         if (! $esHtml) {
             return $contenido;
         }
 
-        return $this->inyectarPixelTracking($contenido, $trackingToken);
+        // Inyectar pixel de tracking
+        $contenido = $this->inyectarPixelTracking($contenido, $trackingToken);
+
+        // Agregar footer de desuscripción
+        $contenido = $this->inyectarFooterDesuscripcion($contenido, $prospectoId, $flujoId);
+
+        return $contenido;
+    }
+
+    /**
+     * Inyecta el footer de desuscripción en el HTML del email
+     */
+    private function inyectarFooterDesuscripcion(string $html, int $prospectoId, ?int $flujoId = null): string
+    {
+        $footer = $this->desuscripcionService->generarFooterDesuscripcion($prospectoId, null, $flujoId);
+
+        // Insertar antes del cierre de </body> si existe
+        if (stripos($html, '</body>') !== false) {
+            return str_ireplace('</body>', $footer . '</body>', $html);
+        }
+
+        // Si no hay </body>, agregar al final
+        return $html . $footer;
     }
 
     /**

@@ -4,6 +4,7 @@ use App\Http\Controllers\AuthController;
 use App\Http\Controllers\ConfiguracionController;
 use App\Http\Controllers\CostoController;
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\DesuscripcionController;
 use App\Http\Controllers\EnvioController;
 use App\Http\Controllers\FlujoController;
 use App\Http\Controllers\FlujoEjecucionController;
@@ -126,5 +127,11 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/health', [MonitoreoController::class, 'health']);
         Route::post('/queue/retry-failed', [MonitoreoController::class, 'retryFailedJobs']);
         Route::delete('/queue/failed', [MonitoreoController::class, 'clearFailedJobs']);
+    });
+
+    // Rutas de Desuscripciones (estadísticas y listado)
+    Route::prefix('desuscripciones')->group(function () {
+        Route::get('/', [DesuscripcionController::class, 'index']);
+        Route::get('/estadisticas', [DesuscripcionController::class, 'estadisticas']);
     });
 });

@@ -24,6 +24,8 @@ class Prospecto extends Model
         'fecha_ultimo_contacto',
         'fila_excel',
         'metadata',
+        'preferencias_comunicacion',
+        'fecha_desuscripcion',
     ];
 
     protected function casts(): array
@@ -32,6 +34,8 @@ class Prospecto extends Model
             'monto_deuda' => 'integer',
             'fecha_ultimo_contacto' => 'datetime',
             'metadata' => 'array',
+            'preferencias_comunicacion' => 'array',
+            'fecha_desuscripcion' => 'datetime',
         ];
     }
 
@@ -105,6 +109,72 @@ class Prospecto extends Model
     public function isArchivado(): bool
     {
         return $this->estado === 'archivado';
+    }
+
+    public function isDesuscrito(): bool
+    {
+        return $this->estado === 'desuscrito';
+    }
+
+    /**
+     * Verifica si el prospecto puede recibir comunicaciones por un canal específico.
+     */
+    public function puedeRecibirComunicacion(string $canal = 'todos'): bool
+    {
+        if ($this->estado === 'desuscrito') {
+            return false;
+        }
+
+        if (!$this->preferencias_comunicacion) {
+            return true;
+        }
+
+        if ($canal === 'todos') {
+            return ($this->preferencias_comunicacion['email'] ?? true) 
+                || ($this->preferencias_comunicacion['sms'] ?? true);
+        }
+
+        return $this->preferencias_comunicacion[$canal] ?? true;
+    }
+
+    /**
+     * Scope para excluir prospectos desuscritos.
+     */
+    public function scopeNoDesuscritos($query)
+    {
+        return $query->where('estado', '!=', 'desuscrito');
+    }
+
+    /**
+     * Scope para prospectos desuscritos.
+     */
+    public function scopeDesuscritos($query)
+    {
+        return $query->where('estado', 'desuscrito');
+    }
+
+    /**
+     * Scope para prospectos que pueden recibir emails.
+     */
+    public function scopePuedenRecibirEmail($query)
+    {
+        return $query->where('estado', '!=', 'desuscrito')
+            ->where(function ($q) {
+                $q->whereNull('preferencias_comunicacion')
+                  ->orWhereRaw("(preferencias_comunicacion->>'email')::boolean = true");
+            });
+    }
+
+    /**
+     * Scope para prospectos que pueden recibir SMS.
+     */
+    public function scopePuedenRecibirSms($query)
+    {
+        return $query->where('estado', '!=', 'desuscrito')
+            ->where(function ($q) {
+                $q->whereNull('preferencias_comunicacion')
+                  ->orWhereRaw("(preferencias_comunicacion->>'sms')::boolean = true");
+            });
     }
 
     public function getOrigenAttribute(): ?string
