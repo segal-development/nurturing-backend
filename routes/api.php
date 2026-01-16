@@ -10,6 +10,7 @@ use App\Http\Controllers\FlujoController;
 use App\Http\Controllers\FlujoEjecucionController;
 use App\Http\Controllers\ImportacionController;
 use App\Http\Controllers\LoteController;
+use App\Http\Controllers\MetricasController;
 use App\Http\Controllers\MonitoreoController;
 use App\Http\Controllers\PlantillaController;
 use App\Http\Controllers\ProspectoController;
@@ -133,5 +134,19 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::prefix('desuscripciones')->group(function () {
         Route::get('/', [DesuscripcionController::class, 'index']);
         Route::get('/estadisticas', [DesuscripcionController::class, 'estadisticas']);
+    });
+
+    // Rutas de Métricas y Analytics
+    Route::prefix('metricas')->group(function () {
+        Route::get('/dashboard', [MetricasController::class, 'dashboard']);
+        Route::get('/resumen', [MetricasController::class, 'resumen']);
+        Route::get('/aperturas', [MetricasController::class, 'aperturas']);
+        Route::get('/clicks', [MetricasController::class, 'clicks']);
+        Route::get('/envios', [MetricasController::class, 'envios']);
+        Route::get('/desuscripciones', [MetricasController::class, 'desuscripciones']);
+        Route::get('/conversiones', [MetricasController::class, 'conversiones']);
+        Route::get('/top-flujos', [MetricasController::class, 'topFlujos']);
+        Route::get('/tendencias', [MetricasController::class, 'tendencias']);
+        Route::post('/refresh', [MetricasController::class, 'refresh']);
     });
 });

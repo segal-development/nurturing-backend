@@ -24,6 +24,8 @@ class Envio extends Model
         'canal',
         'destinatario',
         'tracking_token',
+        'athena_message_id',
+        'athena_synced_at',
         'estado',
         'fecha_programada',
         'fecha_enviado',
@@ -41,6 +43,7 @@ class Envio extends Model
             'fecha_enviado' => 'datetime',
             'fecha_abierto' => 'datetime',
             'fecha_clickeado' => 'datetime',
+            'athena_synced_at' => 'datetime',
             'metadata' => 'array',
         ];
     }

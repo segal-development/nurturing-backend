@@ -158,3 +158,19 @@ Schedule::command('datos:limpiar --ejecutar')
   ->onFailure(function () {
       Log::error('Scheduler: Falló la limpieza mensual');
   });
+
+// ============================================================================
+// SINCRONIZACIÓN DE DESUSCRIPCIONES DESDE ATHENA
+// Cada hora consulta la API de Athena para detectar nuevas desuscripciones.
+// Las desuscripciones se registran en el sistema local para excluir prospectos.
+// ============================================================================
+Schedule::job(new \App\Jobs\SincronizarDesuscripcionesAthenaJob(7))
+  ->hourly()
+  ->name('athena:sincronizar-desuscripciones')
+  ->withoutOverlapping()
+  ->onSuccess(function () {
+      Log::info('Scheduler: Sincronización de desuscripciones de Athena completada');
+  })
+  ->onFailure(function () {
+      Log::error('Scheduler: Falló sincronización de desuscripciones de Athena');
+  });
