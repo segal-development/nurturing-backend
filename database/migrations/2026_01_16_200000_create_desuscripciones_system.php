@@ -16,7 +16,16 @@ return new class extends Migration
     public function up(): void
     {
         // 1. Agregar 'desuscrito' al enum de prospectos
-        DB::statement("ALTER TYPE prospectos_estado ADD VALUE IF NOT EXISTS 'desuscrito'");
+        // Verificamos si el tipo ENUM existe (Laravel puede usar CHECK constraint en su lugar)
+        $enumExists = DB::select("
+            SELECT 1 FROM pg_type WHERE typname = 'prospectos_estado'
+        ");
+
+        if ($enumExists) {
+            DB::statement("ALTER TYPE prospectos_estado ADD VALUE IF NOT EXISTS 'desuscrito'");
+        }
+        // Si no existe el ENUM, el estado se manejará a nivel de aplicación
+        // ya que la migración anterior debería haber recreado la columna con los valores necesarios
 
         // 2. Crear tabla de desuscripciones para auditoría
         Schema::create('desuscripciones', function (Blueprint $table) {
