@@ -11,6 +11,7 @@ use App\Models\Prospecto;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * Servicio centralizado de métricas para el dashboard.
@@ -73,7 +74,9 @@ class MetricasService
             ->distinct('envio_id')
             ->count('envio_id');
 
-        $totalDesuscripciones = Desuscripcion::where('created_at', '>=', $desde)->count();
+        $totalDesuscripciones = Schema::hasTable('desuscripciones') 
+            ? Desuscripcion::where('created_at', '>=', $desde)->count()
+            : 0;
 
         $prospectosConvertidos = Prospecto::where('estado', 'convertido')
             ->where('updated_at', '>=', $desde)
@@ -241,10 +244,10 @@ class MetricasService
 
         // Top URLs clickeadas
         $topUrls = DB::table('email_clicks')
-            ->select('url_destino', DB::raw('COUNT(*) as total'))
+            ->select('url_original as url_destino', DB::raw('COUNT(*) as total'))
             ->where('fecha_click', '>=', $desde)
-            ->whereNotNull('url_destino')
-            ->groupBy('url_destino')
+            ->whereNotNull('url_original')
+            ->groupBy('url_original')
             ->orderByDesc('total')
             ->limit(10)
             ->get();
@@ -336,6 +339,11 @@ class MetricasService
      */
     public function getMetricasDesuscripciones(int $dias = 30): array
     {
+        // Si la tabla no existe todavía, retornar datos vacíos
+        if (!Schema::hasTable('desuscripciones')) {
+            return $this->getDesuscripcionesVacias($dias);
+        }
+
         $desde = now()->subDays($dias);
 
         $total = Desuscripcion::where('created_at', '>=', $desde)->count();
@@ -406,6 +414,28 @@ class MetricasService
     }
 
     /**
+     * Retorna estructura vacía para desuscripciones cuando la tabla no existe
+     */
+    private function getDesuscripcionesVacias(int $dias): array
+    {
+        $porDiaCompleto = [];
+        for ($i = $dias - 1; $i >= 0; $i--) {
+            $porDiaCompleto[] = [
+                'fecha' => now()->subDays($i)->format('Y-m-d'),
+                'total' => 0,
+            ];
+        }
+
+        return [
+            'total' => 0,
+            'por_canal' => [],
+            'por_motivo' => [],
+            'por_dia' => $porDiaCompleto,
+            'por_flujo' => [],
+        ];
+    }
+
+    /**
      * Métricas de conversiones (prospectos que pasaron a convertido)
      */
     public function getMetricasConversiones(int $dias = 30): array
@@ -421,7 +451,7 @@ class MetricasService
 
         // Por tipo de prospecto
         $porTipo = DB::table('prospectos as p')
-            ->join('tipo_prospectos as tp', 'tp.id', '=', 'p.tipo_prospecto_id')
+            ->join('tipo_prospecto as tp', 'tp.id', '=', 'p.tipo_prospecto_id')
             ->select(
                 'tp.nombre as tipo',
                 DB::raw('COUNT(*) as total')
@@ -478,13 +508,17 @@ class MetricasService
         $enviosActual = Envio::where('created_at', '>=', $desdeActual)->count();
         $aperturasActual = EmailApertura::where('created_at', '>=', $desdeActual)->count();
         $clicksActual = EmailClick::where('created_at', '>=', $desdeActual)->count();
-        $desuscripcionesActual = Desuscripcion::where('created_at', '>=', $desdeActual)->count();
+        $desuscripcionesActual = Schema::hasTable('desuscripciones')
+            ? Desuscripcion::where('created_at', '>=', $desdeActual)->count()
+            : 0;
 
         // Período anterior
         $enviosAnterior = Envio::whereBetween('created_at', [$desdeAnterior, $hastaAnterior])->count();
         $aperturasAnterior = EmailApertura::whereBetween('created_at', [$desdeAnterior, $hastaAnterior])->count();
         $clicksAnterior = EmailClick::whereBetween('created_at', [$desdeAnterior, $hastaAnterior])->count();
-        $desuscripcionesAnterior = Desuscripcion::whereBetween('created_at', [$desdeAnterior, $hastaAnterior])->count();
+        $desuscripcionesAnterior = Schema::hasTable('desuscripciones')
+            ? Desuscripcion::whereBetween('created_at', [$desdeAnterior, $hastaAnterior])->count()
+            : 0;
 
         return [
             'envios' => $this->calcularTendencia($enviosActual, $enviosAnterior),
