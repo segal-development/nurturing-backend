@@ -14,6 +14,10 @@ return new class extends Migration
      */
     public function up(): void
     {
+        if (Schema::hasColumn('envios', 'athena_message_id')) {
+            return; // Columna ya existe
+        }
+
         Schema::table('envios', function (Blueprint $table) {
             $table->string('athena_message_id', 50)->nullable()->after('tracking_token');
             $table->timestamp('athena_synced_at')->nullable()->after('athena_message_id');

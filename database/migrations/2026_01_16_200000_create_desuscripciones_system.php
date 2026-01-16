@@ -27,7 +27,11 @@ return new class extends Migration
         // Si no existe el ENUM, el estado se manejará a nivel de aplicación
         // ya que la migración anterior debería haber recreado la columna con los valores necesarios
 
-        // 2. Crear tabla de desuscripciones para auditoría
+        // 2. Crear tabla de desuscripciones para auditoría (si no existe)
+        if (Schema::hasTable('desuscripciones')) {
+            return; // Tabla ya existe, salir temprano
+        }
+
         Schema::create('desuscripciones', function (Blueprint $table) {
             $table->id();
             
@@ -69,14 +73,18 @@ return new class extends Migration
             $table->index('created_at');
         });
 
-        // 3. Agregar columna para preferencias de comunicación en prospectos
-        Schema::table('prospectos', function (Blueprint $table) {
-            // Preferencias de canal (null = todos permitidos)
-            $table->json('preferencias_comunicacion')->nullable()->after('metadata');
-            
-            // Fecha de desuscripción (para queries rápidas)
-            $table->timestamp('fecha_desuscripcion')->nullable()->after('preferencias_comunicacion');
-        });
+        // 3. Agregar columna para preferencias de comunicación en prospectos (si no existe)
+        if (!Schema::hasColumn('prospectos', 'preferencias_comunicacion')) {
+            Schema::table('prospectos', function (Blueprint $table) {
+                $table->json('preferencias_comunicacion')->nullable()->after('metadata');
+            });
+        }
+
+        if (!Schema::hasColumn('prospectos', 'fecha_desuscripcion')) {
+            Schema::table('prospectos', function (Blueprint $table) {
+                $table->timestamp('fecha_desuscripcion')->nullable()->after('preferencias_comunicacion');
+            });
+        }
     }
 
     /**
