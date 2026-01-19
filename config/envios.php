@@ -132,16 +132,38 @@ return [
     | Alerts Configuration
     |--------------------------------------------------------------------------
     |
-    | Configure external alerting when critical events occur.
+    | Sistema de alertas por niveles:
+    | - CRÍTICO (SMS): Sistema caído, circuit breaker abierto
+    | - WARNING (Email): Tasa de error alta, cola saturada
+    | - INFO (Email): Resumen diario, estadísticas
     |
     */
 
     'alerts' => [
-        // Slack webhook URL for critical alerts
-        'slack_webhook' => env('ENVIO_ALERT_SLACK_WEBHOOK', null),
+        // Emails para alertas (separados por coma)
+        'emails' => env('ALERT_EMAILS', 'csalinas@segal.cl,mtoro@segal.cl'),
 
-        // Email address for critical alerts
-        'email' => env('ENVIO_ALERT_EMAIL', null),
+        // Teléfonos para SMS críticos (separados por coma, con código país)
+        'sms_numbers' => env('ALERT_SMS_NUMBERS', '+56958531798'),
+
+        // Habilitar/deshabilitar por nivel
+        'enabled' => [
+            'critical' => env('ALERT_CRITICAL_ENABLED', true),
+            'warning' => env('ALERT_WARNING_ENABLED', true),
+            'info' => env('ALERT_INFO_ENABLED', true),
+        ],
+
+        // Hora del resumen diario (formato 24h)
+        'daily_summary_hour' => (int) env('ALERT_DAILY_SUMMARY_HOUR', 8),
+
+        // Umbral de tasa de error para warning (porcentaje)
+        'error_rate_threshold' => (int) env('ALERT_ERROR_RATE_THRESHOLD', 5),
+
+        // Umbral de cola para warning (cantidad de jobs pendientes)
+        'queue_size_threshold' => (int) env('ALERT_QUEUE_SIZE_THRESHOLD', 1000),
+
+        // Cooldown entre alertas del mismo tipo (minutos)
+        'cooldown_minutes' => (int) env('ALERT_COOLDOWN_MINUTES', 15),
     ],
 
 ];

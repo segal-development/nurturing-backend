@@ -197,6 +197,70 @@ class AthenaCampaignService
     }
 
     /**
+     * Envía un SMS directo a un número (para alertas del sistema)
+     *
+     * @param string $telefono Número con código país (+56...)
+     * @param string $mensaje Texto del SMS (máx 160 caracteres)
+     * @return array{success: bool, message_id: string|null, error: string|null}
+     */
+    public function enviarSmsDirecto(string $telefono, string $mensaje): array
+    {
+        try {
+            Log::info('AthenaCampaign SMS Directo: Enviando', [
+                'telefono' => $telefono,
+                'mensaje_length' => strlen($mensaje),
+            ]);
+
+            $response = Http::timeout(30)->get("{$this->baseUrlSms}/sendmessage", [
+                'TOKEN' => $this->smsApiToken,
+                'PHONE' => $telefono,
+                'MESSAGE' => $mensaje,
+            ]);
+
+            if (!$response->successful()) {
+                Log::error('AthenaCampaign SMS Directo: Error HTTP', [
+                    'telefono' => $telefono,
+                    'status' => $response->status(),
+                ]);
+
+                return [
+                    'success' => false,
+                    'message_id' => null,
+                    'error' => "HTTP {$response->status()}",
+                ];
+            }
+
+            $data = $response->json();
+
+            if (($data['STATUS'] ?? '') === 'statusOK') {
+                return [
+                    'success' => true,
+                    'message_id' => $data['IDMSG'] ?? null,
+                    'error' => null,
+                ];
+            }
+
+            return [
+                'success' => false,
+                'message_id' => null,
+                'error' => $data['STATUS'] ?? 'Unknown error',
+            ];
+
+        } catch (\Exception $e) {
+            Log::error('AthenaCampaign SMS Directo: Excepción', [
+                'telefono' => $telefono,
+                'error' => $e->getMessage(),
+            ]);
+
+            return [
+                'success' => false,
+                'message_id' => null,
+                'error' => $e->getMessage(),
+            ];
+        }
+    }
+
+    /**
      * Envía email a través de Athena Campaign Email API
      *
      * POST https://apimail.athenacampaign.com/sendmail
