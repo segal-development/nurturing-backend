@@ -189,18 +189,50 @@ class VerificarCondicionJob implements ShouldQueue
 
     /**
      * Evalúa la condición según el operador
+     * 
+     * Operadores soportados:
+     * - >  : Mayor que
+     * - >= : Mayor o igual
+     * - == : Igual
+     * - != : No igual (distinto)
+     * - <  : Menor que
+     * - <= : Menor o igual
+     * - in : Está en lista (expectedValue puede ser "1,2,3" o [1,2,3])
+     * - not_in : No está en lista
      */
     private function evaluarCondicion(int $actualValue, string $operator, mixed $expectedValue): bool
     {
+        // Para operadores 'in' y 'not_in', parsear el valor esperado como array
+        $expectedArray = $this->parseExpectedValueAsArray($expectedValue);
+        
         return match ($operator) {
             '>' => $actualValue > (int) $expectedValue,
             '>=' => $actualValue >= (int) $expectedValue,
             '==' => $actualValue == (int) $expectedValue,
+            '!=' => $actualValue != (int) $expectedValue,
             '<' => $actualValue < (int) $expectedValue,
             '<=' => $actualValue <= (int) $expectedValue,
-            'in' => in_array($actualValue, (array) $expectedValue),
+            'in' => in_array($actualValue, $expectedArray, false),
+            'not_in' => !in_array($actualValue, $expectedArray, false),
             default => false,
         };
+    }
+    
+    /**
+     * Parsea el valor esperado como array para operadores 'in' y 'not_in'
+     * Soporta: "1,2,3" (string separado por comas) o [1,2,3] (array)
+     */
+    private function parseExpectedValueAsArray(mixed $expectedValue): array
+    {
+        if (is_array($expectedValue)) {
+            return array_map('intval', $expectedValue);
+        }
+        
+        if (is_string($expectedValue) && str_contains($expectedValue, ',')) {
+            return array_map('intval', array_map('trim', explode(',', $expectedValue)));
+        }
+        
+        return [(int) $expectedValue];
     }
 
     /**
