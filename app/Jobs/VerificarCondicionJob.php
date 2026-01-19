@@ -138,7 +138,7 @@ class VerificarCondicionJob implements ShouldQueue
             FlujoJob::create([
                 'flujo_ejecucion_id' => $this->flujoEjecucionId,
                 'job_type' => 'verificar_condicion',
-                'job_id' => $this->job->uuid() ?? null,
+                'job_id' => $this->job?->uuid() ?? null,
                 'job_data' => [
                     'etapa_id' => $this->etapaEjecucionId,
                     'condition_node_id' => $conditionNodeId,
@@ -171,7 +171,7 @@ class VerificarCondicionJob implements ShouldQueue
             FlujoJob::create([
                 'flujo_ejecucion_id' => $this->flujoEjecucionId,
                 'job_type' => 'verificar_condicion',
-                'job_id' => $this->job->uuid() ?? null,
+                'job_id' => $this->job?->uuid() ?? null,
                 'job_data' => [
                     'etapa_id' => $this->etapaEjecucionId,
                     'condition_node_id' => $this->condicion['target_node_id'] ?? 'unknown',
