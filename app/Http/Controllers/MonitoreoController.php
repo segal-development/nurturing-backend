@@ -522,4 +522,124 @@ class MonitoreoController extends Controller
 
         return empty($messages) ? null : implode(' | ', $messages);
     }
+
+    // ============================================
+    // Endpoints de Testing de Alertas
+    // ============================================
+
+    /**
+     * Envía una alerta de prueba
+     * 
+     * POST /api/monitoreo/alertas/test
+     * Body: { "tipo": "info" | "warning" | "critical" | "resumen" }
+     * 
+     * ⚠️ CRITICAL enviará SMS real al número configurado
+     */
+    public function testAlerta(): JsonResponse
+    {
+        $tipo = request()->input('tipo', 'info');
+        
+        $allowedTypes = ['info', 'warning', 'critical', 'resumen'];
+        if (!in_array($tipo, $allowedTypes)) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Tipo inválido. Usar: ' . implode(', ', $allowedTypes),
+            ], 400);
+        }
+
+        /** @var \App\Services\AlertasService $alertasService */
+        $alertasService = app(\App\Services\AlertasService::class);
+
+        $config = [
+            'emails' => config('envios.alerts.emails'),
+            'sms_numbers' => config('envios.alerts.sms_numbers'),
+            'tipo' => $tipo,
+        ];
+
+        Log::info('[Monitoreo] Enviando alerta de prueba', $config);
+
+        try {
+            switch ($tipo) {
+                case 'critical':
+                    $alertasService->alertaCritica(
+                        '🧪 Prueba de Alerta Crítica',
+                        'Esta es una prueba del sistema de alertas críticas. Si recibiste este mensaje (email y SMS), el sistema funciona correctamente.',
+                        [
+                            'tipo' => 'prueba',
+                            'iniciado_desde' => 'API endpoint',
+                            'ambiente' => config('app.env'),
+                            'timestamp' => now()->toIso8601String(),
+                        ]
+                    );
+                    break;
+
+                case 'warning':
+                    $alertasService->alertaWarning(
+                        '🧪 Prueba de Alerta Warning',
+                        'Esta es una prueba del sistema de alertas de warning. Si recibiste este email, el sistema funciona correctamente.',
+                        [
+                            'tipo' => 'prueba',
+                            'iniciado_desde' => 'API endpoint',
+                        ]
+                    );
+                    break;
+
+                case 'resumen':
+                    $alertasService->enviarResumenDiario();
+                    break;
+
+                default: // info
+                    $alertasService->alertaInfo(
+                        '🧪 Prueba de Alerta Info',
+                        'Esta es una prueba del sistema de alertas informativas. Si recibiste este email, el sistema funciona correctamente.',
+                        [
+                            'tipo' => 'prueba',
+                            'iniciado_desde' => 'API endpoint',
+                        ]
+                    );
+                    break;
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => "Alerta de tipo '{$tipo}' enviada correctamente",
+                'config' => $config,
+                'nota' => $tipo === 'critical' 
+                    ? 'Se envió SMS + Email' 
+                    : 'Se envió solo Email',
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('[Monitoreo] Error enviando alerta de prueba', [
+                'tipo' => $tipo,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'error' => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Obtiene la configuración actual de alertas
+     * 
+     * GET /api/monitoreo/alertas/config
+     */
+    public function getAlertasConfig(): JsonResponse
+    {
+        return response()->json([
+            'success' => true,
+            'config' => [
+                'emails' => config('envios.alerts.emails'),
+                'sms_numbers' => config('envios.alerts.sms_numbers'),
+                'enabled' => config('envios.alerts.enabled'),
+                'daily_summary_hour' => config('envios.alerts.daily_summary_hour'),
+                'cooldown_minutes' => config('envios.alerts.cooldown_minutes'),
+                'error_rate_threshold' => config('envios.alerts.error_rate_threshold'),
+                'queue_size_threshold' => config('envios.alerts.queue_size_threshold'),
+            ],
+        ]);
+    }
 }

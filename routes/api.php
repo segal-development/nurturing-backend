@@ -128,6 +128,10 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/health', [MonitoreoController::class, 'health']);
         Route::post('/queue/retry-failed', [MonitoreoController::class, 'retryFailedJobs']);
         Route::delete('/queue/failed', [MonitoreoController::class, 'clearFailedJobs']);
+        
+        // Alertas - testing y configuración
+        Route::get('/alertas/config', [MonitoreoController::class, 'getAlertasConfig']);
+        Route::post('/alertas/test', [MonitoreoController::class, 'testAlerta']);
     });
 
     // Rutas de Desuscripciones (estadísticas y listado)
