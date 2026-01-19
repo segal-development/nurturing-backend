@@ -10,25 +10,25 @@ return [
     | Configure rate limits for email and SMS sending to avoid overwhelming
     | external providers and ensure reliable delivery.
     |
-    | Common provider limits:
-    | - Amazon SES: 14/sec (sandbox), 50+/sec (production)
-    | - SendGrid: 100/sec
-    | - Mailgun: 300/min = 5/sec
-    | - Generic SMTP: varies, usually 1-10/sec
+    | Athena Campaign limits (confirmado):
+    | - 10,000 emails/hora máximo
+    | - Configuramos al 80% (8,000/hora) para tener margen de seguridad
+    |
+    | Para 350k emails = ~44 horas de envío continuo
     |
     */
 
     'rate_limits' => [
 
         'email' => [
-            // Maximum emails per second
-            'per_second' => (int) env('EMAIL_RATE_PER_SECOND', 10),
+            // Maximum emails per second (2/sec = 7,200/hora, dentro del límite)
+            'per_second' => (int) env('EMAIL_RATE_PER_SECOND', 2),
 
-            // Maximum emails per minute (as safety net)
-            'per_minute' => (int) env('EMAIL_RATE_PER_MINUTE', 500),
+            // Maximum emails per minute (150/min = 9,000/hora con margen)
+            'per_minute' => (int) env('EMAIL_RATE_PER_MINUTE', 150),
 
-            // Maximum emails per hour (for daily planning)
-            'per_hour' => (int) env('EMAIL_RATE_PER_HOUR', 20000),
+            // Maximum emails per hour (80% del límite de Athena = 8,000)
+            'per_hour' => (int) env('EMAIL_RATE_PER_HOUR', 8000),
 
             // Delay in seconds when rate limit is hit (exponential backoff base)
             'backoff_seconds' => (int) env('EMAIL_RATE_BACKOFF', 5),
