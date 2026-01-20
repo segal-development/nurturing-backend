@@ -125,7 +125,7 @@ class EjecutarNodosProgramados implements ShouldQueue
                 ->first();
 
             // Si la etapa ya está ejecutada o en proceso, NO volver a ejecutar
-            if ($etapaExistente && ($etapaExistente->ejecutado || in_array($etapaExistente->estado, ['processing', 'completed']))) {
+            if ($etapaExistente && ($etapaExistente->ejecutado || in_array($etapaExistente->estado, ['executing', 'completed']))) {
                 Log::info('EjecutarNodosProgramados: Nodo ya fue ejecutado o está en proceso, saltando', [
                     'ejecucion_id' => $ejecucion->id,
                     'nodo_id' => $nodoId,
@@ -348,7 +348,7 @@ class EjecutarNodosProgramados implements ShouldQueue
 
         // Marcar etapa como en proceso (se completará en VerificarCondicionJob)
         $etapa->update([
-            'estado' => 'processing',
+            'estado' => 'executing',
             'fecha_ejecucion' => now(),
         ]);
 
