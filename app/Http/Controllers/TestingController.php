@@ -457,10 +457,12 @@ class TestingController extends Controller
      */
     public function debugEjecuciones(Request $request)
     {
+        // Contar total de ejecuciones
+        $totalEjecuciones = FlujoEjecucion::count();
+        
         // Obtener ejecuciones recientes (todas, no solo activas)
         $query = FlujoEjecucion::with(['flujo:id,nombre'])
-            ->orderBy('updated_at', 'desc')
-            ->limit(5);
+            ->orderBy('id', 'desc');
         
         // Filtrar por estado si se especifica
         if ($request->has('estado')) {
@@ -469,7 +471,9 @@ class TestingController extends Controller
         
         // Filtrar por ID si se especifica
         if ($request->has('id')) {
-            $query->where('id', $request->id);
+            $query->where('id', (int) $request->id);
+        } else {
+            $query->limit(5);
         }
         
         $ejecuciones = $query->get()->map(function ($ejecucion) {
@@ -499,7 +503,8 @@ class TestingController extends Controller
         return response()->json([
             'success' => true,
             'timestamp' => now()->toIso8601String(),
-            'ejecuciones_activas' => $ejecuciones,
+            'total_ejecuciones_en_bd' => $totalEjecuciones,
+            'ejecuciones' => $ejecuciones,
         ]);
     }
 }
