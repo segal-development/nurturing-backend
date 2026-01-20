@@ -455,13 +455,24 @@ class TestingController extends Controller
     /**
      * Debug endpoint para ver estado de ejecuciones (solo cron)
      */
-    public function debugEjecuciones()
+    public function debugEjecuciones(Request $request)
     {
-        // Obtener ejecuciones activas
-        $ejecuciones = FlujoEjecucion::where('estado', 'in_progress')
-            ->with(['flujo:id,nombre'])
-            ->get()
-            ->map(function ($ejecucion) {
+        // Obtener ejecuciones recientes (todas, no solo activas)
+        $query = FlujoEjecucion::with(['flujo:id,nombre'])
+            ->orderBy('updated_at', 'desc')
+            ->limit(5);
+        
+        // Filtrar por estado si se especifica
+        if ($request->has('estado')) {
+            $query->where('estado', $request->estado);
+        }
+        
+        // Filtrar por ID si se especifica
+        if ($request->has('id')) {
+            $query->where('id', $request->id);
+        }
+        
+        $ejecuciones = $query->get()->map(function ($ejecucion) {
                 // Obtener etapas
                 $etapas = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
                     ->orderBy('id')
