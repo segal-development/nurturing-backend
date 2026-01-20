@@ -451,4 +451,44 @@ class TestingController extends Controller
             ],
         ]);
     }
+
+    /**
+     * Debug endpoint para ver estado de ejecuciones (solo cron)
+     */
+    public function debugEjecuciones()
+    {
+        // Obtener ejecuciones activas
+        $ejecuciones = FlujoEjecucion::where('estado', 'in_progress')
+            ->with(['flujo:id,nombre'])
+            ->get()
+            ->map(function ($ejecucion) {
+                // Obtener etapas
+                $etapas = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
+                    ->orderBy('id')
+                    ->get(['id', 'node_id', 'estado', 'ejecutado', 'message_id', 'fecha_programada', 'fecha_ejecucion']);
+                
+                // Obtener condiciones evaluadas
+                $condiciones = FlujoEjecucionCondicion::where('flujo_ejecucion_id', $ejecucion->id)
+                    ->get(['id', 'condition_node_id', 'check_param', 'check_operator', 'check_value', 'check_result_value', 'resultado', 'fecha_verificacion']);
+
+                return [
+                    'id' => $ejecucion->id,
+                    'flujo_id' => $ejecucion->flujo_id,
+                    'flujo_nombre' => $ejecucion->flujo->nombre ?? null,
+                    'estado' => $ejecucion->estado,
+                    'nodo_actual' => $ejecucion->nodo_actual,
+                    'proximo_nodo' => $ejecucion->proximo_nodo,
+                    'fecha_proximo_nodo' => $ejecucion->fecha_proximo_nodo,
+                    'porcentaje_completado' => $ejecucion->porcentaje_completado,
+                    'etapas' => $etapas,
+                    'condiciones' => $condiciones,
+                ];
+            });
+
+        return response()->json([
+            'success' => true,
+            'timestamp' => now()->toIso8601String(),
+            'ejecuciones_activas' => $ejecuciones,
+        ]);
+    }
 }
