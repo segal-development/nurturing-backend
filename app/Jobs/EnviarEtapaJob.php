@@ -520,17 +520,32 @@ class EnviarEtapaJob implements ShouldQueue
     }
 
     /**
-     * Find target node in flow data
+     * Find target node in flow data (stages OR conditions)
      */
     private function findTargetNode(FlujoEjecucion $ejecucion, string $targetNodeId): ?array
     {
         $flujoData = $ejecucion->flujo->flujo_data;
         $stages = $flujoData['stages'] ?? [];
+        $conditions = $flujoData['conditions'] ?? [];
+        
+        // Buscar primero en stages
         $targetNode = collect($stages)->firstWhere('id', $targetNodeId);
+        
+        // Si no está en stages, buscar en conditions
+        if (!$targetNode) {
+            $targetNode = collect($conditions)->firstWhere('id', $targetNodeId);
+        }
 
-        if (! $targetNode) {
-            Log::warning('EnviarEtapaJob: Nodo destino no encontrado', [
+        if (!$targetNode) {
+            Log::warning('EnviarEtapaJob: Nodo destino no encontrado en stages ni conditions', [
                 'target_node_id' => $targetNodeId,
+                'stages_count' => count($stages),
+                'conditions_count' => count($conditions),
+            ]);
+        } else {
+            Log::info('EnviarEtapaJob: Nodo destino encontrado', [
+                'target_node_id' => $targetNodeId,
+                'node_type' => $targetNode['type'] ?? 'unknown',
             ]);
         }
 

@@ -369,37 +369,45 @@ class TestingController extends Controller
             $maxJobs = 10;
             $maxTime = 50; // segundos
 
+            // Procesar TODAS las colas: default, envios, y job_batches
+            $queues = ['default', 'envios'];
+            
             while ($jobsProcessed < $maxJobs && (microtime(true) - $startTime) < $maxTime) {
-                // Obtener un job pendiente
+                // Obtener un job pendiente de CUALQUIER cola
                 $job = DB::table('jobs')
-                    ->where('queue', 'default')
+                    ->whereIn('queue', $queues)
                     ->whereNull('reserved_at')
                     ->orderBy('id', 'asc')
                     ->first();
 
                 if (!$job) {
-                    Log::info('CronProcessQueue: No hay más jobs pendientes');
+                    Log::info('CronProcessQueue: No hay más jobs pendientes en ninguna cola');
                     break;
                 }
 
                 try {
-                    // Procesar el job usando artisan
+                    // Procesar el job usando artisan - especificar TODAS las colas
                     Artisan::call('queue:work', [
                         '--once' => true,
-                        '--queue' => 'default',
+                        '--queue' => implode(',', $queues),
                         '--timeout' => 30,
                     ]);
 
                     $jobsProcessed++;
-                    Log::info('CronProcessQueue: Job procesado', ['job_id' => $job->id]);
+                    Log::info('CronProcessQueue: Job procesado', [
+                        'job_id' => $job->id,
+                        'queue' => $job->queue,
+                    ]);
 
                 } catch (\Exception $e) {
                     $errors[] = [
                         'job_id' => $job->id,
+                        'queue' => $job->queue,
                         'error' => $e->getMessage(),
                     ];
                     Log::error('CronProcessQueue: Error procesando job', [
                         'job_id' => $job->id,
+                        'queue' => $job->queue,
                         'error' => $e->getMessage(),
                     ]);
                     break; // Salir si hay error para no quedarnos en loop

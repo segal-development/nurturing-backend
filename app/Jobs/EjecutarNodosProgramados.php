@@ -122,10 +122,23 @@ class EjecutarNodosProgramados implements ShouldQueue
             // Verificar si ya existe una etapa para este nodo
             $etapaExistente = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
                 ->where('node_id', $nodoId)
-                ->where('ejecutado', false)
                 ->first();
 
-            if (! $etapaExistente) {
+            // Si la etapa ya está ejecutada o en proceso, NO volver a ejecutar
+            if ($etapaExistente && ($etapaExistente->ejecutado || in_array($etapaExistente->estado, ['processing', 'completed']))) {
+                Log::info('EjecutarNodosProgramados: Nodo ya fue ejecutado o está en proceso, saltando', [
+                    'ejecucion_id' => $ejecucion->id,
+                    'nodo_id' => $nodoId,
+                    'estado_etapa' => $etapaExistente->estado,
+                    'ejecutado' => $etapaExistente->ejecutado,
+                ]);
+                
+                // Buscar el siguiente nodo para actualizar la ejecución
+                $this->programarSiguienteNodo($ejecucion, $stage, $branches);
+                continue;
+            }
+
+            if (!$etapaExistente) {
                 // Crear nueva etapa
                 $etapaExistente = FlujoEjecucionEtapa::create([
                     'flujo_ejecucion_id' => $ejecucion->id,

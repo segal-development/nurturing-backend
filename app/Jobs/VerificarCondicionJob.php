@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Models\Envio;
 use App\Models\FlujoCondicion;
 use App\Models\FlujoEjecucion;
 use App\Models\FlujoEjecucionCondicion;
@@ -58,21 +59,29 @@ class VerificarCondicionJob implements ShouldQueue
             $ejecucion = FlujoEjecucion::findOrFail($this->flujoEjecucionId);
             $etapaEjecucion = FlujoEjecucionEtapa::findOrFail($this->etapaEjecucionId);
 
-            // 2. Obtener estadísticas de AthenaCampaign
+            // 2. Obtener estadísticas - primero intentar locales, luego AthenaCampaign
             Log::info('VerificarCondicionJob: Consultando estadísticas', [
+                'flujo_ejecucion_id' => $this->flujoEjecucionId,
                 'message_id' => $this->messageId,
             ]);
 
-            $statsResponse = $athenaService->getStatistics($this->messageId);
-
-            if ($statsResponse['error'] ?? true) {
-                throw new \Exception('Error al obtener estadísticas de AthenaCampaign');
+            // Intentar obtener estadísticas LOCALES primero (de la BD)
+            $stats = $this->obtenerEstadisticasLocales($ejecucion);
+            $statsResponse = ['error' => false, 'mensaje' => $stats, '_source' => 'local'];
+            
+            // Si no hay datos locales y tenemos un messageId válido, intentar AthenaCampaign
+            if (empty($stats['Views']) && $this->messageId > 0) {
+                $athenaResponse = $athenaService->getStatistics($this->messageId);
+                if (!($athenaResponse['error'] ?? true)) {
+                    $stats = $athenaResponse['mensaje'] ?? [];
+                    $statsResponse = $athenaResponse;
+                    $statsResponse['_source'] = 'athenacampaign';
+                }
             }
 
-            $stats = $statsResponse['mensaje'] ?? [];
-
-            Log::info('VerificarCondicionJob: Estadísticas recibidas', [
+            Log::info('VerificarCondicionJob: Estadísticas obtenidas', [
                 'stats' => $stats,
+                'source' => $statsResponse['_source'] ?? 'unknown',
             ]);
 
             // 3. Extraer datos de la condición desde la BD
@@ -363,5 +372,68 @@ class VerificarCondicionJob implements ShouldQueue
             'error_details' => "Job falló después de {$this->tries} intentos: {$exception->getMessage()}",
             'intentos' => $this->tries,
         ]);
+    }
+
+    /**
+     * Obtiene estadísticas de envío desde la BD local
+     * 
+     * Busca todos los envíos asociados a esta ejecución de flujo
+     * y calcula estadísticas agregadas compatibles con el formato AthenaCampaign
+     */
+    private function obtenerEstadisticasLocales(FlujoEjecucion $ejecucion): array
+    {
+        // Buscar la etapa de email anterior a esta condición
+        $sourceNodeId = $this->condicion['source_node_id'] ?? null;
+        
+        // Buscar envíos asociados a esta ejecución
+        $query = Envio::where('flujo_id', $ejecucion->flujo_id);
+        
+        // Si tenemos el nodo source, filtrar por esa etapa específica
+        if ($sourceNodeId) {
+            $etapaEmail = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
+                ->where('node_id', $sourceNodeId)
+                ->first();
+            
+            if ($etapaEmail) {
+                $query->where('flujo_ejecucion_etapa_id', $etapaEmail->id);
+            }
+        }
+        
+        $envios = $query->get();
+        
+        if ($envios->isEmpty()) {
+            Log::warning('VerificarCondicionJob: No se encontraron envíos para calcular estadísticas locales', [
+                'flujo_id' => $ejecucion->flujo_id,
+                'source_node_id' => $sourceNodeId,
+            ]);
+            
+            return [
+                'Recipients' => 0,
+                'Views' => 0,
+                'Clicks' => 0,
+                'Bounces' => 0,
+            ];
+        }
+        
+        // Calcular estadísticas agregadas
+        $totalRecipients = $envios->count();
+        $totalViews = $envios->where('fecha_abierto', '!=', null)->count(); // Emails abiertos (únicos)
+        $totalClicks = $envios->where('fecha_click', '!=', null)->count();
+        $totalBounces = $envios->where('estado', 'failed')->count();
+        
+        $stats = [
+            'Recipients' => $totalRecipients,
+            'Views' => $totalViews,
+            'Clicks' => $totalClicks,
+            'Bounces' => $totalBounces,
+        ];
+        
+        Log::info('VerificarCondicionJob: Estadísticas locales calculadas', [
+            'flujo_ejecucion_id' => $ejecucion->id,
+            'envios_encontrados' => $totalRecipients,
+            'stats' => $stats,
+        ]);
+        
+        return $stats;
     }
 }
