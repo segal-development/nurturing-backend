@@ -150,7 +150,7 @@ class EjecutarNodosProgramados implements ShouldQueue
             ]);
             
             // Buscar el siguiente nodo para actualizar la ejecución
-            $this->programarSiguienteNodo($ejecucion, $stage, $branches);
+            $this->programarSiguienteNodo($ejecucion, $stage['id'], $branches);
             return;
         }
 
