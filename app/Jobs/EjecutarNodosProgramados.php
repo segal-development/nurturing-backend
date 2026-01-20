@@ -289,24 +289,69 @@ class EjecutarNodosProgramados implements ShouldQueue
         array $stage,
         array $branches
     ): void {
-        // Marcar como completado (las condiciones se evalúan en VerificarCondicionJob)
+        // Obtener el message_id de la etapa de email anterior
+        // (necesario para consultar estadísticas en AthenaCampaign)
+        $etapaEmailAnterior = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
+            ->whereNotNull('message_id')
+            ->where('ejecutado', true)
+            ->orderBy('fecha_ejecucion', 'desc')
+            ->first();
+
+        if (!$etapaEmailAnterior || !$etapaEmailAnterior->message_id) {
+            Log::error('EjecutarNodosProgramados: No se encontró etapa de email anterior con message_id', [
+                'ejecucion_id' => $ejecucion->id,
+                'nodo_id' => $stage['id'],
+            ]);
+            
+            // Marcar etapa como fallida
+            $etapa->update([
+                'estado' => 'failed',
+                'ejecutado' => true,
+                'fecha_ejecucion' => now(),
+            ]);
+            
+            return;
+        }
+
+        $messageId = (int) $etapaEmailAnterior->message_id;
+
+        Log::info('EjecutarNodosProgramados: Encontrado message_id para condición', [
+            'message_id' => $messageId,
+            'etapa_email_id' => $etapaEmailAnterior->id,
+            'etapa_email_node_id' => $etapaEmailAnterior->node_id,
+        ]);
+
+        // Construir el array $condicion con el formato esperado por VerificarCondicionJob
+        $condicion = [
+            'target_node_id' => $stage['id'],
+            'source_node_id' => $etapaEmailAnterior->node_id,
+            'data' => [
+                'check_param' => $stage['check_param'] ?? 'Views',
+                'check_operator' => $stage['check_operator'] ?? '>',
+                'check_value' => $stage['check_value'] ?? '0',
+            ],
+        ];
+
+        // Marcar etapa como en proceso (se completará en VerificarCondicionJob)
         $etapa->update([
-            'estado' => 'completed',
-            'ejecutado' => true,
+            'estado' => 'processing',
             'fecha_ejecucion' => now(),
         ]);
 
         // Despachar job para evaluar condición
         VerificarCondicionJob::dispatch(
             $ejecucion->id,
-            $stage,
-            $ejecucion->prospectos_ids,
-            $branches
+            $etapa->id,
+            $condicion,
+            $messageId
         );
 
         Log::info('EjecutarNodosProgramados: Condición despachada para evaluación', [
             'ejecucion_id' => $ejecucion->id,
+            'etapa_ejecucion_id' => $etapa->id,
             'nodo_id' => $stage['id'],
+            'message_id' => $messageId,
+            'condicion' => $condicion,
         ]);
     }
 
