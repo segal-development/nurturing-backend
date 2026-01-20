@@ -96,6 +96,8 @@ return [
             'prefix_indexes' => true,
             'search_path' => 'public',
             'sslmode' => 'prefer',
+            // ✅ TIMEOUTS a nivel de sesión: Previenen conexiones/transacciones colgadas
+            // Se configuran via AppServiceProvider::boot()
         ],
 
         'sqlsrv' => [

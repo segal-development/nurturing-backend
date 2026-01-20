@@ -361,22 +361,27 @@ class TestingController extends Controller
         $startTime = microtime(true);
         $jobsProcessed = 0;
         $errors = [];
+        $processedJobIds = []; // ✅ Track de jobs ya procesados para evitar loops
 
         Log::info('CronProcessQueue: Iniciando procesamiento de jobs');
 
         try {
-            // Procesar hasta 10 jobs o 50 segundos (lo que ocurra primero)
+            // Procesar hasta 10 jobs o 30 segundos (lo que ocurra primero)
+            // ✅ Reducido de 50s a 30s para evitar timeouts de Cloud Run
             $maxJobs = 10;
-            $maxTime = 50; // segundos
+            $maxTime = 30; // segundos
 
-            // Procesar TODAS las colas: default, envios, y job_batches
+            // Procesar TODAS las colas: default, envios
             $queues = ['default', 'envios'];
             
             while ($jobsProcessed < $maxJobs && (microtime(true) - $startTime) < $maxTime) {
-                // Obtener un job pendiente de CUALQUIER cola
+                // ✅ Obtener un job pendiente que NO hayamos intentado ya
                 $job = DB::table('jobs')
                     ->whereIn('queue', $queues)
                     ->whereNull('reserved_at')
+                    ->when(!empty($processedJobIds), function ($query) use ($processedJobIds) {
+                        return $query->whereNotIn('id', $processedJobIds);
+                    })
                     ->orderBy('id', 'asc')
                     ->first();
 
@@ -385,48 +390,67 @@ class TestingController extends Controller
                     break;
                 }
 
+                // ✅ Marcar este job como "ya intentado" ANTES de procesarlo
+                $processedJobIds[] = $job->id;
+                $jobIdBefore = $job->id;
+
                 try {
-                    // Procesar el job usando artisan - especificar TODAS las colas
+                    // Procesar el job usando artisan
                     Artisan::call('queue:work', [
                         '--once' => true,
                         '--queue' => implode(',', $queues),
-                        '--timeout' => 30,
+                        '--timeout' => 25, // ✅ Reducido para dar margen
                     ]);
 
-                    $jobsProcessed++;
-                    Log::info('CronProcessQueue: Job procesado', [
-                        'job_id' => $job->id,
-                        'queue' => $job->queue,
-                    ]);
+                    // ✅ Verificar si el job fue realmente eliminado
+                    $jobStillExists = DB::table('jobs')->where('id', $jobIdBefore)->exists();
+                    
+                    if ($jobStillExists) {
+                        Log::warning('CronProcessQueue: Job no fue eliminado después de procesar', [
+                            'job_id' => $jobIdBefore,
+                        ]);
+                        // No contar como procesado exitosamente, pero ya está en processedJobIds
+                        // así que no lo intentaremos de nuevo
+                    } else {
+                        $jobsProcessed++;
+                        Log::info('CronProcessQueue: Job procesado y eliminado', [
+                            'job_id' => $jobIdBefore,
+                            'queue' => $job->queue,
+                        ]);
+                    }
 
                 } catch (\Exception $e) {
                     $errors[] = [
-                        'job_id' => $job->id,
+                        'job_id' => $jobIdBefore,
                         'queue' => $job->queue,
                         'error' => $e->getMessage(),
                     ];
                     Log::error('CronProcessQueue: Error procesando job', [
-                        'job_id' => $job->id,
+                        'job_id' => $jobIdBefore,
                         'queue' => $job->queue,
                         'error' => $e->getMessage(),
                     ]);
-                    break; // Salir si hay error para no quedarnos en loop
+                    // ✅ Continuar con el siguiente job en lugar de break
+                    // El job problemático ya está en processedJobIds
                 }
             }
 
             // También ejecutar EjecutarNodosProgramados directamente
-            try {
-                $ejecutarNodos = new EjecutarNodosProgramados();
-                $ejecutarNodos->handle(app(\App\Services\EnvioService::class));
-                Log::info('CronProcessQueue: EjecutarNodosProgramados ejecutado');
-            } catch (\Exception $e) {
-                $errors[] = [
-                    'job' => 'EjecutarNodosProgramados',
-                    'error' => $e->getMessage(),
-                ];
-                Log::error('CronProcessQueue: Error en EjecutarNodosProgramados', [
-                    'error' => $e->getMessage(),
-                ]);
+            // ✅ Solo si queda tiempo suficiente
+            if ((microtime(true) - $startTime) < 25) {
+                try {
+                    $ejecutarNodos = new EjecutarNodosProgramados();
+                    $ejecutarNodos->handle(app(\App\Services\EnvioService::class));
+                    Log::info('CronProcessQueue: EjecutarNodosProgramados ejecutado');
+                } catch (\Exception $e) {
+                    $errors[] = [
+                        'job' => 'EjecutarNodosProgramados',
+                        'error' => $e->getMessage(),
+                    ];
+                    Log::error('CronProcessQueue: Error en EjecutarNodosProgramados', [
+                        'error' => $e->getMessage(),
+                    ]);
+                }
             }
 
         } catch (\Exception $e) {
@@ -447,6 +471,7 @@ class TestingController extends Controller
             'jobs_remaining' => $jobsRemaining,
             'duration_seconds' => $duration,
             'errors_count' => count($errors),
+            'skipped_job_ids' => array_diff($processedJobIds, range(1, $jobsProcessed)), // Jobs que fallaron
         ]);
 
         return response()->json([

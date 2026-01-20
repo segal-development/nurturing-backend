@@ -18,6 +18,22 @@ class EjecutarNodosProgramados implements ShouldQueue
     use Queueable;
 
     /**
+     * The number of seconds the job can run before timing out.
+     * CRÍTICO: Previene que transacciones queden colgadas si Cloud Run mata la instancia.
+     */
+    public $timeout = 60;
+
+    /**
+     * The number of times the job may be attempted.
+     */
+    public $tries = 1;
+
+    /**
+     * Indicate if the job should be marked as failed on timeout.
+     */
+    public $failOnTimeout = true;
+
+    /**
      * Create a new job instance.
      */
     public function __construct()
@@ -73,120 +89,112 @@ class EjecutarNodosProgramados implements ShouldQueue
 
     /**
      * Ejecuta el próximo nodo de una ejecución
+     * 
+     * IMPORTANTE: NO usamos transacciones largas aquí.
+     * Cada operación es atómica para evitar locks si Cloud Run mata la instancia.
      */
     private function ejecutarProximoNodo(FlujoEjecucion $ejecucion, EnvioService $envioService): void
     {
-        DB::beginTransaction();
+        $flujo = $ejecucion->flujo;
+        $flujoData = $flujo->flujo_data;
+        $stages = $flujoData['stages'] ?? [];
+        $conditions = $flujoData['conditions'] ?? [];
+        $branches = $flujoData['branches'] ?? [];
 
-        try {
-            $flujo = $ejecucion->flujo;
-            $flujoData = $flujo->flujo_data;
-            $stages = $flujoData['stages'] ?? [];
-            $conditions = $flujoData['conditions'] ?? [];
-            $branches = $flujoData['branches'] ?? [];
+        // ✅ NORMALIZAR: Convertir edges a branches si es necesario
+        if (empty($branches) && isset($flujoData['edges']) && ! empty($flujoData['edges'])) {
+            $branches = collect($flujoData['edges'])->map(function ($edge) {
+                return [
+                    'source_node_id' => $edge['source'] ?? null,
+                    'target_node_id' => $edge['target'] ?? null,
+                    'source_handle' => $edge['sourceHandle'] ?? null,
+                ];
+            })->filter(function ($branch) {
+                return ! empty($branch['source_node_id']) && ! empty($branch['target_node_id']);
+            })->values()->toArray();
+        }
 
-            // ✅ NORMALIZAR: Convertir edges a branches si es necesario
-            if (empty($branches) && isset($flujoData['edges']) && ! empty($flujoData['edges'])) {
-                $branches = collect($flujoData['edges'])->map(function ($edge) {
-                    return [
-                        'source_node_id' => $edge['source'] ?? null,
-                        'target_node_id' => $edge['target'] ?? null,
-                        'source_handle' => $edge['sourceHandle'] ?? null,
-                    ];
-                })->filter(function ($branch) {
-                    return ! empty($branch['source_node_id']) && ! empty($branch['target_node_id']);
-                })->values()->toArray();
-            }
+        // Obtener el nodo que se debe ejecutar
+        $nodoId = $ejecucion->proximo_nodo;
+        
+        // Buscar en stages primero, luego en conditions
+        $stage = collect($stages)->firstWhere('id', $nodoId);
+        
+        if (! $stage) {
+            // Buscar en conditions si no está en stages
+            $stage = collect($conditions)->firstWhere('id', $nodoId);
+        }
 
-            // Obtener el nodo que se debe ejecutar
-            $nodoId = $ejecucion->proximo_nodo;
-            
-            // Buscar en stages primero, luego en conditions
-            $stage = collect($stages)->firstWhere('id', $nodoId);
-            
-            if (! $stage) {
-                // Buscar en conditions si no está en stages
-                $stage = collect($conditions)->firstWhere('id', $nodoId);
-            }
+        if (! $stage) {
+            throw new \Exception("No se encontró el nodo {$nodoId} en el flujo");
+        }
 
-            if (! $stage) {
-                throw new \Exception("No se encontró el nodo {$nodoId} en el flujo");
-            }
+        Log::info('EjecutarNodosProgramados: Ejecutando nodo', [
+            'ejecucion_id' => $ejecucion->id,
+            'nodo_id' => $nodoId,
+            'tipo' => $stage['type'] ?? 'unknown',
+        ]);
 
-            Log::info('EjecutarNodosProgramados: Ejecutando nodo', [
+        // Verificar si ya existe una etapa para este nodo
+        $etapaExistente = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
+            ->where('node_id', $nodoId)
+            ->first();
+
+        // Si la etapa ya está ejecutada o en proceso, NO volver a ejecutar
+        if ($etapaExistente && ($etapaExistente->ejecutado || in_array($etapaExistente->estado, ['executing', 'completed']))) {
+            Log::info('EjecutarNodosProgramados: Nodo ya fue ejecutado o está en proceso, saltando', [
                 'ejecucion_id' => $ejecucion->id,
                 'nodo_id' => $nodoId,
-                'tipo' => $stage['type'] ?? 'unknown',
+                'estado_etapa' => $etapaExistente->estado,
+                'ejecutado' => $etapaExistente->ejecutado,
             ]);
+            
+            // Buscar el siguiente nodo para actualizar la ejecución
+            $this->programarSiguienteNodo($ejecucion, $stage, $branches);
+            return;
+        }
 
-            // Verificar si ya existe una etapa para este nodo
-            $etapaExistente = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
-                ->where('node_id', $nodoId)
-                ->first();
+        if (!$etapaExistente) {
+            // Crear nueva etapa (operación atómica)
+            $etapaExistente = FlujoEjecucionEtapa::create([
+                'flujo_ejecucion_id' => $ejecucion->id,
+                'node_id' => $nodoId,
+                'fecha_programada' => now(),
+                'estado' => 'pending',
+                'ejecutado' => false,
+            ]);
+        }
 
-            // Si la etapa ya está ejecutada o en proceso, NO volver a ejecutar
-            if ($etapaExistente && ($etapaExistente->ejecutado || in_array($etapaExistente->estado, ['executing', 'completed']))) {
-                Log::info('EjecutarNodosProgramados: Nodo ya fue ejecutado o está en proceso, saltando', [
-                    'ejecucion_id' => $ejecucion->id,
-                    'nodo_id' => $nodoId,
-                    'estado_etapa' => $etapaExistente->estado,
-                    'ejecutado' => $etapaExistente->ejecutado,
-                ]);
-                
-                // Buscar el siguiente nodo para actualizar la ejecución
-                $this->programarSiguienteNodo($ejecucion, $stage, $branches);
-                DB::commit();
-                return;
+        // Actualizar nodo actual en la ejecución (operación atómica)
+        $ejecucion->update(['nodo_actual' => $nodoId]);
+
+        // Ejecutar el nodo según su tipo
+        // ✅ NORMALIZAR: Detectar tipo desde 'type' o 'tipo_mensaje'
+        $tipoNodo = $stage['type'] ?? null;
+
+        // Si no hay 'type', intentar inferir desde otros campos
+        if (! $tipoNodo) {
+            if (isset($stage['tipo_mensaje'])) {
+                // Es una etapa de envío (email/sms)
+                $tipoNodo = 'stage';
+            } elseif (isset($stage['check_param'])) {
+                // Es una condición
+                $tipoNodo = 'condition';
             }
+        }
 
-            if (!$etapaExistente) {
-                // Crear nueva etapa
-                $etapaExistente = FlujoEjecucionEtapa::create([
-                    'flujo_ejecucion_id' => $ejecucion->id,
-                    'node_id' => $nodoId,
-                    'fecha_programada' => now(),
-                    'estado' => 'pending',
-                    'ejecutado' => false,
-                ]);
-            }
-
-            // Actualizar nodo actual en la ejecución
-            $ejecucion->update(['nodo_actual' => $nodoId]);
-
-            // Ejecutar el nodo según su tipo
-            // ✅ NORMALIZAR: Detectar tipo desde 'type' o 'tipo_mensaje'
-            $tipoNodo = $stage['type'] ?? null;
-
-            // Si no hay 'type', intentar inferir desde otros campos
-            if (! $tipoNodo) {
-                if (isset($stage['tipo_mensaje'])) {
-                    // Es una etapa de envío (email/sms)
-                    $tipoNodo = 'stage';
-                } elseif (isset($stage['check_param'])) {
-                    // Es una condición
-                    $tipoNodo = 'condition';
-                }
-            }
-
-            if (in_array($tipoNodo, ['email', 'sms', 'stage'])) {
-                $this->ejecutarNodoEnvio($ejecucion, $etapaExistente, $stage, $branches, $envioService);
-            } elseif ($tipoNodo === 'condition') {
-                $this->ejecutarNodoCondicion($ejecucion, $etapaExistente, $stage, $branches);
-            } elseif ($tipoNodo === 'end') {
-                $this->ejecutarNodoFin($ejecucion, $etapaExistente);
-            } else {
-                Log::warning('EjecutarNodosProgramados: Tipo de nodo no reconocido', [
-                    'nodo_id' => $nodoId,
-                    'tipo_detectado' => $tipoNodo,
-                    'stage_keys' => array_keys($stage),
-                ]);
-            }
-
-            DB::commit();
-
-        } catch (\Exception $e) {
-            DB::rollBack();
-            throw $e;
+        if (in_array($tipoNodo, ['email', 'sms', 'stage'])) {
+            $this->ejecutarNodoEnvio($ejecucion, $etapaExistente, $stage, $branches, $envioService);
+        } elseif ($tipoNodo === 'condition') {
+            $this->ejecutarNodoCondicion($ejecucion, $etapaExistente, $stage, $branches);
+        } elseif ($tipoNodo === 'end') {
+            $this->ejecutarNodoFin($ejecucion, $etapaExistente);
+        } else {
+            Log::warning('EjecutarNodosProgramados: Tipo de nodo no reconocido', [
+                'nodo_id' => $nodoId,
+                'tipo_detectado' => $tipoNodo,
+                'stage_keys' => array_keys($stage),
+            ]);
         }
     }
 
