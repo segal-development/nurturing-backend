@@ -23,6 +23,11 @@ use Illuminate\Support\Facades\Route;
 Route::post('/register', [AuthController::class, 'register']);
 Route::post('/login', [AuthController::class, 'login']);
 
+// Ruta para Cloud Scheduler - procesar jobs de la cola
+// Protegida por un header secreto en lugar de auth
+Route::post('/cron/process-queue', [TestingController::class, 'processQueue'])
+    ->middleware('cron.secret');
+
 // Rutas protegidas con Sanctum (sesión o token)
 Route::middleware('auth:sanctum')->group(function () {
     // Autenticación

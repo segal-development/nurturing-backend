@@ -2,12 +2,15 @@
 
 namespace App\Http\Controllers;
 
+use App\Jobs\EjecutarNodosProgramados;
 use App\Jobs\VerificarCondicionJob;
 use App\Models\FlujoEjecucion;
 use App\Models\FlujoEjecucionCondicion;
 use App\Models\FlujoEjecucionEtapa;
 use App\Models\FlujoJob;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -337,6 +340,114 @@ class TestingController extends Controller
                 'resultado' => $resultado,
                 'resultado_label' => $resultado ? 'yes (condición cumplida)' : 'no (condición no cumplida)',
                 'expresion' => "{$actualValue} {$operator} {$expectedValue}",
+            ],
+        ]);
+    }
+
+    /**
+     * Procesa jobs pendientes de la cola
+     * 
+     * POST /api/cron/process-queue
+     * 
+     * Este endpoint es llamado por Cloud Scheduler cada minuto
+     * para procesar los jobs pendientes ya que Cloud Run no mantiene
+     * workers persistentes.
+     * 
+     * @param Request $request
+     * @return \Illuminate\Http\JsonResponse
+     */
+    public function processQueue(Request $request)
+    {
+        $startTime = microtime(true);
+        $jobsProcessed = 0;
+        $errors = [];
+
+        Log::info('CronProcessQueue: Iniciando procesamiento de jobs');
+
+        try {
+            // Procesar hasta 10 jobs o 50 segundos (lo que ocurra primero)
+            $maxJobs = 10;
+            $maxTime = 50; // segundos
+
+            while ($jobsProcessed < $maxJobs && (microtime(true) - $startTime) < $maxTime) {
+                // Obtener un job pendiente
+                $job = DB::table('jobs')
+                    ->where('queue', 'default')
+                    ->whereNull('reserved_at')
+                    ->orderBy('id', 'asc')
+                    ->first();
+
+                if (!$job) {
+                    Log::info('CronProcessQueue: No hay más jobs pendientes');
+                    break;
+                }
+
+                try {
+                    // Procesar el job usando artisan
+                    Artisan::call('queue:work', [
+                        '--once' => true,
+                        '--queue' => 'default',
+                        '--timeout' => 30,
+                    ]);
+
+                    $jobsProcessed++;
+                    Log::info('CronProcessQueue: Job procesado', ['job_id' => $job->id]);
+
+                } catch (\Exception $e) {
+                    $errors[] = [
+                        'job_id' => $job->id,
+                        'error' => $e->getMessage(),
+                    ];
+                    Log::error('CronProcessQueue: Error procesando job', [
+                        'job_id' => $job->id,
+                        'error' => $e->getMessage(),
+                    ]);
+                    break; // Salir si hay error para no quedarnos en loop
+                }
+            }
+
+            // También ejecutar EjecutarNodosProgramados directamente
+            try {
+                $ejecutarNodos = new EjecutarNodosProgramados();
+                $ejecutarNodos->handle(app(\App\Services\EnvioService::class));
+                Log::info('CronProcessQueue: EjecutarNodosProgramados ejecutado');
+            } catch (\Exception $e) {
+                $errors[] = [
+                    'job' => 'EjecutarNodosProgramados',
+                    'error' => $e->getMessage(),
+                ];
+                Log::error('CronProcessQueue: Error en EjecutarNodosProgramados', [
+                    'error' => $e->getMessage(),
+                ]);
+            }
+
+        } catch (\Exception $e) {
+            Log::error('CronProcessQueue: Error general', ['error' => $e->getMessage()]);
+            return response()->json([
+                'success' => false,
+                'error' => $e->getMessage(),
+            ], 500);
+        }
+
+        $duration = round(microtime(true) - $startTime, 2);
+
+        // Contar jobs restantes
+        $jobsRemaining = DB::table('jobs')->count();
+
+        Log::info('CronProcessQueue: Procesamiento completado', [
+            'jobs_processed' => $jobsProcessed,
+            'jobs_remaining' => $jobsRemaining,
+            'duration_seconds' => $duration,
+            'errors_count' => count($errors),
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'jobs_processed' => $jobsProcessed,
+                'jobs_remaining' => $jobsRemaining,
+                'duration_seconds' => $duration,
+                'errors' => $errors,
             ],
         ]);
     }
