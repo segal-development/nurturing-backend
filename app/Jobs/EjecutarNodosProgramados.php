@@ -82,6 +82,7 @@ class EjecutarNodosProgramados implements ShouldQueue
             $flujo = $ejecucion->flujo;
             $flujoData = $flujo->flujo_data;
             $stages = $flujoData['stages'] ?? [];
+            $conditions = $flujoData['conditions'] ?? [];
             $branches = $flujoData['branches'] ?? [];
 
             // ✅ NORMALIZAR: Convertir edges a branches si es necesario
@@ -99,7 +100,14 @@ class EjecutarNodosProgramados implements ShouldQueue
 
             // Obtener el nodo que se debe ejecutar
             $nodoId = $ejecucion->proximo_nodo;
+            
+            // Buscar en stages primero, luego en conditions
             $stage = collect($stages)->firstWhere('id', $nodoId);
+            
+            if (! $stage) {
+                // Buscar en conditions si no está en stages
+                $stage = collect($conditions)->firstWhere('id', $nodoId);
+            }
 
             if (! $stage) {
                 throw new \Exception("No se encontró el nodo {$nodoId} en el flujo");
@@ -378,7 +386,14 @@ class EjecutarNodosProgramados implements ShouldQueue
             // Si no existe la etapa, crear una nueva (fallback)
             $flujoData = $ejecucion->flujo->flujo_data;
             $stages = $flujoData['stages'] ?? [];
+            $conditions = $flujoData['conditions'] ?? [];
+            
+            // Buscar en stages primero, luego en conditions
             $siguienteStage = collect($stages)->firstWhere('id', $siguienteNodoId);
+            
+            if (! $siguienteStage) {
+                $siguienteStage = collect($conditions)->firstWhere('id', $siguienteNodoId);
+            }
 
             if (! $siguienteStage) {
                 throw new \Exception("No se encontró el siguiente nodo {$siguienteNodoId}");
