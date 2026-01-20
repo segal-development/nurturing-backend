@@ -499,6 +499,7 @@ class TestingController extends Controller
                     'flujo_id' => $ejecucion->flujo_id,
                     'flujo_nombre' => $ejecucion->flujo->nombre ?? null,
                     'estado' => $ejecucion->estado,
+                    'error_message' => $ejecucion->error_message,
                     'nodo_actual' => $ejecucion->nodo_actual,
                     'proximo_nodo' => $ejecucion->proximo_nodo,
                     'fecha_proximo_nodo' => $ejecucion->fecha_proximo_nodo,
