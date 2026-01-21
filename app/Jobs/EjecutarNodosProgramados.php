@@ -95,6 +95,39 @@ class EjecutarNodosProgramados implements ShouldQueue
      */
     private function ejecutarProximoNodo(FlujoEjecucion $ejecucion, EnvioService $envioService): void
     {
+        // ✅ VERIFICACIÓN CRÍTICA: No ejecutar si hay etapas anteriores en 'executing'
+        // Esto previene que el cron avance mientras un batch sigue procesando
+        $etapasEnEjecucion = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
+            ->where('estado', 'executing')
+            ->where('node_id', '!=', $ejecucion->proximo_nodo) // No contar el nodo actual
+            ->first();
+
+        if ($etapasEnEjecucion) {
+            // Verificar si la etapa lleva mucho tiempo en 'executing' (posible stuck)
+            $tiempoEnEjecucion = now()->diffInMinutes($etapasEnEjecucion->fecha_ejecucion ?? $etapasEnEjecucion->created_at);
+            
+            if ($tiempoEnEjecucion > 30) {
+                // Etapa stuck por más de 30 minutos - intentar recuperar
+                Log::warning('EjecutarNodosProgramados: Etapa anterior stuck, intentando recuperar', [
+                    'ejecucion_id' => $ejecucion->id,
+                    'etapa_stuck_id' => $etapasEnEjecucion->id,
+                    'node_id' => $etapasEnEjecucion->node_id,
+                    'minutos_en_executing' => $tiempoEnEjecucion,
+                ]);
+                
+                $this->recuperarEtapaStuck($etapasEnEjecucion, $ejecucion);
+                return;
+            }
+            
+            Log::info('EjecutarNodosProgramados: Esperando que etapa anterior complete', [
+                'ejecucion_id' => $ejecucion->id,
+                'etapa_en_ejecucion' => $etapasEnEjecucion->node_id,
+                'proximo_nodo' => $ejecucion->proximo_nodo,
+                'minutos_en_executing' => $tiempoEnEjecucion,
+            ]);
+            return;
+        }
+
         $flujo = $ejecucion->flujo;
         $flujoData = $flujo->flujo_data;
         $stages = $flujoData['stages'] ?? [];
@@ -320,6 +353,32 @@ class EjecutarNodosProgramados implements ShouldQueue
         array $stage,
         array $branches
     ): void {
+        // ✅ VERIFICACIÓN: La etapa de email anterior debe estar COMPLETADA
+        // Buscar la etapa de email que conecta con esta condición
+        $conexionHaciaCondicion = collect($branches)->first(function ($branch) use ($stage) {
+            return $branch['target_node_id'] === $stage['id'];
+        });
+
+        if ($conexionHaciaCondicion) {
+            $nodoEmailAnteriorId = $conexionHaciaCondicion['source_node_id'];
+            $etapaEmailDirecta = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
+                ->where('node_id', $nodoEmailAnteriorId)
+                ->first();
+
+            if ($etapaEmailDirecta && $etapaEmailDirecta->estado === 'executing') {
+                Log::info('EjecutarNodosProgramados: Condición esperando que email anterior complete', [
+                    'ejecucion_id' => $ejecucion->id,
+                    'condicion_node_id' => $stage['id'],
+                    'email_node_id' => $nodoEmailAnteriorId,
+                    'email_estado' => $etapaEmailDirecta->estado,
+                ]);
+                
+                // No ejecutar la condición todavía - el email aún está procesando
+                // El nodo se volverá a intentar en la próxima ejecución del cron
+                return;
+            }
+        }
+
         // Obtener el message_id de la etapa de email anterior
         // (necesario para consultar estadísticas en AthenaCampaign)
         $etapaEmailAnterior = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
@@ -332,6 +391,10 @@ class EjecutarNodosProgramados implements ShouldQueue
             Log::error('EjecutarNodosProgramados: No se encontró etapa de email anterior con message_id', [
                 'ejecucion_id' => $ejecucion->id,
                 'nodo_id' => $stage['id'],
+                'etapas_completadas' => FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
+                    ->where('ejecutado', true)
+                    ->pluck('node_id', 'estado')
+                    ->toArray(),
             ]);
             
             // Marcar etapa como fallida
@@ -413,6 +476,164 @@ class EjecutarNodosProgramados implements ShouldQueue
         Log::info('EjecutarNodosProgramados: Ejecución completada', [
             'ejecucion_id' => $ejecucion->id,
         ]);
+    }
+
+    /**
+     * Recupera una etapa que quedó stuck en 'executing'.
+     * 
+     * Posibles causas de stuck:
+     * - Callback de batch falló silenciosamente
+     * - Instancia de Cloud Run matada durante procesamiento
+     * - Error no capturado en el job
+     */
+    private function recuperarEtapaStuck(FlujoEjecucionEtapa $etapa, FlujoEjecucion $ejecucion): void
+    {
+        Log::info('EjecutarNodosProgramados: Iniciando recuperación de etapa stuck', [
+            'etapa_id' => $etapa->id,
+            'node_id' => $etapa->node_id,
+        ]);
+
+        // Verificar si hay un batch asociado que podamos consultar
+        $batchInfo = $etapa->response_athenacampaign;
+        $batchId = $batchInfo['batch_id'] ?? null;
+
+        if ($batchId) {
+            // Intentar obtener estado del batch
+            try {
+                $batch = \Illuminate\Support\Facades\Bus::findBatch($batchId);
+                
+                if ($batch) {
+                    if ($batch->finished()) {
+                        // El batch terminó pero el callback no se ejecutó
+                        Log::info('EjecutarNodosProgramados: Batch terminado, ejecutando recuperación', [
+                            'batch_id' => $batchId,
+                            'processed' => $batch->processedJobs(),
+                            'failed' => $batch->failedJobs,
+                        ]);
+
+                        // Generar messageId simulado
+                        $messageId = rand(10000, 99999);
+
+                        $etapa->update([
+                            'estado' => 'completed',
+                            'ejecutado' => true,
+                            'message_id' => $messageId,
+                            'fecha_ejecucion' => now(),
+                            'response_athenacampaign' => array_merge($batchInfo, [
+                                'recovered' => true,
+                                'recovered_at' => now()->toISOString(),
+                                'messageID' => $messageId,
+                                'Recipients' => $batch->processedJobs() - $batch->failedJobs,
+                                'Errores' => $batch->failedJobs,
+                            ]),
+                        ]);
+
+                        // Actualizar la ejecución para continuar
+                        $this->actualizarEjecucionDespuesDeRecuperacion($ejecucion, $etapa);
+                        return;
+                    }
+
+                    if ($batch->cancelled()) {
+                        Log::error('EjecutarNodosProgramados: Batch fue cancelado', ['batch_id' => $batchId]);
+                        $this->marcarEtapaComoFallida($etapa, 'Batch cancelado');
+                        return;
+                    }
+
+                    // Batch aún procesando - esperar más
+                    Log::info('EjecutarNodosProgramados: Batch aún procesando', [
+                        'batch_id' => $batchId,
+                        'pending' => $batch->pendingJobs,
+                    ]);
+                    return;
+                }
+            } catch (\Exception $e) {
+                Log::warning('EjecutarNodosProgramados: No se pudo consultar batch', [
+                    'batch_id' => $batchId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        // No hay batch o no se pudo recuperar - marcar como failed y permitir reintento manual
+        $this->marcarEtapaComoFallida($etapa, 'Etapa stuck sin información de batch recuperable');
+    }
+
+    /**
+     * Marca una etapa como fallida
+     */
+    private function marcarEtapaComoFallida(FlujoEjecucionEtapa $etapa, string $razon): void
+    {
+        $etapa->update([
+            'estado' => 'failed',
+            'ejecutado' => true,
+            'fecha_ejecucion' => now(),
+            'response_athenacampaign' => array_merge(
+                $etapa->response_athenacampaign ?? [],
+                ['error' => $razon, 'failed_at' => now()->toISOString()]
+            ),
+        ]);
+
+        Log::error('EjecutarNodosProgramados: Etapa marcada como fallida', [
+            'etapa_id' => $etapa->id,
+            'razon' => $razon,
+        ]);
+    }
+
+    /**
+     * Actualiza la ejecución después de recuperar una etapa
+     */
+    private function actualizarEjecucionDespuesDeRecuperacion(FlujoEjecucion $ejecucion, FlujoEjecucionEtapa $etapa): void
+    {
+        // Obtener datos del flujo para encontrar el siguiente nodo
+        $flujoData = $ejecucion->flujo->flujo_data ?? [];
+        $branches = $flujoData['branches'] ?? $flujoData['edges'] ?? [];
+        
+        // Normalizar edges a branches
+        if (!empty($flujoData['edges']) && empty($flujoData['branches'])) {
+            $branches = collect($flujoData['edges'])->map(function ($edge) {
+                return [
+                    'source_node_id' => $edge['source'] ?? null,
+                    'target_node_id' => $edge['target'] ?? null,
+                    'source_handle' => $edge['sourceHandle'] ?? null,
+                ];
+            })->toArray();
+        }
+
+        // Buscar siguiente nodo
+        $siguienteConexion = collect($branches)->firstWhere('source_node_id', $etapa->node_id);
+        
+        if ($siguienteConexion) {
+            $siguienteNodoId = $siguienteConexion['target_node_id'];
+            
+            // Buscar si ya existe la etapa para el siguiente nodo
+            $siguienteEtapa = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
+                ->where('node_id', $siguienteNodoId)
+                ->first();
+
+            $fechaProximoNodo = $siguienteEtapa?->fecha_programada ?? now();
+
+            $ejecucion->update([
+                'nodo_actual' => $etapa->node_id,
+                'proximo_nodo' => $siguienteNodoId,
+                'fecha_proximo_nodo' => $fechaProximoNodo,
+            ]);
+
+            Log::info('EjecutarNodosProgramados: Ejecución actualizada después de recuperación', [
+                'ejecucion_id' => $ejecucion->id,
+                'nodo_recuperado' => $etapa->node_id,
+                'proximo_nodo' => $siguienteNodoId,
+            ]);
+        } else {
+            // No hay siguiente nodo - completar ejecución
+            $ejecucion->update([
+                'estado' => 'completed',
+                'fecha_fin' => now(),
+                'proximo_nodo' => null,
+                'fecha_proximo_nodo' => null,
+            ]);
+
+            Log::info('EjecutarNodosProgramados: Ejecución completada después de recuperación');
+        }
     }
 
     /**
