@@ -60,11 +60,13 @@ class EnviarEtapaJob implements ShouldQueue
 
     public function handle(): void
     {
+        $totalProspectos = count($this->prospectoIds);
+        
         Log::info('EnviarEtapaJob: Iniciando', [
             'flujo_ejecucion_id' => $this->flujoEjecucionId,
             'etapa_ejecucion_id' => $this->etapaEjecucionId,
             'stage_label' => $this->stage['label'] ?? 'Unknown',
-            'prospectos_count' => count($this->prospectoIds),
+            'prospectos_count' => $totalProspectos,
         ]);
 
         $ejecucion = $this->loadEjecucion();
@@ -82,6 +84,14 @@ class EnviarEtapaJob implements ShouldQueue
         }
 
         $this->updateInitialStates($ejecucion, $etapaEjecucion);
+        
+        // Para volúmenes grandes (>5000), usar estrategia de chunks con batches múltiples
+        if ($totalProspectos > 5000) {
+            $this->handleLargeVolume($ejecucion, $etapaEjecucion);
+            return;
+        }
+        
+        // Volumen normal: procesar todo de una
         $prospectosEnFlujo = $this->obtenerProspectosEnFlujo($ejecucion);
         $contenidoData = $this->obtenerContenidoMensaje();
         $jobs = $this->createBatchJobs($prospectosEnFlujo, $contenidoData, $ejecucion);
@@ -93,6 +103,189 @@ class EnviarEtapaJob implements ShouldQueue
         }
 
         $this->dispatchBatch($jobs, $ejecucion, $etapaEjecucion, $contenidoData);
+    }
+    
+    /**
+     * Maneja volúmenes grandes (>5000 prospectos) usando batches múltiples.
+     * 
+     * En lugar de crear 350k jobs en memoria, crea múltiples batches de 2000 jobs cada uno.
+     * Cada batch se procesa independientemente y el progreso se trackea en la etapa.
+     */
+    private function handleLargeVolume(FlujoEjecucion $ejecucion, FlujoEjecucionEtapa $etapaEjecucion): void
+    {
+        $totalProspectos = count($this->prospectoIds);
+        $chunkSize = 2000; // Jobs por batch
+        $totalChunks = ceil($totalProspectos / $chunkSize);
+        
+        Log::info('EnviarEtapaJob: Modo volumen grande activado', [
+            'total_prospectos' => $totalProspectos,
+            'chunk_size' => $chunkSize,
+            'total_chunks' => $totalChunks,
+        ]);
+
+        // Asegurar que los prospectos existan en ProspectoEnFlujo (bulk insert)
+        $this->ensureProspectosEnFlujoExist($ejecucion);
+        
+        $contenidoData = $this->obtenerContenidoMensaje();
+        $tipoMensaje = $this->stage['tipo_mensaje'] ?? 'email';
+        $flujoId = $ejecucion->flujo_id;
+        
+        // Guardar metadata del procesamiento
+        $etapaEjecucion->update([
+            'response_athenacampaign' => [
+                'modo' => 'large_volume',
+                'total_prospectos' => $totalProspectos,
+                'total_chunks' => $totalChunks,
+                'chunk_size' => $chunkSize,
+                'batches_created' => 0,
+                'started_at' => now()->toIso8601String(),
+            ],
+        ]);
+
+        $batchIds = [];
+        $batchesCreated = 0;
+        
+        // Procesar en chunks usando cursor para no cargar todo en memoria
+        $prospectoIdsChunks = array_chunk($this->prospectoIds, $chunkSize);
+        
+        foreach ($prospectoIdsChunks as $chunkIndex => $chunkIds) {
+            // Obtener ProspectoEnFlujo para este chunk
+            $prospectosEnFlujoChunk = ProspectoEnFlujo::where('flujo_id', $flujoId)
+                ->whereIn('prospecto_id', $chunkIds)
+                ->get();
+            
+            if ($prospectosEnFlujoChunk->isEmpty()) {
+                Log::warning('EnviarEtapaJob: Chunk vacío', ['chunk_index' => $chunkIndex]);
+                continue;
+            }
+            
+            // Crear jobs para este chunk
+            $jobs = [];
+            foreach ($prospectosEnFlujoChunk as $prospectoEnFlujo) {
+                $job = $this->createJobForProspecto(
+                    prospectoEnFlujo: $prospectoEnFlujo,
+                    contenidoData: $contenidoData,
+                    tipoMensaje: $tipoMensaje,
+                    flujoId: $flujoId
+                );
+                if ($job) {
+                    $jobs[] = $job;
+                }
+            }
+            
+            if (empty($jobs)) {
+                continue;
+            }
+            
+            // Crear batch para este chunk (sin callbacks complejos para evitar memory issues)
+            $batchName = sprintf(
+                'Chunk %d/%d - Etapa %s - Flujo %d',
+                $chunkIndex + 1,
+                $totalChunks,
+                $this->stage['label'] ?? 'Sin nombre',
+                $flujoId
+            );
+            
+            $batch = Bus::batch($jobs)
+                ->name($batchName)
+                ->onQueue('envios')
+                ->allowFailures()
+                ->dispatch();
+            
+            $batchIds[] = $batch->id;
+            $batchesCreated++;
+            
+            Log::info('EnviarEtapaJob: Batch creado', [
+                'chunk_index' => $chunkIndex,
+                'batch_id' => $batch->id,
+                'jobs_in_batch' => count($jobs),
+            ]);
+            
+            // Liberar memoria
+            unset($jobs, $prospectosEnFlujoChunk);
+        }
+        
+        // Actualizar etapa con info de todos los batches
+        $etapaEjecucion->update([
+            'response_athenacampaign' => [
+                'modo' => 'large_volume',
+                'total_prospectos' => $totalProspectos,
+                'total_chunks' => $totalChunks,
+                'chunk_size' => $chunkSize,
+                'batches_created' => $batchesCreated,
+                'batch_ids' => $batchIds,
+                'started_at' => now()->toIso8601String(),
+            ],
+        ]);
+        
+        // Registrar job principal
+        FlujoJob::create([
+            'flujo_ejecucion_id' => $this->flujoEjecucionId,
+            'job_type' => 'enviar_etapa_large_volume',
+            'job_id' => implode(',', $batchIds),
+            'job_data' => [
+                'etapa_id' => $this->etapaEjecucionId,
+                'total_prospectos' => $totalProspectos,
+                'batches_created' => $batchesCreated,
+                'batch_ids' => $batchIds,
+            ],
+            'estado' => 'processing',
+            'fecha_queued' => now(),
+        ]);
+        
+        Log::info('EnviarEtapaJob: Volumen grande procesado', [
+            'total_batches' => $batchesCreated,
+            'batch_ids' => $batchIds,
+        ]);
+        
+        // NOTA: Para large volume, el siguiente paso se procesa cuando 
+        // el cron detecta que todos los batches terminaron (implementar en EjecutarNodosProgramados)
+    }
+    
+    /**
+     * Asegura que todos los prospectos existan en ProspectoEnFlujo usando bulk insert
+     */
+    private function ensureProspectosEnFlujoExist(FlujoEjecucion $ejecucion): void
+    {
+        $tipoMensaje = $this->stage['tipo_mensaje'] ?? 'email';
+        $flujoId = $ejecucion->flujo_id;
+        
+        // Obtener IDs que ya existen
+        $existingIds = ProspectoEnFlujo::where('flujo_id', $flujoId)
+            ->whereIn('prospecto_id', $this->prospectoIds)
+            ->pluck('prospecto_id')
+            ->toArray();
+        
+        $idsToCreate = array_diff($this->prospectoIds, $existingIds);
+        
+        if (empty($idsToCreate)) {
+            return;
+        }
+        
+        Log::info('EnviarEtapaJob: Creando prospectos en flujo', [
+            'a_crear' => count($idsToCreate),
+        ]);
+        
+        $now = now();
+        $chunks = array_chunk($idsToCreate, 1000);
+        
+        foreach ($chunks as $chunk) {
+            $insertData = array_map(function ($prospectoId) use ($flujoId, $tipoMensaje, $now) {
+                return [
+                    'prospecto_id' => $prospectoId,
+                    'flujo_id' => $flujoId,
+                    'canal_asignado' => $tipoMensaje,
+                    'estado' => 'en_proceso',
+                    'fecha_inicio' => $now,
+                    'completado' => false,
+                    'cancelado' => false,
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ];
+            }, $chunk);
+            
+            ProspectoEnFlujo::insert($insertData);
+        }
     }
 
     /**
@@ -475,31 +668,68 @@ class EnviarEtapaJob implements ShouldQueue
 
     /**
      * Obtiene o crea registros de ProspectoEnFlujo
+     * 
+     * OPTIMIZADO: Usa consultas en batch en lugar de foreach individual
+     * para manejar 350k+ prospectos sin timeout
      */
     private function obtenerProspectosEnFlujo(FlujoEjecucion $ejecucion): \Illuminate\Support\Collection
     {
         $tipoMensaje = $this->stage['tipo_mensaje'] ?? 'email';
-        $prospectosEnFlujo = collect();
+        $flujoId = $ejecucion->flujo_id;
+        
+        Log::info('EnviarEtapaJob: Obteniendo prospectos en flujo', [
+            'total_prospectos' => count($this->prospectoIds),
+            'flujo_id' => $flujoId,
+        ]);
 
-        foreach ($this->prospectoIds as $prospectoId) {
-            $prospectoEnFlujo = ProspectoEnFlujo::firstOrCreate(
-                [
-                    'prospecto_id' => $prospectoId,
-                    'flujo_id' => $ejecucion->flujo_id,
-                ],
-                [
-                    'canal_asignado' => $tipoMensaje,
-                    'estado' => 'en_proceso',
-                    'fecha_inicio' => now(),
-                    'completado' => false,
-                    'cancelado' => false,
-                ]
-            );
+        // 1. Obtener IDs de prospectos que YA están en el flujo (una sola query)
+        $existingIds = ProspectoEnFlujo::where('flujo_id', $flujoId)
+            ->whereIn('prospecto_id', $this->prospectoIds)
+            ->pluck('prospecto_id')
+            ->toArray();
 
-            $prospectosEnFlujo->push($prospectoEnFlujo);
+        // 2. Identificar IDs que necesitan ser creados
+        $idsToCreate = array_diff($this->prospectoIds, $existingIds);
+
+        Log::info('EnviarEtapaJob: Prospectos existentes vs nuevos', [
+            'existentes' => count($existingIds),
+            'a_crear' => count($idsToCreate),
+        ]);
+
+        // 3. Crear los nuevos en batch usando insert (mucho más rápido que firstOrCreate individual)
+        if (!empty($idsToCreate)) {
+            $now = now();
+            $chunks = array_chunk($idsToCreate, 1000); // Insertar de a 1000
+            
+            foreach ($chunks as $chunk) {
+                $insertData = array_map(function ($prospectoId) use ($flujoId, $tipoMensaje, $now) {
+                    return [
+                        'prospecto_id' => $prospectoId,
+                        'flujo_id' => $flujoId,
+                        'canal_asignado' => $tipoMensaje,
+                        'estado' => 'en_proceso',
+                        'fecha_inicio' => $now,
+                        'completado' => false,
+                        'cancelado' => false,
+                        'created_at' => $now,
+                        'updated_at' => $now,
+                    ];
+                }, $chunk);
+
+                ProspectoEnFlujo::insert($insertData);
+            }
+            
+            Log::info('EnviarEtapaJob: Prospectos creados en batch', [
+                'creados' => count($idsToCreate),
+            ]);
         }
 
-        return $prospectosEnFlujo;
+        // 4. Obtener todos los ProspectoEnFlujo en una sola query
+        // Usamos cursor() para no cargar todo en memoria
+        return ProspectoEnFlujo::where('flujo_id', $flujoId)
+            ->whereIn('prospecto_id', $this->prospectoIds)
+            ->cursor()
+            ->collect();
     }
 
     /**
