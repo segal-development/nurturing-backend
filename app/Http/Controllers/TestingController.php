@@ -500,6 +500,9 @@ class TestingController extends Controller
         // Obtener stages del flujo_data (JSON)
         $flujoData = $flujo->flujo_data ?? [];
         $stagesEnJson = $flujoData['stages'] ?? [];
+        
+        // Contar prospectos asignados al flujo
+        $prospectosEnFlujoCount = \App\Models\ProspectoEnFlujo::where('flujo_id', $flujoId)->count();
 
         // Obtener IDs de plantillas únicas
         $plantillaIds = $etapasEnBD->pluck('plantilla_id')
@@ -516,6 +519,8 @@ class TestingController extends Controller
             'flujo' => [
                 'id' => $flujo->id,
                 'nombre' => $flujo->nombre,
+                'estado_procesamiento' => $flujo->estado_procesamiento ?? 'no_definido',
+                'prospectos_en_flujo_count' => $prospectosEnFlujoCount,
             ],
             'etapas_en_bd' => $etapasEnBD->map(function ($etapa) {
                 return [
