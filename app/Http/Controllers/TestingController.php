@@ -747,6 +747,47 @@ class TestingController extends Controller
     }
 
     /**
+     * Debug de una etapa específica
+     * 
+     * GET /api/cron/debug-etapa/{etapaId}
+     */
+    public function debugEtapa(int $etapaId)
+    {
+        $etapa = FlujoEjecucionEtapa::find($etapaId);
+        
+        if (!$etapa) {
+            return response()->json(['error' => 'Etapa no encontrada'], 404);
+        }
+        
+        // Ver si hay batches en la tabla job_batches
+        $batches = DB::table('job_batches')
+            ->orderBy('created_at', 'desc')
+            ->limit(10)
+            ->get();
+        
+        // Ver jobs en cola
+        $jobsEnCola = DB::table('jobs')->count();
+        $jobsDetalle = DB::table('jobs')->limit(5)->get(['id', 'queue', 'created_at', 'available_at']);
+        
+        return response()->json([
+            'etapa' => [
+                'id' => $etapa->id,
+                'node_id' => $etapa->node_id,
+                'estado' => $etapa->estado,
+                'ejecutado' => $etapa->ejecutado,
+                'message_id' => $etapa->message_id,
+                'fecha_programada' => $etapa->fecha_programada,
+                'fecha_ejecucion' => $etapa->fecha_ejecucion,
+                'prospectos_ids_count' => is_array($etapa->prospectos_ids) ? count($etapa->prospectos_ids) : 0,
+                'response_athenacampaign' => $etapa->response_athenacampaign,
+            ],
+            'batches_recientes' => $batches,
+            'jobs_en_cola' => $jobsEnCola,
+            'jobs_detalle' => $jobsDetalle,
+        ]);
+    }
+
+    /**
      * Reinicia una ejecución que quedó huérfana/stuck
      * 
      * POST /api/cron/reiniciar-ejecucion/{ejecucionId}
