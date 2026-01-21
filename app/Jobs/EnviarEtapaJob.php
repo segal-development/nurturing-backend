@@ -749,7 +749,7 @@ class EnviarEtapaJob implements ShouldQueue
     /**
      * Handle a job failure.
      */
-    public function failed(\Exception $exception): void
+    public function failed(\Throwable $exception): void
     {
         Log::error('EnviarEtapaJob: Falló permanentemente', [
             'flujo_ejecucion_id' => $this->flujoEjecucionId,

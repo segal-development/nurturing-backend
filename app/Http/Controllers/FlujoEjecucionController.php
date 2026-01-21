@@ -29,11 +29,12 @@ class FlujoEjecucionController extends Controller
      */
     public function execute(Request $request, Flujo $flujo): JsonResponse
     {
-        // Validar request
+        // Validar request - prospectos_ids es opcional si use_all_prospectos es true
         $validator = Validator::make($request->all(), [
-            'origen_id' => 'required|string',
-            'prospectos_ids' => 'required|array|min:1',
+            'origen_id' => 'nullable|string',
+            'prospectos_ids' => 'nullable|array',
             'prospectos_ids.*' => 'integer|exists:prospectos,id',
+            'use_all_prospectos' => 'nullable|boolean',
             'fecha_inicio_programada' => 'nullable|date|after_or_equal:now',
         ]);
 
@@ -44,6 +45,29 @@ class FlujoEjecucionController extends Controller
                 'errores' => $validator->errors(),
             ], 422);
         }
+
+        // Si use_all_prospectos es true, obtener IDs de la BD
+        $prospectoIds = $request->prospectos_ids ?? [];
+        
+        if ($request->boolean('use_all_prospectos', false)) {
+            // Obtener todos los prospectos_ids del flujo de la BD (sin cargar modelos)
+            $prospectoIds = $flujo->prospectosEnFlujo()->pluck('prospecto_id')->toArray();
+            
+            Log::info('FlujoEjecucion: Usando todos los prospectos del flujo', [
+                'flujo_id' => $flujo->id,
+                'total_prospectos' => count($prospectoIds),
+            ]);
+        }
+
+        if (empty($prospectoIds)) {
+            return response()->json([
+                'error' => true,
+                'mensaje' => 'El flujo no tiene prospectos configurados',
+            ], 422);
+        }
+
+        // Reemplazar prospectos_ids en el request para el resto del código
+        $request->merge(['prospectos_ids' => $prospectoIds]);
 
         // Verificar que no haya una ejecución activa para este flujo
         $ejecucionActiva = FlujoEjecucion::where('flujo_id', $flujo->id)
