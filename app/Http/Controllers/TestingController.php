@@ -679,4 +679,70 @@ class TestingController extends Controller
             'ejecuciones' => $ejecuciones,
         ]);
     }
+
+    /**
+     * Monitoreo en tiempo real de envíos de una ejecución
+     * 
+     * GET /api/cron/monitor-envios/{ejecucionId}
+     */
+    public function monitorEnvios(int $ejecucionId)
+    {
+        $ejecucion = FlujoEjecucion::with('flujo:id,nombre')->findOrFail($ejecucionId);
+        
+        // Contar envíos por estado
+        $envioStats = \App\Models\Envio::where('flujo_id', $ejecucion->flujo_id)
+            ->where('created_at', '>=', $ejecucion->fecha_inicio_real ?? $ejecucion->created_at)
+            ->selectRaw("
+                COUNT(*) as total,
+                SUM(CASE WHEN estado = 'enviado' THEN 1 ELSE 0 END) as enviados,
+                SUM(CASE WHEN estado = 'fallido' THEN 1 ELSE 0 END) as fallidos,
+                SUM(CASE WHEN estado = 'pendiente' THEN 1 ELSE 0 END) as pendientes
+            ")
+            ->first();
+
+        // Contar prospectos totales del flujo
+        $totalProspectos = \App\Models\ProspectoEnFlujo::where('flujo_id', $ejecucion->flujo_id)->count();
+        
+        // Jobs en cola
+        $jobsEnCola = \Illuminate\Support\Facades\DB::table('jobs')->count();
+        
+        // Calcular velocidad (envíos en última hora)
+        $enviosUltimaHora = \App\Models\Envio::where('flujo_id', $ejecucion->flujo_id)
+            ->where('created_at', '>=', now()->subHour())
+            ->where('estado', 'enviado')
+            ->count();
+
+        // Tiempo estimado restante
+        $enviados = $envioStats->enviados ?? 0;
+        $restantes = $totalProspectos - $enviados;
+        $velocidadPorHora = $enviosUltimaHora > 0 ? $enviosUltimaHora : 9000; // default al rate limit
+        $horasRestantes = $restantes > 0 ? round($restantes / $velocidadPorHora, 1) : 0;
+
+        return response()->json([
+            'success' => true,
+            'ejecucion' => [
+                'id' => $ejecucion->id,
+                'flujo_nombre' => $ejecucion->flujo->nombre ?? 'N/A',
+                'estado' => $ejecucion->estado,
+                'inicio' => $ejecucion->fecha_inicio_real ?? $ejecucion->created_at,
+            ],
+            'prospectos' => [
+                'total' => $totalProspectos,
+                'procesados' => $enviados,
+                'porcentaje' => $totalProspectos > 0 ? round(($enviados / $totalProspectos) * 100, 2) : 0,
+            ],
+            'envios' => [
+                'total' => $envioStats->total ?? 0,
+                'enviados' => $envioStats->enviados ?? 0,
+                'fallidos' => $envioStats->fallidos ?? 0,
+                'pendientes' => $envioStats->pendientes ?? 0,
+            ],
+            'rendimiento' => [
+                'velocidad_ultima_hora' => $enviosUltimaHora,
+                'jobs_en_cola' => $jobsEnCola,
+                'tiempo_restante_estimado' => $horasRestantes . ' horas',
+            ],
+            'timestamp' => now()->toIso8601String(),
+        ]);
+    }
 }
