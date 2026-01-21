@@ -21,14 +21,14 @@ return [
     'rate_limits' => [
 
         'email' => [
-            // Maximum emails per second (2/sec = 7,200/hora, dentro del límite)
-            'per_second' => (int) env('EMAIL_RATE_PER_SECOND', 2),
+            // Maximum emails per second (2.5/sec = 9,000/hora, dentro del límite de 10k)
+            'per_second' => (int) env('EMAIL_RATE_PER_SECOND', 3),
 
-            // Maximum emails per minute (150/min = 9,000/hora con margen)
+            // Maximum emails per minute (150/min = 9,000/hora)
             'per_minute' => (int) env('EMAIL_RATE_PER_MINUTE', 150),
 
-            // Maximum emails per hour (80% del límite de Athena = 8,000)
-            'per_hour' => (int) env('EMAIL_RATE_PER_HOUR', 8000),
+            // Maximum emails per hour (90% del límite de Athena 10k = 9,000)
+            'per_hour' => (int) env('EMAIL_RATE_PER_HOUR', 9000),
 
             // Delay in seconds when rate limit is hit (exponential backoff base)
             'backoff_seconds' => (int) env('EMAIL_RATE_BACKOFF', 5),
