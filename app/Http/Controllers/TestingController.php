@@ -500,6 +500,16 @@ class TestingController extends Controller
         // Obtener stages del flujo_data (JSON)
         $flujoData = $flujo->flujo_data ?? [];
         $stagesEnJson = $flujoData['stages'] ?? [];
+
+        // Obtener IDs de plantillas únicas
+        $plantillaIds = $etapasEnBD->pluck('plantilla_id')
+            ->merge($etapasEnBD->pluck('plantilla_id_email'))
+            ->filter()
+            ->unique()
+            ->values();
+        
+        // Obtener info de plantillas
+        $plantillas = \App\Models\Plantilla::whereIn('id', $plantillaIds)->get();
         
         return response()->json([
             'success' => true,
@@ -518,6 +528,7 @@ class TestingController extends Controller
                     'plantilla_id_email' => $etapa->plantilla_id_email,
                     'tiene_plantilla_mensaje' => !empty($etapa->plantilla_mensaje),
                     'plantilla_mensaje_preview' => substr($etapa->plantilla_mensaje ?? '', 0, 100),
+                    'usaPlantillaReferencia' => $etapa->usaPlantillaReferencia(),
                 ];
             }),
             'stages_en_json' => collect($stagesEnJson)->map(function ($stage) {
@@ -529,6 +540,17 @@ class TestingController extends Controller
                     'plantilla_id' => $stage['plantilla_id'] ?? 'NO EXISTE EN JSON',
                     'tiene_plantilla_mensaje' => isset($stage['plantilla_mensaje']) && !empty($stage['plantilla_mensaje']),
                     'stage_keys' => array_keys($stage),
+                ];
+            }),
+            'plantillas' => $plantillas->map(function ($p) {
+                return [
+                    'id' => $p->id,
+                    'nombre' => $p->nombre,
+                    'tipo' => $p->tipo,
+                    'tiene_componentes' => !empty($p->componentes),
+                    'componentes_count' => is_array($p->componentes) ? count($p->componentes) : 0,
+                    'asunto' => $p->asunto,
+                    'html_preview' => substr($p->generarPreview() ?? '', 0, 500),
                 ];
             }),
             'comparacion' => [
