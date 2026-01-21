@@ -563,6 +563,62 @@ class TestingController extends Controller
     }
 
     /**
+     * Debug endpoint para simular obtenerContenidoMensaje()
+     * 
+     * GET /api/cron/debug-contenido/{stageId}
+     */
+    public function debugContenido(string $stageId)
+    {
+        // 1. Buscar en FlujoEtapa (como hace el job)
+        $flujoEtapa = \App\Models\FlujoEtapa::find($stageId);
+        
+        $resultado = [
+            'stage_id_buscado' => $stageId,
+            'stage_id_tipo' => gettype($stageId),
+            'stage_id_length' => strlen($stageId),
+        ];
+
+        if ($flujoEtapa) {
+            $resultado['flujo_etapa_encontrada'] = true;
+            $resultado['flujo_etapa'] = [
+                'id' => $flujoEtapa->id,
+                'id_tipo' => gettype($flujoEtapa->id),
+                'label' => $flujoEtapa->label,
+                'plantilla_type' => $flujoEtapa->plantilla_type,
+                'plantilla_id' => $flujoEtapa->plantilla_id,
+                'usaPlantillaReferencia' => $flujoEtapa->usaPlantillaReferencia(),
+            ];
+
+            if ($flujoEtapa->usaPlantillaReferencia()) {
+                $contenidoData = $flujoEtapa->obtenerContenidoParaEnvio('email');
+                $resultado['contenido'] = [
+                    'es_html' => $contenidoData['es_html'],
+                    'tiene_asunto' => !empty($contenidoData['asunto']),
+                    'asunto' => $contenidoData['asunto'] ?? null,
+                    'contenido_length' => strlen($contenidoData['contenido']),
+                    'contenido_preview' => substr($contenidoData['contenido'], 0, 500),
+                    'tiene_doctype' => str_contains($contenidoData['contenido'], '<!DOCTYPE'),
+                ];
+            }
+        } else {
+            $resultado['flujo_etapa_encontrada'] = false;
+            
+            // Intentar buscar con LIKE para ver si hay problemas de encoding
+            $etapasSimulares = \App\Models\FlujoEtapa::where('id', 'like', '%' . substr($stageId, 6, 10) . '%')->get();
+            $resultado['etapas_similares'] = $etapasSimulares->pluck('id')->toArray();
+            
+            // Listar todas las etapas para comparar
+            $todasEtapas = \App\Models\FlujoEtapa::all();
+            $resultado['todas_etapas_ids'] = $todasEtapas->pluck('id')->toArray();
+        }
+
+        return response()->json([
+            'success' => true,
+            'resultado' => $resultado,
+        ]);
+    }
+
+    /**
      * Debug endpoint para ver estado de ejecuciones (solo cron)
      */
     public function debugEjecuciones(Request $request)
