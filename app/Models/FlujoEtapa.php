@@ -104,10 +104,39 @@ class FlujoEtapa extends Model
         }
 
         // Fallback: contenido inline
+        $contenido = $this->plantilla_mensaje ?? '';
         return [
-            'contenido' => $this->plantilla_mensaje ?? '',
+            'contenido' => $contenido,
             'asunto' => null,
-            'es_html' => false,
+            'es_html' => $this->detectarSiEsHtml($contenido),
         ];
+    }
+
+    /**
+     * Detecta si un contenido es HTML.
+     */
+    private function detectarSiEsHtml(string $contenido): bool
+    {
+        $htmlPatterns = [
+            '/<html/i',
+            '/<body/i',
+            '/<div/i',
+            '/<p>/i',
+            '/<br/i',
+            '/<table/i',
+            '/<a\s+href/i',
+            '/<img/i',
+            '/<h[1-6]/i',
+            '/<span/i',
+            '/<style/i',
+        ];
+
+        foreach ($htmlPatterns as $pattern) {
+            if (preg_match($pattern, $contenido)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

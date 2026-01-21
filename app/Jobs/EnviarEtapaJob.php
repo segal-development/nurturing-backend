@@ -416,15 +416,53 @@ class EnviarEtapaJob implements ShouldQueue
             }
         }
 
+        $contenido = $this->stage['plantilla_mensaje'] ?? $this->stage['data']['contenido'] ?? '';
+        
+        // Detectar si el contenido es HTML
+        $esHtml = $this->detectarSiEsHtml($contenido);
+
         Log::info('EnviarEtapaJob: Usando contenido inline', [
             'stage_id' => $stageId,
+            'es_html' => $esHtml,
         ]);
 
         return [
-            'contenido' => $this->stage['plantilla_mensaje'] ?? '',
-            'asunto' => $this->stage['template']['asunto'] ?? null,
-            'es_html' => false,
+            'contenido' => $contenido,
+            'asunto' => $this->stage['template']['asunto'] ?? $this->stage['data']['template']['asunto'] ?? null,
+            'es_html' => $esHtml,
         ];
+    }
+
+    /**
+     * Detecta si un contenido es HTML.
+     * 
+     * @param string $contenido
+     * @return bool
+     */
+    private function detectarSiEsHtml(string $contenido): bool
+    {
+        // Si contiene tags HTML comunes, es HTML
+        $htmlPatterns = [
+            '/<html/i',
+            '/<body/i',
+            '/<div/i',
+            '/<p>/i',
+            '/<br/i',
+            '/<table/i',
+            '/<a\s+href/i',
+            '/<img/i',
+            '/<h[1-6]/i',
+            '/<span/i',
+            '/<style/i',
+        ];
+
+        foreach ($htmlPatterns as $pattern) {
+            if (preg_match($pattern, $contenido)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
