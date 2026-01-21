@@ -100,6 +100,8 @@ class FlujoController extends Controller
      */
     public function show(Flujo $flujo): JsonResponse
     {
+        $flujo->loadCount('prospectosEnFlujo');
+        
         $flujo->load([
             'tipoProspecto',
             'user',
