@@ -86,10 +86,31 @@ class FlujoEtapa extends Model
                 ? $this->plantillaEmail 
                 : $this->plantilla;
 
+            // ====== DEBUG: Log de la plantilla ======
+            \Illuminate\Support\Facades\Log::info('FlujoEtapa: DEBUG - Buscando plantilla', [
+                'flujo_etapa_id' => $this->id,
+                'tipo' => $tipo,
+                'plantilla_id' => $this->plantilla_id,
+                'plantilla_id_email' => $this->plantilla_id_email,
+                'plantilla_encontrada' => $plantilla ? true : false,
+                'plantilla_nombre' => $plantilla?->nombre,
+                'plantilla_tipo' => $plantilla?->tipo,
+            ]);
+
             if ($plantilla) {
                 if ($plantilla->esEmail()) {
+                    $htmlGenerado = $plantilla->generarPreview();
+                    
+                    \Illuminate\Support\Facades\Log::info('FlujoEtapa: DEBUG - HTML generado', [
+                        'plantilla_id' => $plantilla->id,
+                        'tiene_componentes' => !empty($plantilla->componentes),
+                        'componentes_count' => is_array($plantilla->componentes) ? count($plantilla->componentes) : 0,
+                        'html_length' => strlen($htmlGenerado ?? ''),
+                        'html_preview' => substr($htmlGenerado ?? '', 0, 300),
+                    ]);
+                    
                     return [
-                        'contenido' => $plantilla->generarPreview() ?? '',
+                        'contenido' => $htmlGenerado ?? '',
                         'asunto' => $plantilla->asunto,
                         'es_html' => true,
                     ];
@@ -100,11 +121,23 @@ class FlujoEtapa extends Model
                         'es_html' => false,
                     ];
                 }
+            } else {
+                \Illuminate\Support\Facades\Log::warning('FlujoEtapa: DEBUG - Plantilla NO encontrada', [
+                    'flujo_etapa_id' => $this->id,
+                    'plantilla_id' => $this->plantilla_id,
+                    'plantilla_id_email' => $this->plantilla_id_email,
+                ]);
             }
         }
 
         // Fallback: contenido inline
         $contenido = $this->plantilla_mensaje ?? '';
+        
+        \Illuminate\Support\Facades\Log::info('FlujoEtapa: DEBUG - Usando contenido inline (fallback)', [
+            'flujo_etapa_id' => $this->id,
+            'contenido_length' => strlen($contenido),
+        ]);
+        
         return [
             'contenido' => $contenido,
             'asunto' => null,

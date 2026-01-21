@@ -403,8 +403,36 @@ class EnviarEtapaJob implements ShouldQueue
         $tipoMensaje = $this->stage['tipo_mensaje'] ?? 'email';
         $stageId = $this->stage['id'] ?? null;
 
+        // ====== DEBUG: Log completo del stage para diagnóstico ======
+        Log::info('EnviarEtapaJob: DEBUG - Stage completo', [
+            'stage_id' => $stageId,
+            'tipo_mensaje' => $tipoMensaje,
+            'stage_keys' => array_keys($this->stage),
+            'plantilla_type_en_stage' => $this->stage['plantilla_type'] ?? 'NO EXISTE',
+            'plantilla_id_en_stage' => $this->stage['plantilla_id'] ?? 'NO EXISTE',
+            'tiene_plantilla_mensaje' => isset($this->stage['plantilla_mensaje']),
+        ]);
+
         if ($stageId) {
             $flujoEtapa = FlujoEtapa::find($stageId);
+
+            // ====== DEBUG: Log detallado de FlujoEtapa ======
+            if ($flujoEtapa) {
+                Log::info('EnviarEtapaJob: DEBUG - FlujoEtapa encontrada', [
+                    'stage_id' => $stageId,
+                    'flujo_etapa_id' => $flujoEtapa->id,
+                    'plantilla_type' => $flujoEtapa->plantilla_type,
+                    'plantilla_id' => $flujoEtapa->plantilla_id,
+                    'plantilla_id_email' => $flujoEtapa->plantilla_id_email,
+                    'usaPlantillaReferencia' => $flujoEtapa->usaPlantillaReferencia(),
+                    'tiene_plantilla_mensaje' => !empty($flujoEtapa->plantilla_mensaje),
+                ]);
+            } else {
+                Log::warning('EnviarEtapaJob: DEBUG - FlujoEtapa NO encontrada', [
+                    'stage_id_buscado' => $stageId,
+                    'stage_id_tipo' => gettype($stageId),
+                ]);
+            }
 
             if ($flujoEtapa && $flujoEtapa->usaPlantillaReferencia()) {
                 Log::info('EnviarEtapaJob: Usando plantilla de referencia', [
@@ -412,7 +440,17 @@ class EnviarEtapaJob implements ShouldQueue
                     'plantilla_id' => $flujoEtapa->plantilla_id,
                 ]);
 
-                return $flujoEtapa->obtenerContenidoParaEnvio($tipoMensaje);
+                $contenidoData = $flujoEtapa->obtenerContenidoParaEnvio($tipoMensaje);
+                
+                // ====== DEBUG: Log del contenido obtenido ======
+                Log::info('EnviarEtapaJob: DEBUG - Contenido de plantilla referencia', [
+                    'es_html' => $contenidoData['es_html'],
+                    'tiene_asunto' => !empty($contenidoData['asunto']),
+                    'contenido_length' => strlen($contenidoData['contenido']),
+                    'contenido_preview' => substr($contenidoData['contenido'], 0, 200),
+                ]);
+
+                return $contenidoData;
             }
         }
 
@@ -421,9 +459,11 @@ class EnviarEtapaJob implements ShouldQueue
         // Detectar si el contenido es HTML
         $esHtml = $this->detectarSiEsHtml($contenido);
 
-        Log::info('EnviarEtapaJob: Usando contenido inline', [
+        Log::info('EnviarEtapaJob: Usando contenido inline (fallback)', [
             'stage_id' => $stageId,
             'es_html' => $esHtml,
+            'contenido_length' => strlen($contenido),
+            'razon' => $stageId ? 'FlujoEtapa no usa plantilla de referencia' : 'No hay stage_id',
         ]);
 
         return [
