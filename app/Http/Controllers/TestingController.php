@@ -745,4 +745,136 @@ class TestingController extends Controller
             'timestamp' => now()->toIso8601String(),
         ]);
     }
+
+    /**
+     * Reinicia una ejecución que quedó huérfana/stuck
+     * 
+     * POST /api/cron/reiniciar-ejecucion/{ejecucionId}
+     * 
+     * Útil cuando:
+     * - El servidor se cayó durante el procesamiento
+     * - Los jobs se perdieron
+     * - La ejecución quedó en 'in_progress' pero sin jobs
+     */
+    public function reiniciarEjecucion(int $ejecucionId)
+    {
+        $ejecucion = FlujoEjecucion::with(['flujo', 'etapas'])->findOrFail($ejecucionId);
+        
+        Log::info('ReiniciarEjecucion: Iniciando reinicio', [
+            'ejecucion_id' => $ejecucionId,
+            'estado_actual' => $ejecucion->estado,
+            'proximo_nodo' => $ejecucion->proximo_nodo,
+        ]);
+
+        // Verificar que esté en estado que permite reinicio
+        if (!in_array($ejecucion->estado, ['in_progress', 'paused', 'failed'])) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Solo se pueden reiniciar ejecuciones en estado in_progress, paused o failed',
+                'estado_actual' => $ejecucion->estado,
+            ], 422);
+        }
+
+        // Obtener prospectos del flujo
+        $prospectoIds = $ejecucion->prospectos_ids;
+        
+        if (empty($prospectoIds)) {
+            // Si no hay prospectos_ids en la ejecución, obtenerlos del flujo
+            $prospectoIds = \App\Models\ProspectoEnFlujo::where('flujo_id', $ejecucion->flujo_id)
+                ->pluck('prospecto_id')
+                ->toArray();
+                
+            Log::info('ReiniciarEjecucion: Obtenidos prospectos del flujo', [
+                'total_prospectos' => count($prospectoIds),
+            ]);
+        }
+
+        if (empty($prospectoIds)) {
+            return response()->json([
+                'success' => false,
+                'error' => 'No se encontraron prospectos para esta ejecución',
+            ], 422);
+        }
+
+        // Buscar la primera etapa pendiente o la que debe ejecutarse
+        $primeraEtapaPendiente = $ejecucion->etapas()
+            ->whereIn('estado', ['pending', 'executing'])
+            ->orderBy('fecha_programada')
+            ->first();
+
+        if (!$primeraEtapaPendiente) {
+            // Si no hay etapas pendientes, buscar la primera etapa
+            $primeraEtapaPendiente = $ejecucion->etapas()
+                ->orderBy('id')
+                ->first();
+        }
+
+        if (!$primeraEtapaPendiente) {
+            return response()->json([
+                'success' => false,
+                'error' => 'No se encontraron etapas para esta ejecución',
+            ], 422);
+        }
+
+        // Resetear etapas que estaban en 'executing' (stuck)
+        $etapasStuck = $ejecucion->etapas()
+            ->where('estado', 'executing')
+            ->get();
+
+        foreach ($etapasStuck as $etapaStuck) {
+            $etapaStuck->update([
+                'estado' => 'pending',
+                'ejecutado' => false,
+                'fecha_ejecucion' => null,
+            ]);
+            
+            Log::info('ReiniciarEjecucion: Etapa stuck reseteada', [
+                'etapa_id' => $etapaStuck->id,
+                'node_id' => $etapaStuck->node_id,
+            ]);
+        }
+
+        // Asegurar que la primera etapa tenga los prospectos_ids
+        $primeraEtapaPendiente->update([
+            'prospectos_ids' => $prospectoIds,
+            'estado' => 'pending',
+            'ejecutado' => false,
+        ]);
+
+        // Actualizar la ejecución para que el cron la encuentre
+        $ejecucion->update([
+            'estado' => 'in_progress',
+            'prospectos_ids' => $prospectoIds,
+            'proximo_nodo' => $primeraEtapaPendiente->node_id,
+            'fecha_proximo_nodo' => now(), // Ejecutar inmediatamente
+            'error_message' => null,
+        ]);
+
+        // Limpiar jobs viejos de la cola que puedan estar relacionados
+        $jobsEliminados = DB::table('jobs')
+            ->where('payload', 'like', '%' . $ejecucionId . '%')
+            ->delete();
+
+        Log::info('ReiniciarEjecucion: Ejecución reiniciada exitosamente', [
+            'ejecucion_id' => $ejecucionId,
+            'proximo_nodo' => $primeraEtapaPendiente->node_id,
+            'total_prospectos' => count($prospectoIds),
+            'jobs_eliminados' => $jobsEliminados,
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Ejecución reiniciada exitosamente',
+            'data' => [
+                'ejecucion_id' => $ejecucionId,
+                'estado' => 'in_progress',
+                'proximo_nodo' => $primeraEtapaPendiente->node_id,
+                'fecha_proximo_nodo' => now()->toIso8601String(),
+                'total_prospectos' => count($prospectoIds),
+                'etapas_reseteadas' => $etapasStuck->count(),
+                'jobs_eliminados' => $jobsEliminados,
+            ],
+            'siguiente_paso' => 'El cron process-queue debería procesar esta ejecución en el próximo ciclo',
+        ]);
+    }
 }

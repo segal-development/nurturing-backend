@@ -35,6 +35,8 @@ Route::get('/cron/debug-contenido/{stageId}', [TestingController::class, 'debugC
     ->middleware('cron.secret');
 Route::get('/cron/monitor-envios/{ejecucionId}', [TestingController::class, 'monitorEnvios'])
     ->middleware('cron.secret');
+Route::post('/cron/reiniciar-ejecucion/{ejecucionId}', [TestingController::class, 'reiniciarEjecucion'])
+    ->middleware('cron.secret');
 
 // Rutas protegidas con Sanctum (sesión o token)
 Route::middleware('auth:sanctum')->group(function () {
