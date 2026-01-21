@@ -5,8 +5,6 @@ namespace App\Jobs;
 use App\Models\Flujo;
 use App\Models\FlujoEjecucion;
 use App\Models\FlujoEjecucionEtapa;
-use App\Models\FlujoEtapa;
-use App\Models\ProspectoEnFlujo;
 use App\Services\EnvioService;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -233,6 +231,15 @@ class EjecutarNodosProgramados implements ShouldQueue
 
     /**
      * Ejecuta un nodo de envío (email o SMS)
+     * 
+     * ✅ ARQUITECTURA PARA ENVÍOS MASIVOS:
+     * En lugar de llamar a EnvioService directamente (que hace foreach síncrono),
+     * despachamos EnviarEtapaJob que tiene:
+     * - Batching para procesar en paralelo
+     * - Rate limiting para no saturar SMTP
+     * - Timeout apropiado para volúmenes grandes (350k+)
+     * 
+     * El cron solo ORQUESTA, no ejecuta envíos directamente.
      */
     private function ejecutarNodoEnvio(
         FlujoEjecucion $ejecucion,
@@ -251,97 +258,35 @@ class EjecutarNodosProgramados implements ShouldQueue
         // Si no, usar los prospectos de la ejecución completa
         $prospectoIds = $etapa->prospectos_ids ?? $ejecucion->prospectos_ids;
 
-        Log::info('EjecutarNodosProgramados: Obteniendo prospectos', [
+        Log::info('EjecutarNodosProgramados: Despachando EnviarEtapaJob', [
+            'ejecucion_id' => $ejecucion->id,
+            'etapa_id' => $etapa->id,
+            'stage_id' => $stage['id'] ?? 'unknown',
             'usa_prospectos_etapa' => $etapa->prospectos_ids !== null,
             'total_prospectos' => count($prospectoIds),
         ]);
 
-        // Obtener prospectos para este flujo
-        $prospectosEnFlujo = ProspectoEnFlujo::whereIn('prospecto_id', $prospectoIds)
-            ->where('flujo_id', $ejecucion->flujo_id)
-            ->with('prospecto')
-            ->get();
-
-        // Obtener tipo del mensaje
-        $tipoMensaje = $stage['data']['tipo_mensaje'] ?? $stage['tipo_mensaje'] ?? 'email';
-        
-        // ✅ Obtener contenido usando la lógica de plantillas (igual que EnviarEtapaJob)
-        $contenidoData = $this->obtenerContenidoMensaje($stage, $tipoMensaje);
-
-        Log::info('EjecutarNodosProgramados: Enviando mensaje', [
-            'stage_id' => $stage['id'] ?? 'unknown',
-            'tipo' => $tipoMensaje,
-            'es_html' => $contenidoData['es_html'],
-            'tiene_asunto' => !empty($contenidoData['asunto']),
-        ]);
-
-        // Enviar mensaje
-        $response = $envioService->enviar(
-            tipoMensaje: $tipoMensaje,
-            prospectosEnFlujo: $prospectosEnFlujo,
-            contenido: $contenidoData['contenido'],
-            template: [
-                'asunto' => $contenidoData['asunto'] ?? $stage['data']['template']['asunto'] ?? null,
-            ],
-            flujo: $ejecucion->flujo,
+        // ✅ Despachar job con batching en lugar de envío síncrono
+        // EnviarEtapaJob maneja:
+        // - Creación de batch de jobs individuales
+        // - Rate limiting via RateLimitedMiddleware
+        // - Callbacks para marcar etapa como completed
+        // - Programación del siguiente nodo
+        EnviarEtapaJob::dispatch(
+            flujoEjecucionId: $ejecucion->id,
             etapaEjecucionId: $etapa->id,
-            esHtml: $contenidoData['es_html']
+            stage: $stage,
+            prospectoIds: $prospectoIds,
+            branches: $branches
         );
 
-        // Actualizar etapa con resultado
-        $etapa->update([
-            'estado' => 'completed',
-            'ejecutado' => true,
-            'message_id' => $response['mensaje']['messageID'] ?? null,
-            'response_athenacampaign' => $response,
-        ]);
-
-        Log::info('EjecutarNodosProgramados: Nodo de envío completado', [
+        Log::info('EjecutarNodosProgramados: EnviarEtapaJob despachado', [
+            'ejecucion_id' => $ejecucion->id,
             'etapa_id' => $etapa->id,
-            'message_id' => $response['mensaje']['messageID'] ?? null,
         ]);
 
-        // Programar siguiente nodo (usar branches normalizados)
-        $this->programarSiguienteNodo($ejecucion, $stage['id'], $branches);
-    }
-
-    /**
-     * Obtiene el contenido del mensaje a enviar.
-     * Prioriza plantilla de referencia sobre contenido inline.
-     * 
-     * @param array $stage Datos del stage desde flujo_data
-     * @param string $tipoMensaje 'email' o 'sms'
-     * @return array{contenido: string, asunto: string|null, es_html: bool}
-     */
-    private function obtenerContenidoMensaje(array $stage, string $tipoMensaje): array
-    {
-        // Intentar buscar la FlujoEtapa para usar plantilla de referencia
-        $stageId = $stage['id'] ?? null;
-        
-        if ($stageId) {
-            $flujoEtapa = FlujoEtapa::find($stageId);
-            
-            if ($flujoEtapa && $flujoEtapa->usaPlantillaReferencia()) {
-                Log::info('EjecutarNodosProgramados: Usando plantilla de referencia', [
-                    'stage_id' => $stageId,
-                    'plantilla_id' => $flujoEtapa->plantilla_id,
-                    'plantilla_type' => $flujoEtapa->plantilla_type,
-                ]);
-                
-                return $flujoEtapa->obtenerContenidoParaEnvio($tipoMensaje);
-            }
-        }
-        
-        // Fallback: usar contenido inline del stage
-        Log::info('EjecutarNodosProgramados: Usando contenido inline', [
-            'stage_id' => $stageId,
-        ]);
-        
-        return [
-            'contenido' => $stage['data']['contenido'] ?? $stage['plantilla_mensaje'] ?? '',
-            'asunto' => $stage['data']['template']['asunto'] ?? null,
-            'es_html' => false,
-        ];
+        // NOTA: NO programamos siguiente nodo aquí
+        // EnviarEtapaJob lo hace en su callback onBatchCompleted
     }
 
     /**

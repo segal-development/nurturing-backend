@@ -3,6 +3,7 @@
 namespace Tests\Unit\Jobs;
 
 use App\Jobs\EjecutarNodosProgramados;
+use App\Jobs\EnviarEtapaJob;
 use App\Jobs\VerificarCondicionJob;
 use App\Models\Flujo;
 use App\Models\FlujoCondicion;
@@ -163,7 +164,8 @@ class EjecutarNodosProgramadosTest extends TestCase
     /** @test */
     public function job_encuentra_ejecuciones_con_nodos_programados(): void
     {
-        $envioService = $this->mockEnvioService();
+        Bus::fake([EnviarEtapaJob::class]);
+        $envioService = Mockery::mock(EnvioService::class);
         
         $job = new EjecutarNodosProgramados();
         $job->handle($envioService);
@@ -175,7 +177,8 @@ class EjecutarNodosProgramadosTest extends TestCase
     /** @test */
     public function job_crea_etapa_ejecucion_si_no_existe(): void
     {
-        $envioService = $this->mockEnvioService();
+        Bus::fake([EnviarEtapaJob::class]);
+        $envioService = Mockery::mock(EnvioService::class);
         
         // Verificar que no existe la etapa
         $this->assertDatabaseMissing('flujo_ejecucion_etapas', [
@@ -242,50 +245,43 @@ class EjecutarNodosProgramadosTest extends TestCase
     // ============================================
 
     /** @test */
-    public function job_envia_email_para_nodo_tipo_email(): void
+    public function job_despacha_enviar_etapa_job_para_nodo_tipo_email(): void
     {
+        Bus::fake([EnviarEtapaJob::class]);
+        
         $envioService = Mockery::mock(EnvioService::class);
-        $envioService->shouldReceive('enviar')
-            ->once()
-            ->with(
-                Mockery::on(fn($tipo) => $tipo === 'email'),
-                Mockery::any(),
-                Mockery::any(),
-                Mockery::any(),
-                Mockery::any(),
-                Mockery::any(),
-                Mockery::any()
-            )
-            ->andReturn([
-                'error' => false,
-                'mensaje' => ['messageID' => 12345],
-            ]);
         
         $job = new EjecutarNodosProgramados();
         $job->handle($envioService);
         
-        // Verificar que la etapa se marcó como completada
+        // Verificar que se despachó EnviarEtapaJob
+        Bus::assertDispatched(EnviarEtapaJob::class, function ($job) {
+            return $job->flujoEjecucionId === $this->ejecucion->id
+                && in_array($this->prospecto->id, $job->prospectoIds);
+        });
+        
+        // Verificar que la etapa se marcó como executing (EnviarEtapaJob la marcará completed)
         $this->assertDatabaseHas('flujo_ejecucion_etapas', [
             'flujo_ejecucion_id' => $this->ejecucion->id,
             'node_id' => 'stage-1',
-            'estado' => 'completed',
-            'ejecutado' => true,
-            'message_id' => 12345,
+            'estado' => 'executing',
         ]);
     }
 
     /** @test */
-    public function job_actualiza_etapa_con_message_id(): void
+    public function job_pasa_branches_a_enviar_etapa_job(): void
     {
-        $envioService = $this->mockEnvioService(54321);
+        Bus::fake([EnviarEtapaJob::class]);
+        
+        $envioService = Mockery::mock(EnvioService::class);
         
         $job = new EjecutarNodosProgramados();
         $job->handle($envioService);
         
-        $this->assertDatabaseHas('flujo_ejecucion_etapas', [
-            'flujo_ejecucion_id' => $this->ejecucion->id,
-            'message_id' => 54321,
-        ]);
+        Bus::assertDispatched(EnviarEtapaJob::class, function ($job) {
+            // Debe incluir branches para que sepa hacia dónde continuar
+            return !empty($job->branches);
+        });
     }
 
     // ============================================
@@ -362,8 +358,10 @@ class EjecutarNodosProgramadosTest extends TestCase
     // ============================================
 
     /** @test */
-    public function job_completa_ejecucion_cuando_alcanza_nodo_end(): void
+    public function job_despacha_enviar_etapa_job_con_branches_para_nodo_end(): void
     {
+        Bus::fake([EnviarEtapaJob::class]);
+        
         // Modificar flujo para tener nodo end
         $this->flujo->update([
             'config_structure' => [
@@ -376,14 +374,16 @@ class EjecutarNodosProgramadosTest extends TestCase
             ],
         ]);
         
-        $envioService = $this->mockEnvioService();
+        $envioService = Mockery::mock(EnvioService::class);
         
         $job = new EjecutarNodosProgramados();
         $job->handle($envioService);
         
-        $this->ejecucion->refresh();
-        $this->assertEquals('completed', $this->ejecucion->estado);
-        $this->assertNull($this->ejecucion->proximo_nodo);
+        // Debe despachar job con branches que contienen el nodo end
+        // EnviarEtapaJob usará estos branches para saber que debe completar la ejecución
+        Bus::assertDispatched(EnviarEtapaJob::class, function ($job) {
+            return collect($job->branches)->contains(fn($b) => $b['target_node_id'] === 'end-1');
+        });
     }
 
     // ============================================
@@ -391,20 +391,26 @@ class EjecutarNodosProgramadosTest extends TestCase
     // ============================================
 
     /** @test */
-    public function job_programa_siguiente_nodo_despues_de_envio(): void
+    public function job_despacha_enviar_etapa_job_con_branches_para_siguiente_nodo(): void
     {
-        $envioService = $this->mockEnvioService();
+        Bus::fake([EnviarEtapaJob::class]);
+        $envioService = Mockery::mock(EnvioService::class);
         
         $job = new EjecutarNodosProgramados();
         $job->handle($envioService);
         
-        $this->ejecucion->refresh();
-        $this->assertEquals('conditional-1', $this->ejecucion->proximo_nodo);
+        // EnviarEtapaJob recibe los branches para saber hacia dónde continuar
+        // El job los usará en su callback onBatchCompleted
+        Bus::assertDispatched(EnviarEtapaJob::class, function ($job) {
+            return collect($job->branches)->contains(fn($b) => $b['target_node_id'] === 'conditional-1');
+        });
     }
 
     /** @test */
-    public function job_completa_ejecucion_si_no_hay_siguiente_nodo(): void
+    public function job_despacha_enviar_etapa_job_sin_branches_cuando_no_hay_siguiente(): void
     {
+        Bus::fake([EnviarEtapaJob::class]);
+        
         // Flujo sin conexiones después del stage
         $this->flujo->update([
             'config_structure' => [
@@ -415,13 +421,15 @@ class EjecutarNodosProgramadosTest extends TestCase
             ],
         ]);
         
-        $envioService = $this->mockEnvioService();
+        $envioService = Mockery::mock(EnvioService::class);
         
         $job = new EjecutarNodosProgramados();
         $job->handle($envioService);
         
-        $this->ejecucion->refresh();
-        $this->assertEquals('completed', $this->ejecucion->estado);
+        // EnviarEtapaJob detectará que no hay branches y completará la ejecución
+        Bus::assertDispatched(EnviarEtapaJob::class, function ($job) {
+            return empty($job->branches);
+        });
     }
 
     // ============================================
@@ -480,6 +488,8 @@ class EjecutarNodosProgramadosTest extends TestCase
     /** @test */
     public function job_normaliza_edges_a_branches(): void
     {
+        Bus::fake([EnviarEtapaJob::class]);
+        
         // Flujo con edges en lugar de branches
         $this->flujo->update([
             'config_structure' => [
@@ -494,14 +504,17 @@ class EjecutarNodosProgramadosTest extends TestCase
             ],
         ]);
         
-        $envioService = $this->mockEnvioService();
+        $envioService = Mockery::mock(EnvioService::class);
         
         $job = new EjecutarNodosProgramados();
         $job->handle($envioService);
         
-        // Debería haber programado stage-2 como siguiente
-        $this->ejecucion->refresh();
-        $this->assertEquals('stage-2', $this->ejecucion->proximo_nodo);
+        // El job debe recibir los edges normalizados como branches
+        Bus::assertDispatched(EnviarEtapaJob::class, function ($job) {
+            return collect($job->branches)->contains(fn($b) => 
+                $b['source_node_id'] === 'stage-1' && $b['target_node_id'] === 'stage-2'
+            );
+        });
     }
 
     /** @test */
@@ -550,6 +563,8 @@ class EjecutarNodosProgramadosTest extends TestCase
     /** @test */
     public function job_detecta_tipo_desde_tipo_mensaje_si_no_hay_type(): void
     {
+        Bus::fake([EnviarEtapaJob::class]);
+        
         $this->flujo->update([
             'config_structure' => [
                 'stages' => [
@@ -564,15 +579,18 @@ class EjecutarNodosProgramadosTest extends TestCase
             ],
         ]);
         
-        $envioService = $this->mockEnvioService();
+        $envioService = Mockery::mock(EnvioService::class);
         
         $job = new EjecutarNodosProgramados();
         $job->handle($envioService);
         
-        // Debería haber detectado como stage y enviado
+        // Debería haber detectado como stage y despachado EnviarEtapaJob
+        Bus::assertDispatched(EnviarEtapaJob::class);
+        
+        // Etapa debe estar en executing
         $this->assertDatabaseHas('flujo_ejecucion_etapas', [
             'flujo_ejecucion_id' => $this->ejecucion->id,
-            'estado' => 'completed',
+            'estado' => 'executing',
         ]);
     }
 
@@ -583,6 +601,8 @@ class EjecutarNodosProgramadosTest extends TestCase
     /** @test */
     public function job_procesa_multiples_ejecuciones(): void
     {
+        Bus::fake([EnviarEtapaJob::class]);
+        
         // Crear segunda ejecución
         $ejecucion2 = FlujoEjecucion::factory()->create([
             'flujo_id' => $this->flujo->id,
@@ -593,12 +613,12 @@ class EjecutarNodosProgramadosTest extends TestCase
         ]);
         
         $envioService = Mockery::mock(EnvioService::class);
-        $envioService->shouldReceive('enviar')
-            ->twice()
-            ->andReturn(['error' => false, 'mensaje' => ['messageID' => 11111]]);
         
         $job = new EjecutarNodosProgramados();
         $job->handle($envioService);
+        
+        // Deberían haberse despachado 2 jobs (uno por ejecución)
+        Bus::assertDispatchedTimes(EnviarEtapaJob::class, 2);
         
         // Ambas ejecuciones deberían haber sido procesadas
         $this->assertEquals('stage-1', $this->ejecucion->fresh()->nodo_actual);
@@ -608,6 +628,8 @@ class EjecutarNodosProgramadosTest extends TestCase
     /** @test */
     public function job_continua_con_otras_ejecuciones_si_una_falla(): void
     {
+        Bus::fake([EnviarEtapaJob::class]);
+        
         // Crear segunda ejecución con flujo válido
         $ejecucion2 = FlujoEjecucion::factory()->create([
             'flujo_id' => $this->flujo->id,
@@ -617,20 +639,19 @@ class EjecutarNodosProgramadosTest extends TestCase
             'prospectos_ids' => [$this->prospecto->id],
         ]);
         
-        // Hacer que la primera ejecución falle
+        // Hacer que la primera ejecución falle (nodo inexistente)
         $this->ejecucion->update(['proximo_nodo' => 'nodo-inexistente']);
         
         $envioService = Mockery::mock(EnvioService::class);
-        $envioService->shouldReceive('enviar')
-            ->once()
-            ->andReturn(['error' => false, 'mensaje' => ['messageID' => 22222]]);
         
         $job = new EjecutarNodosProgramados();
         $job->handle($envioService);
         
-        // Primera falla, segunda procesa
+        // Primera falla por nodo inexistente, segunda despacha job
         $this->assertEquals('failed', $this->ejecucion->fresh()->estado);
-        $this->assertEquals('stage-1', $ejecucion2->fresh()->nodo_actual);
+        Bus::assertDispatched(EnviarEtapaJob::class, function ($job) use ($ejecucion2) {
+            return $job->flujoEjecucionId === $ejecucion2->id;
+        });
     }
 
     // ============================================
@@ -638,28 +659,26 @@ class EjecutarNodosProgramadosTest extends TestCase
     // ============================================
 
     /** @test */
-    public function job_no_usa_transacciones_largas(): void
+    public function job_crea_etapa_antes_de_despachar(): void
     {
-        // Este test verifica indirectamente que no hay transacciones largas
-        // verificando que cada operación es independiente
+        // Este test verifica que la etapa se crea de forma atómica
+        // antes de despachar el job de envío
+        Bus::fake([EnviarEtapaJob::class]);
         
         $envioService = Mockery::mock(EnvioService::class);
-        $envioService->shouldReceive('enviar')
-            ->once()
-            ->andThrow(new \Exception('Error de envío simulado'));
         
         $job = new EjecutarNodosProgramados();
         $job->handle($envioService);
         
-        // La ejecución debería estar marcada como fallida
-        $this->ejecucion->refresh();
-        $this->assertEquals('failed', $this->ejecucion->estado);
-        
-        // Pero la etapa debería haberse creado (operación atómica previa)
+        // La etapa debería haberse creado
         $this->assertDatabaseHas('flujo_ejecucion_etapas', [
             'flujo_ejecucion_id' => $this->ejecucion->id,
             'node_id' => 'stage-1',
+            'estado' => 'executing',
         ]);
+        
+        // Y el job debería haberse despachado
+        Bus::assertDispatched(EnviarEtapaJob::class);
     }
 
     // ============================================
