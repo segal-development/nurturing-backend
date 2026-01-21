@@ -486,6 +486,61 @@ class TestingController extends Controller
     }
 
     /**
+     * Debug endpoint para ver datos de un flujo y sus etapas guardadas
+     * 
+     * GET /api/cron/debug-flujo/{flujoId}
+     */
+    public function debugFlujo(int $flujoId)
+    {
+        $flujo = \App\Models\Flujo::findOrFail($flujoId);
+        
+        // Obtener etapas de la tabla flujo_etapas
+        $etapasEnBD = \App\Models\FlujoEtapa::where('flujo_id', $flujoId)->get();
+        
+        // Obtener stages del flujo_data (JSON)
+        $flujoData = $flujo->flujo_data ?? [];
+        $stagesEnJson = $flujoData['stages'] ?? [];
+        
+        return response()->json([
+            'success' => true,
+            'flujo' => [
+                'id' => $flujo->id,
+                'nombre' => $flujo->nombre,
+            ],
+            'etapas_en_bd' => $etapasEnBD->map(function ($etapa) {
+                return [
+                    'id' => $etapa->id,
+                    'flujo_id' => $etapa->flujo_id,
+                    'label' => $etapa->label,
+                    'tipo_mensaje' => $etapa->tipo_mensaje,
+                    'plantilla_type' => $etapa->plantilla_type,
+                    'plantilla_id' => $etapa->plantilla_id,
+                    'plantilla_id_email' => $etapa->plantilla_id_email,
+                    'tiene_plantilla_mensaje' => !empty($etapa->plantilla_mensaje),
+                    'plantilla_mensaje_preview' => substr($etapa->plantilla_mensaje ?? '', 0, 100),
+                ];
+            }),
+            'stages_en_json' => collect($stagesEnJson)->map(function ($stage) {
+                return [
+                    'id' => $stage['id'] ?? null,
+                    'label' => $stage['label'] ?? null,
+                    'tipo_mensaje' => $stage['tipo_mensaje'] ?? null,
+                    'plantilla_type' => $stage['plantilla_type'] ?? 'NO EXISTE EN JSON',
+                    'plantilla_id' => $stage['plantilla_id'] ?? 'NO EXISTE EN JSON',
+                    'tiene_plantilla_mensaje' => isset($stage['plantilla_mensaje']) && !empty($stage['plantilla_mensaje']),
+                    'stage_keys' => array_keys($stage),
+                ];
+            }),
+            'comparacion' => [
+                'total_etapas_bd' => $etapasEnBD->count(),
+                'total_stages_json' => count($stagesEnJson),
+                'ids_en_bd' => $etapasEnBD->pluck('id')->toArray(),
+                'ids_en_json' => collect($stagesEnJson)->pluck('id')->toArray(),
+            ],
+        ]);
+    }
+
+    /**
      * Debug endpoint para ver estado de ejecuciones (solo cron)
      */
     public function debugEjecuciones(Request $request)

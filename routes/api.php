@@ -29,6 +29,8 @@ Route::post('/cron/process-queue', [TestingController::class, 'processQueue'])
     ->middleware('cron.secret');
 Route::get('/cron/debug-ejecuciones', [TestingController::class, 'debugEjecuciones'])
     ->middleware('cron.secret');
+Route::get('/cron/debug-flujo/{flujoId}', [TestingController::class, 'debugFlujo'])
+    ->middleware('cron.secret');
 
 // Rutas protegidas con Sanctum (sesión o token)
 Route::middleware('auth:sanctum')->group(function () {
