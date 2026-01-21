@@ -214,8 +214,17 @@ class EjecutarNodosProgramados implements ShouldQueue
             'fecha_ejecucion' => now(),
         ]);
 
+        // ✅ PRIORIDAD: usar prospectos de la etapa si están disponibles (filtrado por condición)
+        // Si no, usar los prospectos de la ejecución completa
+        $prospectoIds = $etapa->prospectos_ids ?? $ejecucion->prospectos_ids;
+
+        Log::info('EjecutarNodosProgramados: Obteniendo prospectos', [
+            'usa_prospectos_etapa' => $etapa->prospectos_ids !== null,
+            'total_prospectos' => count($prospectoIds),
+        ]);
+
         // Obtener prospectos para este flujo
-        $prospectosEnFlujo = ProspectoEnFlujo::whereIn('prospecto_id', $ejecucion->prospectos_ids)
+        $prospectosEnFlujo = ProspectoEnFlujo::whereIn('prospecto_id', $prospectoIds)
             ->where('flujo_id', $ejecucion->flujo_id)
             ->with('prospecto')
             ->get();
@@ -337,10 +346,15 @@ class EjecutarNodosProgramados implements ShouldQueue
 
         $messageId = (int) $etapaEmailAnterior->message_id;
 
+        // ✅ PRIORIDAD: usar prospectos de la etapa si están disponibles (filtrado previo)
+        // Si no, usar los prospectos de la ejecución completa
+        $prospectoIds = $etapa->prospectos_ids ?? $ejecucion->prospectos_ids;
+
         Log::info('EjecutarNodosProgramados: Encontrado message_id para condición', [
             'message_id' => $messageId,
             'etapa_email_id' => $etapaEmailAnterior->id,
             'etapa_email_node_id' => $etapaEmailAnterior->node_id,
+            'prospectos_count' => count($prospectoIds),
         ]);
 
         // Construir el array $condicion con el formato esperado por VerificarCondicionJob
@@ -360,12 +374,13 @@ class EjecutarNodosProgramados implements ShouldQueue
             'fecha_ejecucion' => now(),
         ]);
 
-        // Despachar job para evaluar condición
+        // ✅ Despachar job para evaluar condición con prospectos filtrados
         VerificarCondicionJob::dispatch(
             $ejecucion->id,
             $etapa->id,
             $condicion,
-            $messageId
+            $messageId,
+            $prospectoIds  // Pasar prospectos a evaluar
         );
 
         Log::info('EjecutarNodosProgramados: Condición despachada para evaluación', [
@@ -373,7 +388,7 @@ class EjecutarNodosProgramados implements ShouldQueue
             'etapa_ejecucion_id' => $etapa->id,
             'nodo_id' => $stage['id'],
             'message_id' => $messageId,
-            'condicion' => $condicion,
+            'prospectos_count' => count($prospectoIds),
         ]);
     }
 

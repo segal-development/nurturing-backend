@@ -596,13 +596,17 @@ class EnviarEtapaJob implements ShouldQueue
         Log::info('EnviarEtapaJob: Programando verificación de condición', [
             'en_horas' => $tiempoVerificacion,
             'condition_node_id' => $targetNodeId,
+            'prospectos_count' => count($this->prospectoIds),
         ]);
 
+        // ✅ Pasar prospectos_ids al job de verificación de condición
+        // Esto permite que la condición evalúe CADA prospecto individualmente
         VerificarCondicionJob::dispatch(
             $this->flujoEjecucionId,
             $etapaEjecucion->id,
             $conexion,
-            $messageId
+            $messageId,
+            $this->prospectoIds  // Prospectos a evaluar
         )->delay($fechaVerificacion);
 
         $ejecucion->update([
@@ -626,12 +630,15 @@ class EnviarEtapaJob implements ShouldQueue
         Log::info('EnviarEtapaJob: Programando siguiente etapa', [
             'siguiente_node_id' => $targetNodeId,
             'tiempo_espera_dias' => $tiempoEspera,
+            'prospectos_count' => count($this->prospectoIds),
         ]);
 
+        // ✅ Guardar prospectos_ids en la etapa para propagación del filtrado
         $siguienteEtapaEjecucion = FlujoEjecucionEtapa::create([
             'flujo_ejecucion_id' => $this->flujoEjecucionId,
             'etapa_id' => null,
             'node_id' => $targetNodeId,
+            'prospectos_ids' => $this->prospectoIds,  // Propagar prospectos
             'fecha_programada' => $fechaProgramada,
             'estado' => 'pending',
         ]);

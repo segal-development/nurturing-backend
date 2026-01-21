@@ -11,6 +11,7 @@ class FlujoEjecucionCondicion extends Model
 
     protected $fillable = [
         'flujo_ejecucion_id',
+        'etapa_id',
         'condition_node_id',
         'check_param',
         'check_operator',
@@ -19,6 +20,12 @@ class FlujoEjecucionCondicion extends Model
         'resultado',
         'response_athenacampaign',
         'check_result_value',
+        // Campos para filtrado por prospecto
+        'prospectos_rama_si',
+        'prospectos_rama_no',
+        'total_evaluados',
+        'total_rama_si',
+        'total_rama_no',
     ];
 
     protected function casts(): array
@@ -27,6 +34,8 @@ class FlujoEjecucionCondicion extends Model
             'fecha_verificacion' => 'datetime',
             'response_athenacampaign' => 'array',
             'check_result_value' => 'integer',
+            'prospectos_rama_si' => 'array',
+            'prospectos_rama_no' => 'array',
         ];
     }
 

@@ -9,19 +9,30 @@ use App\Models\FlujoEjecucionCondicion;
 use App\Models\FlujoEjecucionEtapa;
 use App\Models\FlujoJob;
 use App\Services\AthenaCampaignService;
+use App\Services\CondicionEvaluatorService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
+/**
+ * Job para verificar condiciones y filtrar prospectos por rama.
+ * 
+ * Este job evalúa CADA PROSPECTO individualmente y los separa en ramas Sí/No.
+ * 
+ * Ejemplo:
+ * - 100 prospectos reciben email
+ * - Condición: ¿Abrió email?
+ * - 20 abrieron → van a rama Sí (reciben email de seguimiento)
+ * - 80 no abrieron → van a rama No (reciben email de recordatorio)
+ */
 class VerificarCondicionJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public $timeout = 300; // 5 minutos
+    public $timeout = 120; // 2 minutos (reducido para evitar locks)
 
     public $tries = 3;
 
@@ -29,79 +40,53 @@ class VerificarCondicionJob implements ShouldQueue
 
     /**
      * Create a new job instance.
+     * 
+     * @param int $flujoEjecucionId ID de la ejecución del flujo
+     * @param int $etapaEjecucionId ID de la etapa de la condición
+     * @param array $condicion Datos de la condición (target_node_id, source_node_id)
+     * @param int $messageId ID del mensaje en AthenaCampaign (para fallback)
+     * @param array|null $prospectoIds IDs de prospectos a evaluar (si null, usa los de la ejecución)
      */
     public function __construct(
         public int $flujoEjecucionId,
         public int $etapaEjecucionId,
         public array $condicion,
-        public int $messageId
+        public int $messageId,
+        public ?array $prospectoIds = null
     ) {
-        // ✅ Indica que el job debe despacharse solo DESPUÉS del commit de la transacción
         $this->afterCommit();
     }
 
     /**
      * Execute the job.
      */
-    public function handle(AthenaCampaignService $athenaService): void
+    public function handle(CondicionEvaluatorService $evaluatorService): void
     {
         Log::info('VerificarCondicionJob: Iniciado', [
             'flujo_ejecucion_id' => $this->flujoEjecucionId,
             'etapa_ejecucion_id' => $this->etapaEjecucionId,
             'message_id' => $this->messageId,
             'condition_node_id' => $this->condicion['target_node_id'] ?? 'unknown',
+            'prospectos_count' => $this->prospectoIds ? count($this->prospectoIds) : 'from_ejecucion',
         ]);
-
-        DB::beginTransaction();
 
         try {
             // 1. Obtener modelos
             $ejecucion = FlujoEjecucion::findOrFail($this->flujoEjecucionId);
             $etapaEjecucion = FlujoEjecucionEtapa::findOrFail($this->etapaEjecucionId);
 
-            // 2. Obtener estadísticas - primero intentar locales, luego AthenaCampaign
-            Log::info('VerificarCondicionJob: Consultando estadísticas', [
-                'flujo_ejecucion_id' => $this->flujoEjecucionId,
-                'message_id' => $this->messageId,
-            ]);
-
-            // Intentar obtener estadísticas LOCALES primero (de la BD)
-            $stats = $this->obtenerEstadisticasLocales($ejecucion);
-            $statsResponse = ['error' => false, 'mensaje' => $stats, '_source' => 'local'];
-            
-            // Si no hay datos locales y tenemos un messageId válido, intentar AthenaCampaign
-            if (empty($stats['Views']) && $this->messageId > 0) {
-                $athenaResponse = $athenaService->getStatistics($this->messageId);
-                if (!($athenaResponse['error'] ?? true)) {
-                    $stats = $athenaResponse['mensaje'] ?? [];
-                    $statsResponse = $athenaResponse;
-                    $statsResponse['_source'] = 'athenacampaign';
-                }
-            }
-
-            Log::info('VerificarCondicionJob: Estadísticas obtenidas', [
-                'stats' => $stats,
-                'source' => $statsResponse['_source'] ?? 'unknown',
-            ]);
-
-            // 3. Extraer datos de la condición desde la BD
+            // 2. Obtener configuración de la condición
             $conditionNodeId = $this->condicion['target_node_id'];
+            $sourceNodeId = $this->condicion['source_node_id'] ?? null;
             
-            // Obtener la condición de la base de datos (tiene los check_* correctos)
             $flujoCondicion = FlujoCondicion::find($conditionNodeId);
             
             if ($flujoCondicion) {
-                // Usar datos de la BD (fuente de verdad)
                 $checkParam = $flujoCondicion->check_param;
                 $checkOperator = $flujoCondicion->check_operator;
                 $checkValue = $flujoCondicion->check_value;
-                
-                Log::info('VerificarCondicionJob: Usando datos de BD', [
-                    'condition_node_id' => $conditionNodeId,
-                    'condition_type' => $flujoCondicion->condition_type,
-                ]);
             } else {
-                // Fallback a datos del array (compatibilidad)
+                // Fallback a datos del array
                 $conditionData = $this->condicion['data'] ?? [];
                 $checkParam = $conditionData['check_param'] ?? 'Views';
                 $checkOperator = $conditionData['check_operator'] ?? '>';
@@ -112,24 +97,55 @@ class VerificarCondicionJob implements ShouldQueue
                 ]);
             }
 
-            // 4. Obtener valor actual de las estadísticas
-            $actualValue = $stats[$checkParam] ?? 0;
+            // 3. Obtener prospectos a evaluar
+            // Prioridad: parámetro del job > etapa > ejecución
+            $prospectoIds = $this->prospectoIds 
+                ?? $etapaEjecucion->prospectos_ids 
+                ?? $ejecucion->prospectos_ids 
+                ?? [];
 
-            Log::info('VerificarCondicionJob: Evaluando condición', [
+            if (empty($prospectoIds)) {
+                Log::warning('VerificarCondicionJob: No hay prospectos para evaluar', [
+                    'flujo_ejecucion_id' => $this->flujoEjecucionId,
+                ]);
+                return;
+            }
+
+            // 4. Obtener la etapa de email anterior (para buscar envíos)
+            $etapaEmailAnterior = $this->obtenerEtapaEmailAnterior($ejecucion, $sourceNodeId);
+
+            if (!$etapaEmailAnterior) {
+                Log::error('VerificarCondicionJob: No se encontró etapa de email anterior', [
+                    'flujo_ejecucion_id' => $this->flujoEjecucionId,
+                    'source_node_id' => $sourceNodeId,
+                ]);
+                
+                // Marcar la etapa como fallida
+                $etapaEjecucion->update([
+                    'estado' => 'failed',
+                    'error_mensaje' => 'No se encontró etapa de email anterior para evaluar condición',
+                ]);
+                return;
+            }
+
+            Log::info('VerificarCondicionJob: Evaluando prospectos por condición', [
+                'total_prospectos' => count($prospectoIds),
+                'etapa_email_id' => $etapaEmailAnterior->id,
                 'check_param' => $checkParam,
                 'check_operator' => $checkOperator,
                 'check_value' => $checkValue,
-                'actual_value' => $actualValue,
             ]);
 
-            // 5. Evaluar condición
-            $resultado = $this->evaluarCondicion($actualValue, $checkOperator, $checkValue);
+            // 5. ✅ EVALUACIÓN POR PROSPECTO - El cambio principal
+            $resultado = $evaluatorService->evaluarPorProspecto(
+                $prospectoIds,
+                $etapaEmailAnterior->id,
+                $checkParam,
+                $checkOperator,
+                $checkValue
+            );
 
-            Log::info('VerificarCondicionJob: Resultado de condición', [
-                'resultado' => $resultado ? 'yes' : 'no',
-            ]);
-
-            // 6. Registrar condición evaluada
+            // 6. Registrar condición evaluada con detalle por prospecto
             $condicionEjecucion = FlujoEjecucionCondicion::create([
                 'flujo_ejecucion_id' => $this->flujoEjecucionId,
                 'etapa_id' => $this->etapaEjecucionId,
@@ -137,13 +153,29 @@ class VerificarCondicionJob implements ShouldQueue
                 'check_param' => $checkParam,
                 'check_operator' => $checkOperator,
                 'check_value' => (string) $checkValue,
-                'check_result_value' => $actualValue,
-                'resultado' => $resultado ? 'yes' : 'no',
+                'check_result_value' => $resultado['estadisticas']['si'], // Cuántos cumplieron
+                'resultado' => $resultado['estadisticas']['si'] > 0 ? 'mixed' : 'no', // Resultado general
                 'fecha_verificacion' => now(),
-                'response_athenacampaign' => $statsResponse,
+                'response_athenacampaign' => [
+                    '_source' => 'local_per_prospect',
+                    'estadisticas' => $resultado['estadisticas'],
+                ],
+                // Nuevos campos de filtrado
+                'prospectos_rama_si' => $resultado['rama_si'],
+                'prospectos_rama_no' => $resultado['rama_no'],
+                'total_evaluados' => $resultado['estadisticas']['evaluados'],
+                'total_rama_si' => $resultado['estadisticas']['si'],
+                'total_rama_no' => $resultado['estadisticas']['no'],
             ]);
 
-            // 7. Registrar job como completado
+            // 7. Actualizar etapa de condición como completada
+            $etapaEjecucion->update([
+                'estado' => 'completed',
+                'ejecutado' => true,
+                'fecha_ejecucion' => now(),
+            ]);
+
+            // 8. Registrar job como completado
             FlujoJob::create([
                 'flujo_ejecucion_id' => $this->flujoEjecucionId,
                 'job_type' => 'verificar_condicion',
@@ -152,25 +184,25 @@ class VerificarCondicionJob implements ShouldQueue
                     'etapa_id' => $this->etapaEjecucionId,
                     'condition_node_id' => $conditionNodeId,
                     'message_id' => $this->messageId,
+                    'total_evaluados' => $resultado['estadisticas']['evaluados'],
+                    'rama_si' => $resultado['estadisticas']['si'],
+                    'rama_no' => $resultado['estadisticas']['no'],
                 ],
                 'estado' => 'completed',
                 'fecha_queued' => now(),
                 'fecha_procesado' => now(),
             ]);
 
-            // 8. Determinar siguiente etapa según resultado
-            $this->procesarSiguienteEtapa($ejecucion, $condicionEjecucion, $resultado);
-
-            DB::commit();
+            // 9. ✅ PROGRAMAR AMBAS RAMAS con prospectos filtrados
+            $this->programarAmbasRamas($ejecucion, $condicionEjecucion, $resultado);
 
             Log::info('VerificarCondicionJob: Completado exitosamente', [
                 'condicion_id' => $condicionEjecucion->id,
-                'resultado' => $resultado ? 'yes' : 'no',
+                'prospectos_rama_si' => count($resultado['rama_si']),
+                'prospectos_rama_no' => count($resultado['rama_no']),
             ]);
 
         } catch (\Exception $e) {
-            DB::rollBack();
-
             Log::error('VerificarCondicionJob: Error', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
@@ -197,153 +229,164 @@ class VerificarCondicionJob implements ShouldQueue
     }
 
     /**
-     * Evalúa la condición según el operador
-     * 
-     * Operadores soportados:
-     * - >  : Mayor que
-     * - >= : Mayor o igual
-     * - == : Igual
-     * - != : No igual (distinto)
-     * - <  : Menor que
-     * - <= : Menor o igual
-     * - in : Está en lista (expectedValue puede ser "1,2,3" o [1,2,3])
-     * - not_in : No está en lista
+     * Programa ambas ramas (Sí y No) con sus prospectos filtrados.
      */
-    private function evaluarCondicion(int $actualValue, string $operator, mixed $expectedValue): bool
-    {
-        // Para operadores 'in' y 'not_in', parsear el valor esperado como array
-        $expectedArray = $this->parseExpectedValueAsArray($expectedValue);
-        
-        return match ($operator) {
-            '>' => $actualValue > (int) $expectedValue,
-            '>=' => $actualValue >= (int) $expectedValue,
-            '==' => $actualValue == (int) $expectedValue,
-            '!=' => $actualValue != (int) $expectedValue,
-            '<' => $actualValue < (int) $expectedValue,
-            '<=' => $actualValue <= (int) $expectedValue,
-            'in' => in_array($actualValue, $expectedArray, false),
-            'not_in' => !in_array($actualValue, $expectedArray, false),
-            default => false,
-        };
-    }
-    
-    /**
-     * Parsea el valor esperado como array para operadores 'in' y 'not_in'
-     * Soporta: "1,2,3" (string separado por comas) o [1,2,3] (array)
-     */
-    private function parseExpectedValueAsArray(mixed $expectedValue): array
-    {
-        if (is_array($expectedValue)) {
-            return array_map('intval', $expectedValue);
-        }
-        
-        if (is_string($expectedValue) && str_contains($expectedValue, ',')) {
-            return array_map('intval', array_map('trim', explode(',', $expectedValue)));
-        }
-        
-        return [(int) $expectedValue];
-    }
-
-    /**
-     * Procesa la siguiente etapa según el resultado de la condición
-     */
-    private function procesarSiguienteEtapa(
+    private function programarAmbasRamas(
         FlujoEjecucion $ejecucion,
         FlujoEjecucionCondicion $condicion,
-        bool $resultado
+        array $resultado
     ): void {
-        // Buscar siguiente etapa según rama yes/no
-        $ramaElegida = $resultado ? 'yes' : 'no';
-
-        Log::info('VerificarCondicionJob: Buscando siguiente etapa', [
-            'rama' => $ramaElegida,
-            'condition_node_id' => $condicion->condition_node_id,
-        ]);
-
-        // Buscar conexión desde este nodo de condición
         $flujoData = $ejecucion->flujo->flujo_data ?? [];
         $branches = $flujoData['branches'] ?? [];
 
-        $siguienteConexion = collect($branches)->first(function ($branch) use ($condicion, $ramaElegida) {
+        // Programar rama Sí (si hay prospectos)
+        if (!empty($resultado['rama_si'])) {
+            $this->programarRama(
+                $ejecucion,
+                $condicion->condition_node_id,
+                'yes',
+                $resultado['rama_si'],
+                $branches,
+                $flujoData
+            );
+        } else {
+            Log::info('VerificarCondicionJob: Rama Sí vacía, no se programa', [
+                'condition_node_id' => $condicion->condition_node_id,
+            ]);
+        }
+
+        // Programar rama No (si hay prospectos)
+        if (!empty($resultado['rama_no'])) {
+            $this->programarRama(
+                $ejecucion,
+                $condicion->condition_node_id,
+                'no',
+                $resultado['rama_no'],
+                $branches,
+                $flujoData
+            );
+        } else {
+            Log::info('VerificarCondicionJob: Rama No vacía, no se programa', [
+                'condition_node_id' => $condicion->condition_node_id,
+            ]);
+        }
+
+        // Si ambas ramas están vacías o no tienen siguiente nodo, completar la ejecución
+        // Esto se maneja dentro de programarRama
+    }
+
+    /**
+     * Programa una rama específica (yes o no) con sus prospectos.
+     */
+    private function programarRama(
+        FlujoEjecucion $ejecucion,
+        string $conditionNodeId,
+        string $rama,
+        array $prospectoIds,
+        array $branches,
+        array $flujoData
+    ): void {
+        // Buscar conexión para esta rama
+        $siguienteConexion = collect($branches)->first(function ($branch) use ($conditionNodeId, $rama) {
             $sourceHandle = $branch['source_handle'] ?? '';
             
-            // El handle puede ser 'yes'/'no' o '{nodeId}-yes'/'{nodeId}-no'
-            $handleMatchesRama = $sourceHandle === $ramaElegida 
-                || str_ends_with($sourceHandle, '-' . $ramaElegida);
+            $handleMatchesRama = $sourceHandle === $rama 
+                || str_ends_with($sourceHandle, '-' . $rama);
             
-            return $branch['source_node_id'] === $condicion->condition_node_id
-                && $handleMatchesRama;
+            return $branch['source_node_id'] === $conditionNodeId && $handleMatchesRama;
         });
 
-        if (! $siguienteConexion) {
-            Log::info('VerificarCondicionJob: No hay siguiente etapa para esta rama', [
-                'rama' => $ramaElegida,
+        if (!$siguienteConexion) {
+            Log::info("VerificarCondicionJob: No hay conexión para rama {$rama}", [
+                'condition_node_id' => $conditionNodeId,
             ]);
-
             return;
         }
 
         $siguienteNodeId = $siguienteConexion['target_node_id'];
 
-        Log::info('VerificarCondicionJob: Siguiente nodo encontrado', [
-            'siguiente_node_id' => $siguienteNodeId,
-            'rama' => $ramaElegida,
-        ]);
-
-        // Buscar datos del siguiente nodo
-        $stages = $flujoData['stages'] ?? [];
-        $siguienteStage = collect($stages)->first(function ($stage) use ($siguienteNodeId) {
-            return $stage['id'] === $siguienteNodeId;
-        });
-
-        if (! $siguienteStage) {
-            Log::warning('VerificarCondicionJob: No se encontró el stage para el siguiente nodo', [
-                'siguiente_node_id' => $siguienteNodeId,
+        // Verificar si es un nodo final
+        if (str_starts_with($siguienteNodeId, 'end-')) {
+            Log::info("VerificarCondicionJob: Rama {$rama} termina en nodo final", [
+                'end_node_id' => $siguienteNodeId,
+                'prospectos_finalizados' => count($prospectoIds),
             ]);
-
             return;
         }
 
-        // Calcular fecha de ejecución (ahora + tiempo_espera o inmediatamente)
-        $tiempoEspera = $siguienteStage['tiempo_espera'] ?? 0; // días
+        // Buscar datos del siguiente nodo (puede ser stage o condition)
+        $stages = $flujoData['stages'] ?? [];
+        $conditions = $flujoData['conditions'] ?? [];
+        
+        $siguienteStage = collect($stages)->firstWhere('id', $siguienteNodeId);
+        
+        if (!$siguienteStage) {
+            $siguienteStage = collect($conditions)->firstWhere('id', $siguienteNodeId);
+        }
+
+        if (!$siguienteStage) {
+            Log::warning("VerificarCondicionJob: No se encontró el nodo {$siguienteNodeId}", [
+                'rama' => $rama,
+            ]);
+            return;
+        }
+
+        // Calcular fecha de ejecución
+        $tiempoEspera = $siguienteStage['tiempo_espera'] ?? 0;
         $fechaProgramada = now()->addDays($tiempoEspera);
 
-        // Crear registro de etapa de ejecución
-        $nuevaEtapaEjecucion = FlujoEjecucionEtapa::create([
-            'flujo_ejecucion_id' => $this->flujoEjecucionId,
+        // Crear etapa con prospectos filtrados
+        $nuevaEtapa = FlujoEjecucionEtapa::create([
+            'flujo_ejecucion_id' => $ejecucion->id,
             'etapa_id' => null,
             'node_id' => $siguienteNodeId,
+            'prospectos_ids' => $prospectoIds, // ✅ Solo estos prospectos
             'fecha_programada' => $fechaProgramada,
             'estado' => 'pending',
         ]);
 
-        Log::info('VerificarCondicionJob: Nueva etapa programada', [
-            'etapa_ejecucion_id' => $nuevaEtapaEjecucion->id,
+        Log::info("VerificarCondicionJob: Etapa programada para rama {$rama}", [
+            'etapa_id' => $nuevaEtapa->id,
+            'node_id' => $siguienteNodeId,
+            'prospectos_count' => count($prospectoIds),
             'fecha_programada' => $fechaProgramada,
-            'tiempo_espera_dias' => $tiempoEspera,
         ]);
 
-        // Encolar job para enviar esta etapa
+        // Despachar job con prospectos filtrados
         EnviarEtapaJob::dispatch(
-            $this->flujoEjecucionId,
-            $nuevaEtapaEjecucion->id,
+            $ejecucion->id,
+            $nuevaEtapa->id,
             $siguienteStage,
-            $ejecucion->prospectos_ids,
+            $prospectoIds, // ✅ Solo estos prospectos
             $branches
         )->delay($fechaProgramada);
 
-        // ✅ ACTUALIZAR EJECUCIÓN: Mantener como in_progress con próximo nodo programado
-        $ejecucion->update([
-            'estado' => 'in_progress',
-            'proximo_nodo' => $siguienteNodeId,
-            'fecha_proximo_nodo' => $fechaProgramada,
-        ]);
+        // Actualizar la ejecución con el próximo nodo de la rama principal (Sí tiene prioridad)
+        if ($rama === 'yes') {
+            $ejecucion->update([
+                'estado' => 'in_progress',
+                'proximo_nodo' => $siguienteNodeId,
+                'fecha_proximo_nodo' => $fechaProgramada,
+            ]);
+        }
+    }
 
-        Log::info('VerificarCondicionJob: EnviarEtapaJob programado', [
-            'delay_dias' => $tiempoEspera,
-            'estado_ejecucion' => 'in_progress',
-            'proximo_nodo' => $siguienteNodeId,
-        ]);
+    /**
+     * Obtiene la etapa de email anterior para buscar envíos.
+     */
+    private function obtenerEtapaEmailAnterior(
+        FlujoEjecucion $ejecucion,
+        ?string $sourceNodeId
+    ): ?FlujoEjecucionEtapa {
+        $query = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
+            ->where('ejecutado', true)
+            ->whereNotNull('message_id');
+
+        if ($sourceNodeId) {
+            $query->where('node_id', $sourceNodeId);
+        }
+
+        return $query->orderBy('fecha_ejecucion', 'desc')->first();
     }
 
     /**
@@ -358,11 +401,10 @@ class VerificarCondicionJob implements ShouldQueue
             'error' => $exception->getMessage(),
         ]);
 
-        // Registrar fallo permanente
         FlujoJob::create([
             'flujo_ejecucion_id' => $this->flujoEjecucionId,
             'job_type' => 'verificar_condicion',
-            'job_id' => $this->job->uuid() ?? null,
+            'job_id' => $this->job?->uuid() ?? null,
             'job_data' => [
                 'etapa_id' => $this->etapaEjecucionId,
                 'message_id' => $this->messageId,
@@ -372,68 +414,5 @@ class VerificarCondicionJob implements ShouldQueue
             'error_details' => "Job falló después de {$this->tries} intentos: {$exception->getMessage()}",
             'intentos' => $this->tries,
         ]);
-    }
-
-    /**
-     * Obtiene estadísticas de envío desde la BD local
-     * 
-     * Busca todos los envíos asociados a esta ejecución de flujo
-     * y calcula estadísticas agregadas compatibles con el formato AthenaCampaign
-     */
-    private function obtenerEstadisticasLocales(FlujoEjecucion $ejecucion): array
-    {
-        // Buscar la etapa de email anterior a esta condición
-        $sourceNodeId = $this->condicion['source_node_id'] ?? null;
-        
-        // Buscar envíos asociados a esta ejecución
-        $query = Envio::where('flujo_id', $ejecucion->flujo_id);
-        
-        // Si tenemos el nodo source, filtrar por esa etapa específica
-        if ($sourceNodeId) {
-            $etapaEmail = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
-                ->where('node_id', $sourceNodeId)
-                ->first();
-            
-            if ($etapaEmail) {
-                $query->where('flujo_ejecucion_etapa_id', $etapaEmail->id);
-            }
-        }
-        
-        $envios = $query->get();
-        
-        if ($envios->isEmpty()) {
-            Log::warning('VerificarCondicionJob: No se encontraron envíos para calcular estadísticas locales', [
-                'flujo_id' => $ejecucion->flujo_id,
-                'source_node_id' => $sourceNodeId,
-            ]);
-            
-            return [
-                'Recipients' => 0,
-                'Views' => 0,
-                'Clicks' => 0,
-                'Bounces' => 0,
-            ];
-        }
-        
-        // Calcular estadísticas agregadas
-        $totalRecipients = $envios->count();
-        $totalViews = $envios->where('fecha_abierto', '!=', null)->count(); // Emails abiertos (únicos)
-        $totalClicks = $envios->where('fecha_click', '!=', null)->count();
-        $totalBounces = $envios->where('estado', 'failed')->count();
-        
-        $stats = [
-            'Recipients' => $totalRecipients,
-            'Views' => $totalViews,
-            'Clicks' => $totalClicks,
-            'Bounces' => $totalBounces,
-        ];
-        
-        Log::info('VerificarCondicionJob: Estadísticas locales calculadas', [
-            'flujo_ejecucion_id' => $ejecucion->id,
-            'envios_encontrados' => $totalRecipients,
-            'stats' => $stats,
-        ]);
-        
-        return $stats;
     }
 }

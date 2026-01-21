@@ -16,6 +16,7 @@ class FlujoEjecucionEtapa extends Model
         'flujo_ejecucion_id',
         'etapa_id',
         'node_id',
+        'prospectos_ids',  // Prospectos que deben procesarse en esta etapa
         'fecha_programada',
         'fecha_ejecucion',
         'estado',
@@ -32,6 +33,7 @@ class FlujoEjecucionEtapa extends Model
             'fecha_ejecucion' => 'datetime',
             'ejecutado' => 'boolean',
             'response_athenacampaign' => 'array',
+            'prospectos_ids' => 'array',
         ];
     }
 
