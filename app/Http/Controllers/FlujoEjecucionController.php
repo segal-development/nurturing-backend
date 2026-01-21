@@ -279,37 +279,32 @@ class FlujoEjecucionController extends Controller
                 throw new \Exception('No se pudo crear ninguna etapa ejecutable. Verifica que las etapas del flujo tengan un tipo válido (email, sms, stage, condition, end).');
             }
 
-            // Encolar job solo para la primera etapa
+            // ✅ ARQUITECTURA SIMPLIFICADA: No despachamos jobs con delay
+            // El cron EjecutarNodosProgramados es el ÚNICO que ejecuta nodos
+            // cuando fecha_proximo_nodo <= now()
+            // 
+            // Esto elimina:
+            // - Race conditions entre batch callbacks y cron
+            // - Jobs stuck porque available_at está en el futuro (Cloud Run no tiene worker permanente)
+            // - Complejidad de dos sistemas compitiendo
             if ($primeraEtapaEjecucion) {
-                $delay = $fechaEjecucionPrimeraEtapa->isFuture()
-                    ? $fechaEjecucionPrimeraEtapa
-                    : now();
-
-                $job = EnviarEtapaJob::dispatch(
-                    $ejecucion->id,
-                    $primeraEtapaEjecucion->id,
-                    $primeraEtapa,
-                    $request->prospectos_ids,
-                    $branches
-                )->delay($delay);
-
-                Log::info('FlujoEjecucion: EnviarEtapaJob encolado para primera etapa', [
-                    'delay' => $delay,
-                    'etapa_id' => $primeraEtapaEjecucion->id,
+                // Guardar prospectos_ids en la primera etapa para que el cron los use
+                $primeraEtapaEjecucion->update([
+                    'prospectos_ids' => $request->prospectos_ids,
                 ]);
 
-                // Registrar job encolado
-                FlujoJob::create([
-                    'flujo_ejecucion_id' => $ejecucion->id,
-                    'job_type' => 'enviar_etapa',
-                    'job_id' => null,
-                    'job_data' => [
-                        'etapa_id' => $primeraEtapaEjecucion->id,
-                        'stage' => $primeraEtapa,
-                        'prospectos_count' => count($request->prospectos_ids),
-                    ],
-                    'estado' => 'queued',
-                    'fecha_queued' => now(),
+                // Configurar la ejecución para que el cron la encuentre
+                $ejecucion->update([
+                    'proximo_nodo' => $primeraEtapa['id'],
+                    'fecha_proximo_nodo' => $fechaEjecucionPrimeraEtapa,
+                ]);
+
+                Log::info('FlujoEjecucion: Primera etapa configurada para ejecución por cron', [
+                    'etapa_id' => $primeraEtapaEjecucion->id,
+                    'proximo_nodo' => $primeraEtapa['id'],
+                    'fecha_proximo_nodo' => $fechaEjecucionPrimeraEtapa,
+                    'prospectos_count' => count($request->prospectos_ids),
+                    'sera_ejecutado_inmediatamente' => !$fechaEjecucionPrimeraEtapa->isFuture(),
                 ]);
             }
 

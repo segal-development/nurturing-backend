@@ -581,7 +581,10 @@ class EnviarEtapaJob implements ShouldQueue
     }
 
     /**
-     * Schedule condition verification job
+     * Schedule condition verification - NO job dispatch, only DB update
+     * 
+     * ✅ ARQUITECTURA SIMPLIFICADA: El cron EjecutarNodosProgramados
+     * ejecutará la condición cuando fecha_proximo_nodo <= now()
      */
     private function programarVerificacionCondicion(
         FlujoEjecucion $ejecucion,
@@ -593,21 +596,47 @@ class EnviarEtapaJob implements ShouldQueue
         $tiempoVerificacion = $this->stage['tiempo_verificacion_condicion'] ?? 24;
         $fechaVerificacion = now()->addHours($tiempoVerificacion);
 
-        Log::info('EnviarEtapaJob: Programando verificación de condición', [
+        Log::info('EnviarEtapaJob: Programando verificación de condición (sin job dispatch)', [
             'en_horas' => $tiempoVerificacion,
+            'fecha_verificacion' => $fechaVerificacion,
             'condition_node_id' => $targetNodeId,
             'prospectos_count' => count($this->prospectoIds),
+            'message_id' => $messageId,
         ]);
 
-        // ✅ Pasar prospectos_ids al job de verificación de condición
-        // Esto permite que la condición evalúe CADA prospecto individualmente
-        VerificarCondicionJob::dispatch(
-            $this->flujoEjecucionId,
-            $etapaEjecucion->id,
-            $conexion,
-            $messageId,
-            $this->prospectoIds  // Prospectos a evaluar
-        )->delay($fechaVerificacion);
+        // Crear o actualizar etapa para la condición
+        $condicionEtapa = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $this->flujoEjecucionId)
+            ->where('node_id', $targetNodeId)
+            ->first();
+
+        if (!$condicionEtapa) {
+            $condicionEtapa = FlujoEjecucionEtapa::create([
+                'flujo_ejecucion_id' => $this->flujoEjecucionId,
+                'etapa_id' => null,
+                'node_id' => $targetNodeId,
+                'prospectos_ids' => $this->prospectoIds,
+                'fecha_programada' => $fechaVerificacion,
+                'estado' => 'pending',
+                // Guardar message_id del email anterior para que el cron pueda consultar estadísticas
+                'response_athenacampaign' => [
+                    'pending_condition' => true,
+                    'source_message_id' => $messageId,
+                    'conexion' => $conexion,
+                ],
+            ]);
+        } else {
+            $condicionEtapa->update([
+                'prospectos_ids' => $this->prospectoIds,
+                'fecha_programada' => $fechaVerificacion,
+                'response_athenacampaign' => [
+                    'pending_condition' => true,
+                    'source_message_id' => $messageId,
+                    'conexion' => $conexion,
+                ],
+            ]);
+        }
+
+        // ✅ NO despachamos job - el cron lo ejecutará cuando llegue la fecha
 
         $ejecucion->update([
             'estado' => 'in_progress',
@@ -617,7 +646,10 @@ class EnviarEtapaJob implements ShouldQueue
     }
 
     /**
-     * Schedule next stage job
+     * Schedule next stage - NO job dispatch, only DB update
+     * 
+     * ✅ ARQUITECTURA SIMPLIFICADA: El cron EjecutarNodosProgramados
+     * es el ÚNICO que ejecuta nodos cuando fecha_proximo_nodo <= now()
      */
     private function programarSiguienteEtapa(
         FlujoEjecucion $ejecucion,
@@ -627,29 +659,39 @@ class EnviarEtapaJob implements ShouldQueue
         $tiempoEspera = $targetNode['tiempo_espera'] ?? 0;
         $fechaProgramada = now()->addDays($tiempoEspera);
 
-        Log::info('EnviarEtapaJob: Programando siguiente etapa', [
+        Log::info('EnviarEtapaJob: Programando siguiente etapa (sin job dispatch)', [
             'siguiente_node_id' => $targetNodeId,
             'tiempo_espera_dias' => $tiempoEspera,
-            'prospectos_count' => count($this->prospectoIds),
-        ]);
-
-        // ✅ Guardar prospectos_ids en la etapa para propagación del filtrado
-        $siguienteEtapaEjecucion = FlujoEjecucionEtapa::create([
-            'flujo_ejecucion_id' => $this->flujoEjecucionId,
-            'etapa_id' => null,
-            'node_id' => $targetNodeId,
-            'prospectos_ids' => $this->prospectoIds,  // Propagar prospectos
             'fecha_programada' => $fechaProgramada,
-            'estado' => 'pending',
+            'prospectos_count' => count($this->prospectoIds),
+            'sera_ejecutado_inmediatamente' => $tiempoEspera === 0,
         ]);
 
-        EnviarEtapaJob::dispatch(
-            $this->flujoEjecucionId,
-            $siguienteEtapaEjecucion->id,
-            $targetNode,
-            $this->prospectoIds,
-            $this->branches
-        )->delay($fechaProgramada);
+        // Verificar si ya existe la etapa (puede haber sido creada previamente)
+        $siguienteEtapaEjecucion = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $this->flujoEjecucionId)
+            ->where('node_id', $targetNodeId)
+            ->first();
+
+        if (!$siguienteEtapaEjecucion) {
+            // ✅ Crear etapa con prospectos_ids para propagación del filtrado
+            $siguienteEtapaEjecucion = FlujoEjecucionEtapa::create([
+                'flujo_ejecucion_id' => $this->flujoEjecucionId,
+                'etapa_id' => null,
+                'node_id' => $targetNodeId,
+                'prospectos_ids' => $this->prospectoIds,
+                'fecha_programada' => $fechaProgramada,
+                'estado' => 'pending',
+            ]);
+        } else {
+            // Actualizar prospectos si la etapa ya existe
+            $siguienteEtapaEjecucion->update([
+                'prospectos_ids' => $this->prospectoIds,
+                'fecha_programada' => $fechaProgramada,
+            ]);
+        }
+
+        // ✅ NO despachamos job - el cron lo ejecutará cuando llegue la fecha
+        // Esto evita jobs stuck con available_at en el futuro
 
         $ejecucion->update([
             'estado' => 'in_progress',

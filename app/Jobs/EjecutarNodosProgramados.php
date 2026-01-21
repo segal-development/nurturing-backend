@@ -379,57 +379,88 @@ class EjecutarNodosProgramados implements ShouldQueue
             }
         }
 
-        // Obtener el message_id de la etapa de email anterior
-        // (necesario para consultar estadísticas en AthenaCampaign)
-        $etapaEmailAnterior = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
-            ->whereNotNull('message_id')
-            ->where('ejecutado', true)
-            ->orderBy('fecha_ejecucion', 'desc')
-            ->first();
+        // ✅ PRIORIDAD 1: Usar source_message_id guardado por EnviarEtapaJob
+        // (cuando la condición fue programada desde el batch callback)
+        $responseData = $etapa->response_athenacampaign ?? [];
+        $messageId = $responseData['source_message_id'] ?? null;
 
-        if (!$etapaEmailAnterior || !$etapaEmailAnterior->message_id) {
-            Log::error('EjecutarNodosProgramados: No se encontró etapa de email anterior con message_id', [
-                'ejecucion_id' => $ejecucion->id,
-                'nodo_id' => $stage['id'],
-                'etapas_completadas' => FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
-                    ->where('ejecutado', true)
-                    ->pluck('node_id', 'estado')
-                    ->toArray(),
+        if ($messageId) {
+            Log::info('EjecutarNodosProgramados: Usando source_message_id de etapa', [
+                'message_id' => $messageId,
+                'etapa_id' => $etapa->id,
             ]);
+        } else {
+            // ✅ PRIORIDAD 2: Buscar message_id de la etapa de email anterior completada
+            $etapaEmailAnterior = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
+                ->whereNotNull('message_id')
+                ->where('ejecutado', true)
+                ->orderBy('fecha_ejecucion', 'desc')
+                ->first();
+
+            if (!$etapaEmailAnterior || !$etapaEmailAnterior->message_id) {
+                Log::error('EjecutarNodosProgramados: No se encontró etapa de email anterior con message_id', [
+                    'ejecucion_id' => $ejecucion->id,
+                    'nodo_id' => $stage['id'],
+                    'etapas_completadas' => FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
+                        ->where('ejecutado', true)
+                        ->pluck('node_id', 'estado')
+                        ->toArray(),
+                ]);
+                
+                // Marcar etapa como fallida
+                $etapa->update([
+                    'estado' => 'failed',
+                    'ejecutado' => true,
+                    'fecha_ejecucion' => now(),
+                ]);
+                
+                return;
+            }
+
+            $messageId = (int) $etapaEmailAnterior->message_id;
             
-            // Marcar etapa como fallida
-            $etapa->update([
-                'estado' => 'failed',
-                'ejecutado' => true,
-                'fecha_ejecucion' => now(),
+            Log::info('EjecutarNodosProgramados: Usando message_id de etapa email anterior', [
+                'message_id' => $messageId,
+                'etapa_email_id' => $etapaEmailAnterior->id,
+                'etapa_email_node_id' => $etapaEmailAnterior->node_id,
             ]);
-            
-            return;
         }
-
-        $messageId = (int) $etapaEmailAnterior->message_id;
 
         // ✅ PRIORIDAD: usar prospectos de la etapa si están disponibles (filtrado previo)
         // Si no, usar los prospectos de la ejecución completa
         $prospectoIds = $etapa->prospectos_ids ?? $ejecucion->prospectos_ids;
 
-        Log::info('EjecutarNodosProgramados: Encontrado message_id para condición', [
+        Log::info('EjecutarNodosProgramados: Preparando evaluación de condición', [
             'message_id' => $messageId,
-            'etapa_email_id' => $etapaEmailAnterior->id,
-            'etapa_email_node_id' => $etapaEmailAnterior->node_id,
             'prospectos_count' => count($prospectoIds),
         ]);
 
-        // Construir el array $condicion con el formato esperado por VerificarCondicionJob
-        $condicion = [
-            'target_node_id' => $stage['id'],
-            'source_node_id' => $etapaEmailAnterior->node_id,
-            'data' => [
-                'check_param' => $stage['check_param'] ?? 'Views',
-                'check_operator' => $stage['check_operator'] ?? '>',
-                'check_value' => $stage['check_value'] ?? '0',
-            ],
-        ];
+        // ✅ PRIORIDAD 1: Usar conexión guardada por EnviarEtapaJob
+        // PRIORIDAD 2: Construir desde el stage
+        $condicionGuardada = $responseData['conexion'] ?? null;
+        
+        if ($condicionGuardada) {
+            $condicion = $condicionGuardada;
+            // Asegurar que tenga los datos de la condición
+            if (!isset($condicion['data'])) {
+                $condicion['data'] = [
+                    'check_param' => $stage['check_param'] ?? 'Views',
+                    'check_operator' => $stage['check_operator'] ?? '>',
+                    'check_value' => $stage['check_value'] ?? '0',
+                ];
+            }
+        } else {
+            // Construir el array $condicion con el formato esperado por VerificarCondicionJob
+            $condicion = [
+                'target_node_id' => $stage['id'],
+                'source_node_id' => $conexionHaciaCondicion['source_node_id'] ?? null,
+                'data' => [
+                    'check_param' => $stage['check_param'] ?? 'Views',
+                    'check_operator' => $stage['check_operator'] ?? '>',
+                    'check_value' => $stage['check_value'] ?? '0',
+                ],
+            ];
+        }
 
         // Marcar etapa como en proceso (se completará en VerificarCondicionJob)
         $etapa->update([
