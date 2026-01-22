@@ -119,14 +119,24 @@ class CostoService
      */
     public function calcularCostoReal(FlujoEjecucion $ejecucion): array
     {
-        // Count actual sent emails and SMS
-        $envioStats = Envio::where('flujo_id', $ejecucion->flujo_id)
-            ->where('created_at', '>=', $ejecucion->created_at)
-            ->where(function ($query) use ($ejecucion) {
-                if ($ejecucion->fecha_fin) {
-                    $query->where('created_at', '<=', $ejecucion->fecha_fin);
-                }
-            })
+        // Get etapa IDs for this execution (much more efficient than date-based filtering)
+        $etapaIds = $ejecucion->etapas()->pluck('id');
+
+        if ($etapaIds->isEmpty()) {
+            return [
+                'ejecucion_id' => $ejecucion->id,
+                'flujo_id' => $ejecucion->flujo_id,
+                'precios' => $this->getPrecios(),
+                'total_emails_enviados' => 0,
+                'total_sms_enviados' => 0,
+                'costo_emails' => 0,
+                'costo_sms' => 0,
+                'costo_real' => 0,
+            ];
+        }
+
+        // Count actual sent emails and SMS using the indexed flujo_ejecucion_etapa_id
+        $envioStats = Envio::whereIn('flujo_ejecucion_etapa_id', $etapaIds)
             ->whereIn('estado', ['enviado', 'abierto', 'clickeado']) // Only count successful sends
             ->select(
                 DB::raw("COUNT(CASE WHEN canal = 'email' THEN 1 END) as total_emails"),
