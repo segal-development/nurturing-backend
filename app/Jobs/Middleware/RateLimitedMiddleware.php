@@ -11,10 +11,10 @@ use Illuminate\Support\Facades\RateLimiter;
 /**
  * Middleware de Rate Limiting para Jobs de envío.
  *
- * Implementa rate limiting usando el RateLimiter de Laravel con:
- * - Límites por segundo y por minuto
- * - Backoff exponencial cuando se alcanza el límite
- * - Logging para monitoreo
+ * Usa el RateLimiter nativo de Laravel que maneja correctamente:
+ * - Múltiples workers concurrentes
+ * - Expiración automática de contadores
+ * - Atomicidad en operaciones de incremento
  *
  * Uso:
  * ```php
@@ -58,58 +58,28 @@ class RateLimitedMiddleware
             return;
         }
 
+        $perMinute = $this->config['per_minute'];
         $rateLimitKey = "envio-rate:{$this->channel}";
 
-        // Check per-second limit
-        $perSecondKey = "{$rateLimitKey}:second";
-        $perSecond = $this->config['per_second'];
+        // Use Laravel's RateLimiter which handles concurrency correctly
+        $executed = RateLimiter::attempt(
+            $rateLimitKey,
+            $perMinute,
+            function () use ($job, $next) {
+                // Process the job
+                try {
+                    $next($job);
+                    $this->recordSuccess();
+                } catch (\Throwable $e) {
+                    $this->recordFailure();
+                    throw $e;
+                }
+            },
+            60 // decay seconds (1 minute window)
+        );
 
-        // Check per-minute limit
-        $perMinuteKey = "{$rateLimitKey}:minute";
-        $perMinute = $this->config['per_minute'];
-
-        // Try to acquire rate limit slot
-        if ($this->exceedsRateLimit($perSecondKey, $perSecond, 1) ||
-            $this->exceedsRateLimit($perMinuteKey, $perMinute, 60)) {
-
+        if (!$executed) {
             $this->handleRateLimited($job);
-            return;
-        }
-
-        // Increment counters
-        $this->incrementCounter($perSecondKey, 1);
-        $this->incrementCounter($perMinuteKey, 60);
-
-        // Process the job
-        try {
-            $next($job);
-            $this->recordSuccess();
-        } catch (\Throwable $e) {
-            $this->recordFailure();
-            throw $e;
-        }
-    }
-
-    /**
-     * Verifica si se excede el rate limit.
-     */
-    private function exceedsRateLimit(string $key, int $maxAttempts, int $decaySeconds): bool
-    {
-        $current = (int) Cache::get($key, 0);
-        return $current >= $maxAttempts;
-    }
-
-    /**
-     * Incrementa el contador de rate limit.
-     */
-    private function incrementCounter(string $key, int $decaySeconds): void
-    {
-        $current = (int) Cache::get($key, 0);
-
-        if ($current === 0) {
-            Cache::put($key, 1, $decaySeconds);
-        } else {
-            Cache::increment($key);
         }
     }
 
@@ -118,18 +88,19 @@ class RateLimitedMiddleware
      */
     private function handleRateLimited(object $job): void
     {
-        $backoff = $this->config['backoff_seconds'];
-        $attempts = $job->attempts ?? 0;
-
-        // Exponential backoff
-        $delay = $backoff * pow(2, min($attempts, 5));
+        // Get available time until next slot
+        $rateLimitKey = "envio-rate:{$this->channel}";
+        $availableIn = RateLimiter::availableIn($rateLimitKey);
+        
+        // Use a small random delay to prevent thundering herd
+        $delay = max(1, $availableIn) + rand(0, 2);
 
         if (config('envios.monitoring.log_rate_limits', true)) {
-            Log::warning("RateLimitedMiddleware: Job rate limited, releasing back to queue", [
+            Log::debug("RateLimitedMiddleware: Job rate limited", [
                 'channel' => $this->channel,
                 'job_class' => get_class($job),
-                'attempts' => $attempts,
                 'delay_seconds' => $delay,
+                'available_in' => $availableIn,
             ]);
         }
 
@@ -172,7 +143,11 @@ class RateLimitedMiddleware
     {
         // Reset failure counter on success
         $failureKey = "envio-failures:{$this->channel}";
-        Cache::decrement($failureKey);
+        $current = (int) Cache::get($failureKey, 0);
+        
+        if ($current > 0) {
+            Cache::decrement($failureKey);
+        }
 
         if (Cache::get($failureKey, 0) <= 0) {
             Cache::forget($failureKey);
