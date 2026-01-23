@@ -417,6 +417,11 @@ class FlujoEjecucionController extends Controller
         $etapasConEstadisticas = $ejecucion->etapas->map(function ($etapa) use ($enviosPorEtapa) {
             $estadisticas = $enviosPorEtapa->get($etapa->id, collect());
 
+            // Conteos por estado
+            $enviado = $estadisticas->firstWhere('estado', 'enviado')?->total ?? 0;
+            $abierto = $estadisticas->firstWhere('estado', 'abierto')?->total ?? 0;
+            $clickeado = $estadisticas->firstWhere('estado', 'clickeado')?->total ?? 0;
+
             return [
                 'id' => $etapa->id,
                 'node_id' => $etapa->node_id,
@@ -427,10 +432,11 @@ class FlujoEjecucionController extends Controller
                 'error_mensaje' => $etapa->error_mensaje,
                 'envios' => [
                     'pendiente' => $estadisticas->firstWhere('estado', 'pendiente')?->total ?? 0,
-                    'enviado' => $estadisticas->firstWhere('estado', 'enviado')?->total ?? 0,
+                    // Enviado = total de éxitos (enviado + abierto + clickeado)
+                    'enviado' => $enviado + $abierto + $clickeado,
                     'fallido' => $estadisticas->firstWhere('estado', 'fallido')?->total ?? 0,
-                    'abierto' => $estadisticas->firstWhere('estado', 'abierto')?->total ?? 0,
-                    'clickeado' => $estadisticas->firstWhere('estado', 'clickeado')?->total ?? 0,
+                    'abierto' => $abierto,
+                    'clickeado' => $clickeado,
                 ],
             ];
         });
@@ -586,6 +592,11 @@ class FlujoEjecucionController extends Controller
                 'etapas' => $ejecucion->etapas->map(function ($etapa) use ($enviosPorEtapa) {
                     $estadisticas = $enviosPorEtapa->get($etapa->id, collect());
 
+                    // Conteos por estado
+                    $enviado = $estadisticas->firstWhere('estado', 'enviado')?->total ?? 0;
+                    $abierto = $estadisticas->firstWhere('estado', 'abierto')?->total ?? 0;
+                    $clickeado = $estadisticas->firstWhere('estado', 'clickeado')?->total ?? 0;
+
                     return [
                         'id' => $etapa->id,
                         'node_id' => $etapa->node_id,
@@ -595,10 +606,11 @@ class FlujoEjecucionController extends Controller
                         'fecha_ejecucion' => $etapa->fecha_ejecucion,
                         'envios' => [
                             'pendiente' => $estadisticas->firstWhere('estado', 'pendiente')?->total ?? 0,
-                            'enviado' => $estadisticas->firstWhere('estado', 'enviado')?->total ?? 0,
+                            // Enviado = total de éxitos (enviado + abierto + clickeado)
+                            'enviado' => $enviado + $abierto + $clickeado,
                             'fallido' => $estadisticas->firstWhere('estado', 'fallido')?->total ?? 0,
-                            'abierto' => $estadisticas->firstWhere('estado', 'abierto')?->total ?? 0,
-                            'clickeado' => $estadisticas->firstWhere('estado', 'clickeado')?->total ?? 0,
+                            'abierto' => $abierto,
+                            'clickeado' => $clickeado,
                         ],
                     ];
                 }),
