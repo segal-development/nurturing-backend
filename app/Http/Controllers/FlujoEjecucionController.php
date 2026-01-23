@@ -473,8 +473,24 @@ class FlujoEjecucionController extends Controller
 
         // Tiempo estimado restante
         $restantes = $totalProspectos - $procesados;
-        $velocidadPorHora = $enviosUltimaHora > 0 ? $enviosUltimaHora : 9000;
+        
+        // Si hay muy pocos envíos en la última hora pero quedan muchos pendientes,
+        // puede ser que el proceso se detuvo o los restantes son prospectos sin email
+        $velocidadPorHora = $enviosUltimaHora > 100 ? $enviosUltimaHora : 9000;
         $horasRestantes = $restantes > 0 ? round($restantes / $velocidadPorHora, 1) : 0;
+        
+        // Determinar texto de tiempo restante
+        $tiempoTexto = 'Completado';
+        if ($restantes > 0) {
+            if ($enviosUltimaHora < 100 && $pendientesEnvio < 100) {
+                // Velocidad muy baja y pocos pendientes = probablemente terminó (restantes son prospectos sin email)
+                $tiempoTexto = 'Finalizando...';
+            } elseif ($horasRestantes < 1) {
+                $tiempoTexto = 'Menos de 1 hora';
+            } else {
+                $tiempoTexto = "{$horasRestantes} horas";
+            }
+        }
 
         $progresoEnvios = [
             'total_prospectos' => $totalProspectos,
@@ -485,7 +501,7 @@ class FlujoEjecucionController extends Controller
             'porcentaje' => $totalProspectos > 0 ? round(($procesados / $totalProspectos) * 100, 2) : 0,
             'velocidad_por_hora' => $enviosUltimaHora,
             'tiempo_restante_horas' => $horasRestantes,
-            'tiempo_restante_texto' => $horasRestantes > 0 ? ($horasRestantes < 1 ? 'Menos de 1 hora' : "{$horasRestantes} horas") : 'Completado',
+            'tiempo_restante_texto' => $tiempoTexto,
         ];
 
         // Construir timeline con orden de ejecución
@@ -641,8 +657,24 @@ class FlujoEjecucionController extends Controller
 
             // Tiempo estimado restante
             $restantes = $totalProspectos - $procesados;
-            $velocidadPorHora = $enviosUltimaHora > 0 ? $enviosUltimaHora : 9000;
+            
+            // Si hay muy pocos envíos en la última hora pero quedan muchos pendientes,
+            // puede ser que el proceso se detuvo o los restantes son prospectos sin email
+            $velocidadPorHora = $enviosUltimaHora > 100 ? $enviosUltimaHora : 9000;
             $horasRestantes = $restantes > 0 ? round($restantes / $velocidadPorHora, 1) : 0;
+            
+            // Determinar texto de tiempo restante
+            $tiempoTexto = 'Completado';
+            if ($restantes > 0) {
+                if ($enviosUltimaHora < 100 && $pendientesEnvio < 100) {
+                    // Velocidad muy baja y pocos pendientes = probablemente terminó (restantes son prospectos sin email)
+                    $tiempoTexto = 'Finalizando...';
+                } elseif ($horasRestantes < 1) {
+                    $tiempoTexto = 'Menos de 1 hora';
+                } else {
+                    $tiempoTexto = "{$horasRestantes} horas";
+                }
+            }
 
             $progresoEnvios = [
                 'total_prospectos' => $totalProspectos,
@@ -653,7 +685,7 @@ class FlujoEjecucionController extends Controller
                 'porcentaje' => $totalProspectos > 0 ? round(($procesados / $totalProspectos) * 100, 2) : 0,
                 'velocidad_por_hora' => $enviosUltimaHora,
                 'tiempo_restante_horas' => $horasRestantes,
-                'tiempo_restante_texto' => $horasRestantes > 0 ? ($horasRestantes < 1 ? 'Menos de 1 hora' : "{$horasRestantes} horas") : 'Completado',
+                'tiempo_restante_texto' => $tiempoTexto,
             ];
         }
 
