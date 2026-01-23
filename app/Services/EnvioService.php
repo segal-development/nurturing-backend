@@ -252,6 +252,29 @@ class EnvioService
             ];
         }
 
+        // Verificar si ya existe un envío para este prospecto en esta etapa (evitar duplicados)
+        if ($etapaEjecucionId) {
+            $envioExistente = Envio::where('prospecto_id', $prospecto->id)
+                ->where('flujo_ejecucion_etapa_id', $etapaEjecucionId)
+                ->whereIn('estado', ['enviado', 'abierto', 'clickeado', 'pendiente'])
+                ->first();
+
+            if ($envioExistente) {
+                Log::debug('EnvioService: Email ya enviado para este prospecto en esta etapa, omitiendo', [
+                    'prospecto_id' => $prospecto->id,
+                    'etapa_ejecucion_id' => $etapaEjecucionId,
+                    'envio_existente_id' => $envioExistente->id,
+                    'estado' => $envioExistente->estado,
+                ]);
+                return [
+                    'success' => true, // Consideramos éxito porque ya se envió
+                    'envio_id' => $envioExistente->id,
+                    'error' => null,
+                    'skipped' => true, // Flag para indicar que se omitió por duplicado
+                ];
+            }
+        }
+
         // Verificar si el prospecto puede recibir emails (no desuscrito)
         if (!$prospecto->puedeRecibirComunicacion('email')) {
             Log::info('EnvioService: Prospecto desuscrito de emails', [

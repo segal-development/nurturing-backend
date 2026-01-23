@@ -104,13 +104,21 @@ class EjecutarNodosProgramados implements ShouldQueue
             // Verificar si la etapa lleva mucho tiempo en 'executing' (posible stuck)
             $tiempoEnEjecucion = now()->diffInMinutes($etapasEnEjecucion->fecha_ejecucion ?? $etapasEnEjecucion->created_at);
             
-            if ($tiempoEnEjecucion > 30) {
-                // Etapa stuck por más de 30 minutos - intentar recuperar
-                Log::warning('EjecutarNodosProgramados: Etapa anterior stuck, intentando recuperar', [
+            // ✅ Para volúmenes grandes, verificar más frecuentemente si ya terminó
+            $batchInfo = $etapasEnEjecucion->response_athenacampaign ?? [];
+            $esVolumenGrande = isset($batchInfo['modo']) && $batchInfo['modo'] === 'large_volume_chunked';
+            
+            // Tiempo mínimo antes de verificar: 10 min para volumen grande, 30 min para normal
+            $tiempoMinimoStuck = $esVolumenGrande ? 10 : 30;
+            
+            if ($tiempoEnEjecucion > $tiempoMinimoStuck) {
+                // Etapa posiblemente stuck - intentar recuperar
+                Log::warning('EjecutarNodosProgramados: Etapa anterior posiblemente stuck, verificando', [
                     'ejecucion_id' => $ejecucion->id,
                     'etapa_stuck_id' => $etapasEnEjecucion->id,
                     'node_id' => $etapasEnEjecucion->node_id,
                     'minutos_en_executing' => $tiempoEnEjecucion,
+                    'es_volumen_grande' => $esVolumenGrande,
                 ]);
                 
                 $this->recuperarEtapaStuck($etapasEnEjecucion, $ejecucion);
@@ -122,6 +130,7 @@ class EjecutarNodosProgramados implements ShouldQueue
                 'etapa_en_ejecucion' => $etapasEnEjecucion->node_id,
                 'proximo_nodo' => $ejecucion->proximo_nodo,
                 'minutos_en_executing' => $tiempoEnEjecucion,
+                'es_volumen_grande' => $esVolumenGrande,
             ]);
             return;
         }
@@ -461,6 +470,7 @@ class EjecutarNodosProgramados implements ShouldQueue
      * - Callback de batch falló silenciosamente
      * - Instancia de Cloud Run matada durante procesamiento
      * - Error no capturado en el job
+     * - Volumen grande procesado por EnviarEtapaChunkJob (NO tiene callback global)
      */
     private function recuperarEtapaStuck(FlujoEjecucionEtapa $etapa, FlujoEjecucion $ejecucion): void
     {
@@ -469,8 +479,17 @@ class EjecutarNodosProgramados implements ShouldQueue
             'node_id' => $etapa->node_id,
         ]);
 
-        // Verificar si hay un batch asociado que podamos consultar
         $batchInfo = $etapa->response_athenacampaign;
+        
+        // ✅ CASO ESPECIAL: Volumen grande procesado por chunks
+        // EnviarEtapaChunkJob NO tiene callback global, así que verificamos
+        // si todos los envíos ya se procesaron basándonos en la tabla envios
+        if (isset($batchInfo['modo']) && $batchInfo['modo'] === 'large_volume_chunked') {
+            $this->verificarYCompletarEtapaVolumenGrande($etapa, $ejecucion, $batchInfo);
+            return;
+        }
+
+        // Verificar si hay un batch asociado que podamos consultar
         $batchId = $batchInfo['batch_id'] ?? null;
 
         if ($batchId) {
@@ -530,8 +549,165 @@ class EjecutarNodosProgramados implements ShouldQueue
             }
         }
 
-        // No hay batch o no se pudo recuperar - marcar como failed y permitir reintento manual
-        $this->marcarEtapaComoFallida($etapa, 'Etapa stuck sin información de batch recuperable');
+        // ✅ FALLBACK: Verificar si los envíos ya terminaron aunque no tengamos batch info
+        // Esto puede pasar si el response_athenacampaign se perdió o corrompió
+        $this->verificarYCompletarEtapaPorEnvios($etapa, $ejecucion);
+    }
+    
+    /**
+     * Verifica si una etapa de volumen grande ya completó todos sus envíos.
+     * 
+     * Cuando se usa EnviarEtapaChunkJob, no hay callback global que marque la etapa
+     * como completada. Esta función verifica el estado real de los envíos.
+     */
+    private function verificarYCompletarEtapaVolumenGrande(
+        FlujoEjecucionEtapa $etapa, 
+        FlujoEjecucion $ejecucion, 
+        array $batchInfo
+    ): void {
+        $totalProspectos = $batchInfo['total_prospectos'] ?? 0;
+        
+        // Contar envíos procesados (exitosos + fallidos)
+        $envioStats = DB::table('envios')
+            ->where('flujo_ejecucion_etapa_id', $etapa->id)
+            ->selectRaw("
+                COUNT(*) as total,
+                SUM(CASE WHEN estado IN ('enviado', 'abierto', 'clickeado') THEN 1 ELSE 0 END) as exitosos,
+                SUM(CASE WHEN estado = 'fallido' THEN 1 ELSE 0 END) as fallidos,
+                SUM(CASE WHEN estado = 'pendiente' THEN 1 ELSE 0 END) as pendientes
+            ")
+            ->first();
+        
+        $exitosos = (int) ($envioStats->exitosos ?? 0);
+        $fallidos = (int) ($envioStats->fallidos ?? 0);
+        $pendientes = (int) ($envioStats->pendientes ?? 0);
+        $procesados = $exitosos + $fallidos;
+        
+        Log::info('EjecutarNodosProgramados: Verificando etapa volumen grande', [
+            'etapa_id' => $etapa->id,
+            'total_prospectos' => $totalProspectos,
+            'procesados' => $procesados,
+            'exitosos' => $exitosos,
+            'fallidos' => $fallidos,
+            'pendientes' => $pendientes,
+        ]);
+        
+        // ✅ Verificar si está "prácticamente terminado"
+        // - No quedan pendientes
+        // - Se procesó al menos el 80% de los prospectos (algunos pueden no tener email válido)
+        $porcentajeProcesado = $totalProspectos > 0 ? ($procesados / $totalProspectos) * 100 : 0;
+        $todosProcesados = $pendientes === 0 && $porcentajeProcesado >= 80;
+        
+        // También verificar jobs en cola para esta etapa
+        $jobsEnCola = DB::table('jobs')
+            ->where('payload', 'like', '%' . $etapa->id . '%')
+            ->count();
+        
+        if ($todosProcesados && $jobsEnCola < 100) {
+            Log::info('EjecutarNodosProgramados: Etapa volumen grande completada', [
+                'etapa_id' => $etapa->id,
+                'porcentaje_procesado' => round($porcentajeProcesado, 2),
+                'jobs_restantes_en_cola' => $jobsEnCola,
+            ]);
+            
+            $messageId = rand(10000, 99999);
+            
+            $etapa->update([
+                'estado' => 'completed',
+                'ejecutado' => true,
+                'message_id' => $messageId,
+                'fecha_ejecucion' => now(),
+                'response_athenacampaign' => array_merge($batchInfo, [
+                    'completed_by_cron' => true,
+                    'completed_at' => now()->toISOString(),
+                    'messageID' => $messageId,
+                    'Recipients' => $exitosos,
+                    'Errores' => $fallidos,
+                    'porcentaje_procesado' => round($porcentajeProcesado, 2),
+                ]),
+            ]);
+            
+            // Programar siguiente nodo
+            $this->actualizarEjecucionDespuesDeRecuperacion($ejecucion, $etapa);
+            return;
+        }
+        
+        // Aún procesando - loguear progreso
+        Log::info('EjecutarNodosProgramados: Etapa volumen grande aún procesando', [
+            'etapa_id' => $etapa->id,
+            'porcentaje' => round($porcentajeProcesado, 2),
+            'jobs_en_cola' => $jobsEnCola,
+        ]);
+    }
+    
+    /**
+     * Fallback: Verifica completitud basándose únicamente en tabla de envíos.
+     * Usado cuando no tenemos información de batch.
+     */
+    private function verificarYCompletarEtapaPorEnvios(FlujoEjecucionEtapa $etapa, FlujoEjecucion $ejecucion): void
+    {
+        // Obtener estadísticas de envíos para esta etapa
+        $envioStats = DB::table('envios')
+            ->where('flujo_ejecucion_etapa_id', $etapa->id)
+            ->selectRaw("
+                COUNT(*) as total,
+                SUM(CASE WHEN estado IN ('enviado', 'abierto', 'clickeado') THEN 1 ELSE 0 END) as exitosos,
+                SUM(CASE WHEN estado = 'fallido' THEN 1 ELSE 0 END) as fallidos,
+                SUM(CASE WHEN estado = 'pendiente' THEN 1 ELSE 0 END) as pendientes
+            ")
+            ->first();
+        
+        $total = (int) ($envioStats->total ?? 0);
+        $pendientes = (int) ($envioStats->pendientes ?? 0);
+        $exitosos = (int) ($envioStats->exitosos ?? 0);
+        $fallidos = (int) ($envioStats->fallidos ?? 0);
+        
+        Log::info('EjecutarNodosProgramados: Verificando completitud por envíos', [
+            'etapa_id' => $etapa->id,
+            'total_envios' => $total,
+            'exitosos' => $exitosos,
+            'fallidos' => $fallidos,
+            'pendientes' => $pendientes,
+        ]);
+        
+        // Si hay envíos y no quedan pendientes, marcar como completada
+        if ($total > 0 && $pendientes === 0) {
+            Log::info('EjecutarNodosProgramados: Completando etapa por verificación de envíos', [
+                'etapa_id' => $etapa->id,
+            ]);
+            
+            $messageId = rand(10000, 99999);
+            
+            $etapa->update([
+                'estado' => 'completed',
+                'ejecutado' => true,
+                'message_id' => $messageId,
+                'fecha_ejecucion' => now(),
+                'response_athenacampaign' => array_merge(
+                    $etapa->response_athenacampaign ?? [],
+                    [
+                        'completed_by_envio_check' => true,
+                        'completed_at' => now()->toISOString(),
+                        'messageID' => $messageId,
+                        'Recipients' => $exitosos,
+                        'Errores' => $fallidos,
+                    ]
+                ),
+            ]);
+            
+            $this->actualizarEjecucionDespuesDeRecuperacion($ejecucion, $etapa);
+            return;
+        }
+        
+        // Si no hay envíos o aún hay pendientes, marcar como failed
+        if ($total === 0) {
+            $this->marcarEtapaComoFallida($etapa, 'No se encontraron envíos para esta etapa');
+        } else {
+            Log::info('EjecutarNodosProgramados: Etapa aún tiene envíos pendientes', [
+                'etapa_id' => $etapa->id,
+                'pendientes' => $pendientes,
+            ]);
+        }
     }
 
     /**
