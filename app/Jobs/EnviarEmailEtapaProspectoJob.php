@@ -29,18 +29,25 @@ class EnviarEmailEtapaProspectoJob implements ShouldQueue
 
     /**
      * The number of times the job may be attempted.
+     * High value because rate-limited releases count as attempts.
      */
-    public int $tries;
+    public int $tries = 0; // 0 = unlimited attempts (controlled by $maxExceptions)
+
+    /**
+     * The maximum number of unhandled exceptions to allow before failing.
+     * This is the REAL limit - only counts actual failures, not rate-limit releases.
+     */
+    public int $maxExceptions = 3;
 
     /**
      * The number of seconds to wait before retrying the job.
      */
-    public array $backoff;
+    public array $backoff = [30, 60, 120];
 
     /**
      * Job timeout in seconds.
      */
-    public int $timeout;
+    public int $timeout = 60;
 
     /**
      * Create a new job instance.
@@ -53,9 +60,7 @@ class EnviarEmailEtapaProspectoJob implements ShouldQueue
         public ?int $etapaEjecucionId = null,
         public bool $esHtml = false
     ) {
-        // Load configuration from config/envios.php
-        $this->tries = config('envios.queue.tries', 3);
-        $this->backoff = config('envios.queue.backoff', [30, 60, 120]);
+        // Load timeout from config (tries and maxExceptions are set as properties)
         $this->timeout = config('envios.queue.timeout', 60);
     }
 

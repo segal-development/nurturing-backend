@@ -88,6 +88,19 @@ class RateLimitedMiddleware
      */
     private function handleRateLimited(object $job): void
     {
+        $attempts = method_exists($job, 'attempts') ? $job->attempts() : 0;
+        
+        // Safety valve: if job has been released too many times, let it through
+        // This prevents infinite loops when rate limit is misconfigured
+        if ($attempts > 50) {
+            Log::warning("RateLimitedMiddleware: Job exceeded 50 attempts, letting through", [
+                'channel' => $this->channel,
+                'job_class' => get_class($job),
+                'attempts' => $attempts,
+            ]);
+            return; // Let the job proceed without rate limiting
+        }
+
         // Get available time until next slot
         $rateLimitKey = "envio-rate:{$this->channel}";
         $availableIn = RateLimiter::availableIn($rateLimitKey);
@@ -95,12 +108,14 @@ class RateLimitedMiddleware
         // Use a small random delay to prevent thundering herd
         $delay = max(1, $availableIn) + rand(0, 2);
 
-        if (config('envios.monitoring.log_rate_limits', true)) {
+        if (config('envios.monitoring.log_rate_limits', true) && $attempts < 5) {
+            // Only log first few attempts to avoid log spam
             Log::debug("RateLimitedMiddleware: Job rate limited", [
                 'channel' => $this->channel,
                 'job_class' => get_class($job),
                 'delay_seconds' => $delay,
                 'available_in' => $availableIn,
+                'attempts' => $attempts,
             ]);
         }
 
