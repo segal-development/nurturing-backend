@@ -464,11 +464,11 @@ class FlujoEjecucionController extends Controller
         $pendientesEnvio = $envioStats->pendientes ?? 0;
         $procesados = $exitosos + $fallidos;
 
-        // Calcular velocidad (envíos en última hora)
+        // Calcular velocidad (envíos creados en última hora)
         $enviosUltimaHora = \DB::table('envios')
             ->whereIn('flujo_ejecucion_etapa_id', $ejecucion->etapas->pluck('id'))
-            ->where('updated_at', '>=', now()->subHour())
-            ->whereIn('estado', ['enviado', 'abierto', 'clickeado'])
+            ->where('created_at', '>=', now()->subHour())
+            ->whereIn('estado', ['enviado', 'abierto', 'clickeado', 'fallido'])
             ->count();
 
         // Tiempo estimado restante
@@ -632,11 +632,11 @@ class FlujoEjecucionController extends Controller
             $pendientesEnvio = $envioStats->pendientes ?? 0;
             $procesados = $exitosos + $fallidos;
 
-            // Calcular velocidad (envíos en última hora)
+            // Calcular velocidad (envíos creados en última hora)
             $enviosUltimaHora = \DB::table('envios')
                 ->whereIn('flujo_ejecucion_etapa_id', $ejecucion->etapas->pluck('id'))
-                ->where('updated_at', '>=', now()->subHour())
-                ->whereIn('estado', ['enviado', 'abierto', 'clickeado'])
+                ->where('created_at', '>=', now()->subHour())
+                ->whereIn('estado', ['enviado', 'abierto', 'clickeado', 'fallido'])
                 ->count();
 
             // Tiempo estimado restante
