@@ -537,6 +537,17 @@ class FlujoEjecucionController extends Controller
 
         $tieneActiva = $ejecucion !== null;
 
+        // Obtener estadísticas de envíos por etapa si hay ejecución activa
+        $enviosPorEtapa = collect();
+        if ($ejecucion && $ejecucion->etapas->isNotEmpty()) {
+            $enviosPorEtapa = \DB::table('envios')
+                ->select('flujo_ejecucion_etapa_id', 'estado', \DB::raw('count(*) as total'))
+                ->whereIn('flujo_ejecucion_etapa_id', $ejecucion->etapas->pluck('id'))
+                ->groupBy('flujo_ejecucion_etapa_id', 'estado')
+                ->get()
+                ->groupBy('flujo_ejecucion_etapa_id');
+        }
+
         // Calcular progreso si hay ejecución activa
         $progreso = null;
         if ($ejecucion) {
@@ -572,7 +583,9 @@ class FlujoEjecucionController extends Controller
                 'prospectos_ids' => $ejecucion->prospectos_ids,
                 'error_message' => $ejecucion->error_message,
                 'progreso' => $progreso,
-                'etapas' => $ejecucion->etapas->map(function ($etapa) {
+                'etapas' => $ejecucion->etapas->map(function ($etapa) use ($enviosPorEtapa) {
+                    $estadisticas = $enviosPorEtapa->get($etapa->id, collect());
+
                     return [
                         'id' => $etapa->id,
                         'node_id' => $etapa->node_id,
@@ -580,6 +593,13 @@ class FlujoEjecucionController extends Controller
                         'ejecutado' => $etapa->ejecutado,
                         'fecha_programada' => $etapa->fecha_programada,
                         'fecha_ejecucion' => $etapa->fecha_ejecucion,
+                        'envios' => [
+                            'pendiente' => $estadisticas->firstWhere('estado', 'pendiente')?->total ?? 0,
+                            'enviado' => $estadisticas->firstWhere('estado', 'enviado')?->total ?? 0,
+                            'fallido' => $estadisticas->firstWhere('estado', 'fallido')?->total ?? 0,
+                            'abierto' => $estadisticas->firstWhere('estado', 'abierto')?->total ?? 0,
+                            'clickeado' => $estadisticas->firstWhere('estado', 'clickeado')?->total ?? 0,
+                        ],
                     ];
                 }),
                 'created_at' => $ejecucion->created_at,
