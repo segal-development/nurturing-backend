@@ -556,6 +556,7 @@ class FlujoEjecucionController extends Controller
 
         // Calcular progreso si hay ejecución activa
         $progreso = null;
+        $progresoEnvios = null;
         if ($ejecucion) {
             $totalEtapas = $ejecucion->etapas->count();
             $etapasCompletadas = $ejecucion->etapas->where('estado', 'completed')->count();
@@ -570,6 +571,47 @@ class FlujoEjecucionController extends Controller
                 'en_ejecucion' => $etapasEnEjecucion,
                 'pendientes' => $etapasPendientes,
                 'fallidas' => $etapasFallidas,
+            ];
+
+            // Calcular progreso de envíos (más detallado)
+            $totalProspectos = count($ejecucion->prospectos_ids ?? []);
+            $envioStats = \DB::table('envios')
+                ->whereIn('flujo_ejecucion_etapa_id', $ejecucion->etapas->pluck('id'))
+                ->selectRaw("
+                    COUNT(*) as total,
+                    SUM(CASE WHEN estado IN ('enviado', 'abierto', 'clickeado') THEN 1 ELSE 0 END) as exitosos,
+                    SUM(CASE WHEN estado = 'fallido' THEN 1 ELSE 0 END) as fallidos,
+                    SUM(CASE WHEN estado = 'pendiente' THEN 1 ELSE 0 END) as pendientes
+                ")
+                ->first();
+
+            $exitosos = $envioStats->exitosos ?? 0;
+            $fallidos = $envioStats->fallidos ?? 0;
+            $pendientesEnvio = $envioStats->pendientes ?? 0;
+            $procesados = $exitosos + $fallidos;
+
+            // Calcular velocidad (envíos en última hora)
+            $enviosUltimaHora = \DB::table('envios')
+                ->whereIn('flujo_ejecucion_etapa_id', $ejecucion->etapas->pluck('id'))
+                ->where('updated_at', '>=', now()->subHour())
+                ->whereIn('estado', ['enviado', 'abierto', 'clickeado'])
+                ->count();
+
+            // Tiempo estimado restante
+            $restantes = $totalProspectos - $procesados;
+            $velocidadPorHora = $enviosUltimaHora > 0 ? $enviosUltimaHora : 9000;
+            $horasRestantes = $restantes > 0 ? round($restantes / $velocidadPorHora, 1) : 0;
+
+            $progresoEnvios = [
+                'total_prospectos' => $totalProspectos,
+                'procesados' => $procesados,
+                'exitosos' => $exitosos,
+                'fallidos' => $fallidos,
+                'pendientes' => $pendientesEnvio,
+                'porcentaje' => $totalProspectos > 0 ? round(($procesados / $totalProspectos) * 100, 2) : 0,
+                'velocidad_por_hora' => $enviosUltimaHora,
+                'tiempo_restante_horas' => $horasRestantes,
+                'tiempo_restante_texto' => $horasRestantes > 0 ? ($horasRestantes < 1 ? 'Menos de 1 hora' : "{$horasRestantes} horas") : 'Completado',
             ];
         }
 
@@ -589,6 +631,7 @@ class FlujoEjecucionController extends Controller
                 'prospectos_ids' => $ejecucion->prospectos_ids,
                 'error_message' => $ejecucion->error_message,
                 'progreso' => $progreso,
+                'progreso_envios' => $progresoEnvios,
                 'etapas' => $ejecucion->etapas->map(function ($etapa) use ($enviosPorEtapa) {
                     $estadisticas = $enviosPorEtapa->get($etapa->id, collect());
 
