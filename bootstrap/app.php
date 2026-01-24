@@ -16,11 +16,20 @@ return Application::configure(basePath: dirname(__DIR__))
         // statefulApi() maneja automáticamente cookies y sesiones
         $middleware->statefulApi();
 
+        // =========================================================================
+        // RESILIENCIA: Middleware de health check de BD para toda la API
+        // =========================================================================
+        // Este middleware verifica que la BD esté disponible antes de procesar
+        // requests. Si la BD está saturada, retorna 503 inmediatamente en vez
+        // de quedarse colgado esperando. Usa circuit breaker pattern.
+        $middleware->appendToGroup('api', \App\Http\Middleware\DatabaseHealthMiddleware::class);
+
         $middleware->alias([
             'role' => \Spatie\Permission\Middleware\RoleMiddleware::class,
             'permission' => \Spatie\Permission\Middleware\PermissionMiddleware::class,
             'role_or_permission' => \Spatie\Permission\Middleware\RoleOrPermissionMiddleware::class,
             'cron.secret' => \App\Http\Middleware\VerifyCronSecret::class,
+            'db.health' => \App\Http\Middleware\DatabaseHealthMiddleware::class,
         ]);
 
         $middleware->redirectGuestsTo(fn () => response()->json([

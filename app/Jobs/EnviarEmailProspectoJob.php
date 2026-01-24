@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Contracts\EmailServiceInterface;
+use App\Jobs\Middleware\RateLimitedMiddleware;
 use App\Models\Envio;
 use App\Models\ProspectoEnFlujo;
 use Illuminate\Bus\Batchable;
@@ -20,9 +21,23 @@ class EnviarEmailProspectoJob implements ShouldQueue
     public int $tries = 3;
 
     /**
-     * The number of seconds to wait before retrying the job.
+     * Exponential backoff (seconds): 30s, 60s, 120s
+     * 
+     * @var array<int>
      */
-    public int $backoff = 30;
+    public array $backoff = [30, 60, 120];
+
+    /**
+     * Get the middleware the job should pass through.
+     * 
+     * @return array<int, object>
+     */
+    public function middleware(): array
+    {
+        return [
+            new RateLimitedMiddleware('email'),
+        ];
+    }
 
     /**
      * Create a new job instance.

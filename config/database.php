@@ -96,8 +96,48 @@ return [
             'prefix_indexes' => true,
             'search_path' => 'public',
             'sslmode' => 'prefer',
-            // ✅ TIMEOUTS a nivel de sesión: Previenen conexiones/transacciones colgadas
-            // Se configuran via AppServiceProvider::boot()
+            
+            // =========================================================================
+            // RESILIENCIA: Connection pooling y timeouts
+            // =========================================================================
+            
+            // Timeout de conexión: falla rápido si no puede conectar (segundos)
+            'connect_timeout' => env('DB_CONNECT_TIMEOUT', 5),
+            
+            // Opciones PDO para resiliencia
+            'options' => [
+                // Timeout para operaciones de conexión
+                PDO::ATTR_TIMEOUT => env('DB_TIMEOUT', 10),
+                // Modo de errores: lanzar excepciones
+                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                // No usar conexiones persistentes (mejor para Cloud Run)
+                PDO::ATTR_PERSISTENT => false,
+            ],
+        ],
+        
+        // =========================================================================
+        // Conexión de solo lectura (para API queries no críticas)
+        // Usar cuando tengamos Read Replica configurada
+        // =========================================================================
+        'pgsql_read' => [
+            'driver' => 'pgsql',
+            'url' => env('DB_READ_URL', env('DB_URL')),
+            'host' => env('DB_READ_HOST', env('DB_HOST', '127.0.0.1')),
+            'port' => env('DB_READ_PORT', env('DB_PORT', '5432')),
+            'database' => env('DB_DATABASE', 'laravel'),
+            'username' => env('DB_READ_USERNAME', env('DB_USERNAME', 'root')),
+            'password' => env('DB_READ_PASSWORD', env('DB_PASSWORD', '')),
+            'charset' => env('DB_CHARSET', 'utf8'),
+            'prefix' => '',
+            'prefix_indexes' => true,
+            'search_path' => 'public',
+            'sslmode' => 'prefer',
+            'connect_timeout' => env('DB_CONNECT_TIMEOUT', 5),
+            'options' => [
+                PDO::ATTR_TIMEOUT => env('DB_TIMEOUT', 10),
+                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                PDO::ATTR_PERSISTENT => false,
+            ],
         ],
 
         'sqlsrv' => [
