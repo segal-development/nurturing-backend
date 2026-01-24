@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Admin\ExternalApiSourceController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\ConfiguracionController;
 use App\Http\Controllers\CostoController;
@@ -169,5 +170,17 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/top-flujos', [MetricasController::class, 'topFlujos']);
         Route::get('/tendencias', [MetricasController::class, 'tendencias']);
         Route::post('/refresh', [MetricasController::class, 'refresh']);
+    });
+
+    // Rutas de Admin - Fuentes Externas de Prospectos
+    Route::prefix('admin/external-sources')->group(function () {
+        Route::get('/', [ExternalApiSourceController::class, 'index']);
+        Route::post('/', [ExternalApiSourceController::class, 'store']);
+        Route::post('/test-new', [ExternalApiSourceController::class, 'testNew']);
+        Route::get('/{id}', [ExternalApiSourceController::class, 'show']);
+        Route::put('/{id}', [ExternalApiSourceController::class, 'update']);
+        Route::delete('/{id}', [ExternalApiSourceController::class, 'destroy']);
+        Route::post('/{id}/sync', [ExternalApiSourceController::class, 'sync']);
+        Route::post('/{id}/test', [ExternalApiSourceController::class, 'test']);
     });
 });

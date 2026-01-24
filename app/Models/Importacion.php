@@ -25,6 +25,7 @@ class Importacion extends Model
         'estado',
         'fecha_importacion',
         'metadata',
+        'external_api_source_id',
     ];
 
     protected function casts(): array
@@ -48,6 +49,19 @@ class Importacion extends Model
     public function prospectos(): HasMany
     {
         return $this->hasMany(Prospecto::class);
+    }
+
+    public function externalApiSource(): BelongsTo
+    {
+        return $this->belongsTo(ExternalApiSource::class);
+    }
+
+    /**
+     * Verifica si la importación proviene de una API externa.
+     */
+    public function isFromExternalApi(): bool
+    {
+        return $this->external_api_source_id !== null;
     }
 
     public function isCompletado(): bool

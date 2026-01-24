@@ -33,6 +33,16 @@ return Application::configure(basePath: dirname(__DIR__))
             ->everyMinute()
             ->name('ejecutar-nodos-programados')
             ->withoutOverlapping();
+
+        // Sincronizar prospectos desde APIs externas - todos los viernes a las 2am
+        $schedule->job(\App\Jobs\SyncExternalApiJob::class)
+            ->fridays()
+            ->at('02:00')
+            ->name('sync-external-api-prospectos')
+            ->withoutOverlapping()
+            ->onFailure(function () {
+                \Illuminate\Support\Facades\Log::error('SyncExternalApiJob: Job programado falló');
+            });
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         //
