@@ -190,3 +190,20 @@ Schedule::job(new \App\Jobs\EnviarResumenDiarioJob())
   ->onFailure(function () {
       Log::error('Scheduler: Falló el envío del resumen diario');
   });
+
+// ============================================================================
+// RECUPERACIÓN DE ETAPAS ESTANCADAS
+// Cada 10 minutos detecta etapas de flujo que quedaron estancadas
+// (executing sin actividad) y las marca como completadas.
+// Threshold: 30 minutos sin actividad.
+// ============================================================================
+Schedule::command('etapas:recover-stuck --minutes=30')
+  ->everyTenMinutes()
+  ->name('etapas:recover-stuck')
+  ->withoutOverlapping()
+  ->onSuccess(function () {
+      Log::info('Scheduler: Verificación de etapas estancadas completada');
+  })
+  ->onFailure(function () {
+      Log::error('Scheduler: Falló la verificación de etapas estancadas');
+  });
