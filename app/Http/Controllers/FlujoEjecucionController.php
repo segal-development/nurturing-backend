@@ -650,7 +650,8 @@ class FlujoEjecucionController extends Controller
                     ")
                     ->first();
                 
-                $baseProspectos = $totalProspectos; // La etapa actual envía a todos los prospectos del flujo
+                // Usar el total de envíos de la etapa como base (no todos los prospectos pasan por todas las etapas)
+                $baseProspectos = $envioStats->total ?? $totalProspectos;
             } else {
                 // No hay etapa ejecutando - mostrar totales de etapas completadas
                 $envioStats = \DB::table('envios')
