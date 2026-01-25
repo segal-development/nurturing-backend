@@ -741,13 +741,17 @@ class EjecutarNodosProgramados implements ShouldQueue
     }
 
     /**
-     * Actualiza la ejecución después de recuperar una etapa
+     * Actualiza la ejecución después de recuperar una etapa y programa el siguiente nodo.
+     * 
+     * Similar a BatchCompletedCallback pero para etapas recuperadas por el cron.
      */
     private function actualizarEjecucionDespuesDeRecuperacion(FlujoEjecucion $ejecucion, FlujoEjecucionEtapa $etapa): void
     {
         // Obtener datos del flujo para encontrar el siguiente nodo
         $flujoData = $ejecucion->flujo->flujo_data ?? [];
         $branches = $flujoData['branches'] ?? $flujoData['edges'] ?? [];
+        $stages = $flujoData['stages'] ?? [];
+        $conditions = $flujoData['conditions'] ?? [];
         
         // Normalizar edges a branches
         if (!empty($flujoData['edges']) && empty($flujoData['branches'])) {
@@ -763,28 +767,7 @@ class EjecutarNodosProgramados implements ShouldQueue
         // Buscar siguiente nodo
         $siguienteConexion = collect($branches)->firstWhere('source_node_id', $etapa->node_id);
         
-        if ($siguienteConexion) {
-            $siguienteNodoId = $siguienteConexion['target_node_id'];
-            
-            // Buscar si ya existe la etapa para el siguiente nodo
-            $siguienteEtapa = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
-                ->where('node_id', $siguienteNodoId)
-                ->first();
-
-            $fechaProximoNodo = $siguienteEtapa?->fecha_programada ?? now();
-
-            $ejecucion->update([
-                'nodo_actual' => $etapa->node_id,
-                'proximo_nodo' => $siguienteNodoId,
-                'fecha_proximo_nodo' => $fechaProximoNodo,
-            ]);
-
-            Log::info('EjecutarNodosProgramados: Ejecución actualizada después de recuperación', [
-                'ejecucion_id' => $ejecucion->id,
-                'nodo_recuperado' => $etapa->node_id,
-                'proximo_nodo' => $siguienteNodoId,
-            ]);
-        } else {
+        if (!$siguienteConexion) {
             // No hay siguiente nodo - completar ejecución
             $ejecucion->update([
                 'estado' => 'completed',
@@ -792,9 +775,98 @@ class EjecutarNodosProgramados implements ShouldQueue
                 'proximo_nodo' => null,
                 'fecha_proximo_nodo' => null,
             ]);
-
             Log::info('EjecutarNodosProgramados: Ejecución completada después de recuperación');
+            return;
         }
+
+        $siguienteNodoId = $siguienteConexion['target_node_id'];
+        
+        // Si es nodo final, completar
+        if (str_starts_with($siguienteNodoId, 'end-')) {
+            $ejecucion->update([
+                'estado' => 'completed',
+                'fecha_fin' => now(),
+                'proximo_nodo' => null,
+                'fecha_proximo_nodo' => null,
+            ]);
+            Log::info('EjecutarNodosProgramados: Nodo final alcanzado, ejecución completada');
+            return;
+        }
+
+        // Buscar datos del siguiente nodo
+        $siguienteNodo = collect($stages)->firstWhere('id', $siguienteNodoId);
+        if (!$siguienteNodo) {
+            $siguienteNodo = collect($conditions)->firstWhere('id', $siguienteNodoId);
+        }
+        
+        $tipoNodo = $siguienteNodo['type'] ?? (str_starts_with($siguienteNodoId, 'condition') ? 'condition' : 'stage');
+        
+        // Calcular fecha programada
+        if ($tipoNodo === 'condition') {
+            $tiempoVerificacion = 24; // horas por defecto
+            $fechaProgramada = now()->addHours($tiempoVerificacion);
+        } else {
+            $tiempoEspera = $siguienteNodo['tiempo_espera'] ?? 0;
+            $fechaProgramada = now()->addDays($tiempoEspera);
+        }
+        
+        // Obtener prospectos_ids de la etapa actual
+        $prospectoIds = $etapa->prospectos_ids ?? $ejecucion->prospectos_ids ?? [];
+
+        // Buscar o crear la etapa siguiente
+        $siguienteEtapa = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
+            ->where('node_id', $siguienteNodoId)
+            ->first();
+
+        $etapaData = [
+            'prospectos_ids' => $prospectoIds,
+            'fecha_programada' => $fechaProgramada,
+            'estado' => 'pending',
+        ];
+        
+        // Si es condición, agregar source info
+        if ($tipoNodo === 'condition') {
+            $etapaData['response_athenacampaign'] = [
+                'pending_condition' => true,
+                'source_message_id' => $etapa->message_id,
+                'source_etapa_id' => $etapa->id,
+                'conexion' => $siguienteConexion,
+            ];
+        }
+
+        if ($siguienteEtapa) {
+            $siguienteEtapa->update($etapaData);
+            Log::info('EjecutarNodosProgramados: Etapa siguiente actualizada', [
+                'etapa_id' => $siguienteEtapa->id,
+                'node_id' => $siguienteNodoId,
+                'prospectos_count' => count($prospectoIds),
+            ]);
+        } else {
+            $siguienteEtapa = FlujoEjecucionEtapa::create(array_merge($etapaData, [
+                'flujo_ejecucion_id' => $ejecucion->id,
+                'etapa_id' => null,
+                'node_id' => $siguienteNodoId,
+            ]));
+            Log::info('EjecutarNodosProgramados: Etapa siguiente creada', [
+                'etapa_id' => $siguienteEtapa->id,
+                'node_id' => $siguienteNodoId,
+                'prospectos_count' => count($prospectoIds),
+            ]);
+        }
+
+        // Actualizar ejecución
+        $ejecucion->update([
+            'nodo_actual' => $etapa->node_id,
+            'proximo_nodo' => $siguienteNodoId,
+            'fecha_proximo_nodo' => $fechaProgramada,
+        ]);
+
+        Log::info('EjecutarNodosProgramados: Ejecución actualizada después de recuperación', [
+            'ejecucion_id' => $ejecucion->id,
+            'nodo_recuperado' => $etapa->node_id,
+            'proximo_nodo' => $siguienteNodoId,
+            'tipo_nodo' => $tipoNodo,
+        ]);
     }
 
     /**
