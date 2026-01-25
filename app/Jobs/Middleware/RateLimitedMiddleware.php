@@ -71,7 +71,11 @@ class RateLimitedMiddleware
                     $next($job);
                     $this->recordSuccess();
                 } catch (\Throwable $e) {
-                    $this->recordFailure();
+                    // Only count as circuit breaker failure if it's a REAL provider error
+                    // Not validation errors like "prospecto sin email"
+                    if ($this->isProviderError($e)) {
+                        $this->recordFailure();
+                    }
                     throw $e;
                 }
             },
@@ -81,6 +85,64 @@ class RateLimitedMiddleware
         if (!$executed) {
             $this->handleRateLimited($job);
         }
+    }
+    
+    /**
+     * Determina si un error es del proveedor (SMTP/API) o es de validación.
+     * Solo los errores de proveedor deben activar el circuit breaker.
+     */
+    private function isProviderError(\Throwable $e): bool
+    {
+        $message = strtolower($e->getMessage());
+        
+        // Errores de validación que NO deben contar para circuit breaker
+        $validationErrors = [
+            'no tiene email',
+            'email válido',
+            'email invalido',
+            'prospecto no encontrado',
+            'prospecto inactivo',
+            'desuscrito',
+            'unsubscribed',
+        ];
+        
+        foreach ($validationErrors as $validationError) {
+            if (str_contains($message, $validationError)) {
+                return false;
+            }
+        }
+        
+        // Errores de proveedor que SÍ deben contar
+        $providerErrors = [
+            'connection',
+            'timeout',
+            'smtp',
+            'mail server',
+            'relay',
+            'quota',
+            'rate limit',
+            'too many',
+            '421',
+            '450',
+            '451',
+            '452',
+            '500',
+            '550',
+            '551',
+            '552',
+            '553',
+            '554',
+        ];
+        
+        foreach ($providerErrors as $providerError) {
+            if (str_contains($message, $providerError)) {
+                return true;
+            }
+        }
+        
+        // Por defecto, no contar como error de proveedor
+        // Esto es conservador - preferimos no abrir el circuit breaker
+        return false;
     }
 
     /**

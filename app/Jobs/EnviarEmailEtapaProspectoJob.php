@@ -79,12 +79,9 @@ class EnviarEmailEtapaProspectoJob implements ShouldQueue, ShouldBeUnique
      */
     public function middleware(): array
     {
-        // TODO: Re-enable after adjusting circuit breaker thresholds for high-volume sends
-        // The current threshold (10 failures) is too aggressive for 20+ concurrent workers
-        // return [
-        //     new RateLimitedMiddleware('email'),
-        // ];
-        return [];
+        return [
+            new RateLimitedMiddleware('email'),
+        ];
     }
 
     /**

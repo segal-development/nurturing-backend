@@ -69,13 +69,16 @@ return [
 
     'circuit_breaker' => [
         // Number of failures before circuit opens
-        'failure_threshold' => (int) env('ENVIO_CIRCUIT_FAILURE_THRESHOLD', 10),
+        // Increased to 50 for high-volume scenarios with 20+ workers
+        // Only counts REAL failures (provider errors), not validation errors
+        'failure_threshold' => (int) env('ENVIO_CIRCUIT_FAILURE_THRESHOLD', 50),
 
         // Seconds to keep circuit open before trying again
         'recovery_time' => (int) env('ENVIO_CIRCUIT_RECOVERY_TIME', 60),
 
         // Time window to count failures (in seconds)
-        'failure_window' => (int) env('ENVIO_CIRCUIT_FAILURE_WINDOW', 60),
+        // Increased to 2 minutes for better averaging
+        'failure_window' => (int) env('ENVIO_CIRCUIT_FAILURE_WINDOW', 120),
     ],
 
     /*
