@@ -373,20 +373,66 @@ class VerificarCondicionJob implements ShouldQueue
 
     /**
      * Obtiene la etapa de email anterior para buscar envíos.
+     * 
+     * Estrategia de búsqueda (en orden de prioridad):
+     * 1. Por source_etapa_id guardado en response_athenacampaign de la condición
+     * 2. Por source_node_id si es un stage (no condition)
+     * 3. Fallback: última etapa ejecutada con message_id
      */
     private function obtenerEtapaEmailAnterior(
         FlujoEjecucion $ejecucion,
         ?string $sourceNodeId
     ): ?FlujoEjecucionEtapa {
-        $query = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
-            ->where('ejecutado', true)
-            ->whereNotNull('message_id');
-
-        if ($sourceNodeId) {
-            $query->where('node_id', $sourceNodeId);
+        // 1. Intentar obtener source_etapa_id del response de la condición
+        $etapaCondicion = FlujoEjecucionEtapa::find($this->etapaEjecucionId);
+        $responseData = $etapaCondicion?->response_athenacampaign ?? [];
+        
+        if (!empty($responseData['source_etapa_id'])) {
+            $etapa = FlujoEjecucionEtapa::find($responseData['source_etapa_id']);
+            if ($etapa && $etapa->message_id) {
+                Log::info('VerificarCondicionJob: Usando source_etapa_id del response', [
+                    'source_etapa_id' => $responseData['source_etapa_id'],
+                    'message_id' => $etapa->message_id,
+                ]);
+                return $etapa;
+            }
         }
-
-        return $query->orderBy('fecha_ejecucion', 'desc')->first();
+        
+        // 2. Si source_node_id es un stage (no una condición), buscar por node_id
+        if ($sourceNodeId && str_starts_with($sourceNodeId, 'stage-')) {
+            $etapa = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
+                ->where('node_id', $sourceNodeId)
+                ->where('ejecutado', true)
+                ->whereNotNull('message_id')
+                ->first();
+            
+            if ($etapa) {
+                Log::info('VerificarCondicionJob: Usando etapa por source_node_id', [
+                    'source_node_id' => $sourceNodeId,
+                    'message_id' => $etapa->message_id,
+                ]);
+                return $etapa;
+            }
+        }
+        
+        // 3. Fallback: buscar la última etapa ejecutada con message_id
+        // Esto cubre casos donde la condición viene justo después de una etapa
+        $etapa = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
+            ->where('ejecutado', true)
+            ->whereNotNull('message_id')
+            ->where('id', '!=', $this->etapaEjecucionId) // Excluir la condición actual
+            ->orderBy('fecha_ejecucion', 'desc')
+            ->first();
+        
+        if ($etapa) {
+            Log::info('VerificarCondicionJob: Usando fallback - última etapa ejecutada', [
+                'etapa_id' => $etapa->id,
+                'node_id' => $etapa->node_id,
+                'message_id' => $etapa->message_id,
+            ]);
+        }
+        
+        return $etapa;
     }
 
     /**

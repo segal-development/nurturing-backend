@@ -378,6 +378,15 @@ class EjecutarNodosProgramados implements ShouldQueue
                 'etapa_email_id' => $etapaEmailAnterior->id,
                 'etapa_email_node_id' => $etapaEmailAnterior->node_id,
             ]);
+            
+            // ✅ Guardar source_etapa_id para que VerificarCondicionJob lo use
+            $etapa->update([
+                'response_athenacampaign' => array_merge($responseData, [
+                    'source_message_id' => $messageId,
+                    'source_etapa_id' => $etapaEmailAnterior->id,
+                ]),
+            ]);
+            $responseData = $etapa->fresh()->response_athenacampaign;
         }
 
         // ✅ PRIORIDAD: usar prospectos de la etapa si están disponibles (filtrado previo)
