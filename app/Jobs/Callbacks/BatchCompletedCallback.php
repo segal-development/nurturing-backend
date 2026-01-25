@@ -164,6 +164,7 @@ class BatchCompletedCallback
                 'response_athenacampaign' => [
                     'pending_condition' => true,
                     'source_message_id' => $messageId,
+                    'source_etapa_id' => $etapaEjecucion->id,
                     'conexion' => $conexion,
                 ],
             ]);
@@ -174,6 +175,7 @@ class BatchCompletedCallback
                 'response_athenacampaign' => [
                     'pending_condition' => true,
                     'source_message_id' => $messageId,
+                    'source_etapa_id' => $etapaEjecucion->id,
                     'conexion' => $conexion,
                 ],
             ]);
