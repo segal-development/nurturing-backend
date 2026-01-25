@@ -631,32 +631,61 @@ class FlujoEjecucionController extends Controller
                 'fallidas' => $etapasFallidas,
             ];
 
-            // Calcular progreso de envíos (más detallado)
+            // Calcular progreso de envíos basado en la etapa en ejecución
             $totalProspectos = count($ejecucion->prospectos_ids ?? []);
-            $envioStats = \DB::table('envios')
-                ->whereIn('flujo_ejecucion_etapa_id', $ejecucion->etapas->pluck('id'))
-                ->selectRaw("
-                    COUNT(*) as total,
-                    SUM(CASE WHEN estado IN ('enviado', 'abierto', 'clickeado') THEN 1 ELSE 0 END) as exitosos,
-                    SUM(CASE WHEN estado = 'fallido' THEN 1 ELSE 0 END) as fallidos,
-                    SUM(CASE WHEN estado = 'pendiente' THEN 1 ELSE 0 END) as pendientes
-                ")
-                ->first();
+            
+            // Buscar la etapa actualmente en ejecución
+            $etapaEnEjecucion = $ejecucion->etapas->firstWhere('estado', 'executing');
+            
+            // Si hay una etapa ejecutando, mostrar progreso de ESA etapa
+            // Si no, mostrar el progreso general (todas las etapas completadas)
+            if ($etapaEnEjecucion) {
+                $envioStats = \DB::table('envios')
+                    ->where('flujo_ejecucion_etapa_id', $etapaEnEjecucion->id)
+                    ->selectRaw("
+                        COUNT(*) as total,
+                        SUM(CASE WHEN estado IN ('enviado', 'abierto', 'clickeado') THEN 1 ELSE 0 END) as exitosos,
+                        SUM(CASE WHEN estado = 'fallido' THEN 1 ELSE 0 END) as fallidos,
+                        SUM(CASE WHEN estado = 'pendiente' THEN 1 ELSE 0 END) as pendientes
+                    ")
+                    ->first();
+                
+                $baseProspectos = $totalProspectos; // La etapa actual envía a todos los prospectos del flujo
+            } else {
+                // No hay etapa ejecutando - mostrar totales de etapas completadas
+                $envioStats = \DB::table('envios')
+                    ->whereIn('flujo_ejecucion_etapa_id', $ejecucion->etapas->pluck('id'))
+                    ->selectRaw("
+                        COUNT(*) as total,
+                        SUM(CASE WHEN estado IN ('enviado', 'abierto', 'clickeado') THEN 1 ELSE 0 END) as exitosos,
+                        SUM(CASE WHEN estado = 'fallido' THEN 1 ELSE 0 END) as fallidos,
+                        SUM(CASE WHEN estado = 'pendiente' THEN 1 ELSE 0 END) as pendientes
+                    ")
+                    ->first();
+                
+                // Base = prospectos × etapas completadas (para que el % tenga sentido)
+                $etapasCompletadasCount = $ejecucion->etapas->whereIn('estado', ['completed', 'executing'])->count();
+                $baseProspectos = $totalProspectos * max(1, $etapasCompletadasCount);
+            }
 
             $exitosos = $envioStats->exitosos ?? 0;
             $fallidos = $envioStats->fallidos ?? 0;
             $pendientesEnvio = $envioStats->pendientes ?? 0;
             $procesados = $exitosos + $fallidos;
 
-            // Calcular velocidad (envíos creados en última hora)
+            // Calcular velocidad (envíos de la etapa actual en última hora)
+            $etapaIdsParaVelocidad = $etapaEnEjecucion 
+                ? [$etapaEnEjecucion->id] 
+                : $ejecucion->etapas->pluck('id')->toArray();
+            
             $enviosUltimaHora = \DB::table('envios')
-                ->whereIn('flujo_ejecucion_etapa_id', $ejecucion->etapas->pluck('id'))
+                ->whereIn('flujo_ejecucion_etapa_id', $etapaIdsParaVelocidad)
                 ->where('created_at', '>=', now()->subHour())
                 ->whereIn('estado', ['enviado', 'abierto', 'clickeado', 'fallido'])
                 ->count();
 
-            // Tiempo estimado restante
-            $restantes = $totalProspectos - $procesados;
+            // Tiempo estimado restante (basado en la etapa actual)
+            $restantes = $baseProspectos - $procesados;
             
             // Si hay muy pocos envíos en la última hora pero quedan muchos pendientes,
             // puede ser que el proceso se detuvo o los restantes son prospectos sin email
@@ -677,15 +706,16 @@ class FlujoEjecucionController extends Controller
             }
 
             $progresoEnvios = [
-                'total_prospectos' => $totalProspectos,
+                'total_prospectos' => $baseProspectos,
                 'procesados' => $procesados,
                 'exitosos' => $exitosos,
                 'fallidos' => $fallidos,
                 'pendientes' => $pendientesEnvio,
-                'porcentaje' => $totalProspectos > 0 ? round(($procesados / $totalProspectos) * 100, 2) : 0,
+                'porcentaje' => $baseProspectos > 0 ? round(($procesados / $baseProspectos) * 100, 2) : 0,
                 'velocidad_por_hora' => $enviosUltimaHora,
                 'tiempo_restante_horas' => $horasRestantes,
                 'tiempo_restante_texto' => $tiempoTexto,
+                'etapa_actual' => $etapaEnEjecucion ? $etapaEnEjecucion->node_id : null,
             ];
         }
 
