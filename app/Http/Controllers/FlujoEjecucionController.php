@@ -563,7 +563,7 @@ class FlujoEjecucionController extends Controller
                 'fecha_inicio_real' => $ejecucion->fecha_inicio_real,
                 'fecha_fin' => $ejecucion->fecha_fin,
                 'error_message' => $ejecucion->error_message,
-                'prospectos_ids' => $ejecucion->prospectos_ids,
+                'prospectos_count' => count($ejecucion->prospectos_ids ?? []),
                 'progreso' => [
                     'total_etapas' => $totalEtapas,
                     'completadas' => $etapasCompletadas,
@@ -733,7 +733,7 @@ class FlujoEjecucionController extends Controller
                 'fecha_inicio_programada' => $ejecucion->fecha_inicio_programada,
                 'fecha_inicio_real' => $ejecucion->fecha_inicio_real,
                 'fecha_fin' => $ejecucion->fecha_fin,
-                'prospectos_ids' => $ejecucion->prospectos_ids,
+                'prospectos_count' => count($ejecucion->prospectos_ids ?? []),
                 'error_message' => $ejecucion->error_message,
                 'progreso' => $progreso,
                 'progreso_envios' => $progresoEnvios,
