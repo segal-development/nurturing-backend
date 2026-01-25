@@ -6,6 +6,7 @@ use App\Jobs\Middleware\RateLimitedMiddleware;
 use App\Models\ProspectoEnFlujo;
 use App\Services\EnvioService;
 use Illuminate\Bus\Batchable;
+use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Log;
@@ -22,8 +23,9 @@ use Illuminate\Support\Facades\Log;
  * - Usa el trait Batchable para integrarse con Bus::batch()
  * - Incluye tracking de aperturas (pixel) y clicks (URL rewrite)
  * - Reintentos automáticos con backoff exponencial
+ * - Idempotencia: ShouldBeUnique previene jobs duplicados en cola
  */
-class EnviarEmailEtapaProspectoJob implements ShouldQueue
+class EnviarEmailEtapaProspectoJob implements ShouldQueue, ShouldBeUnique
 {
     use Batchable, Queueable;
 
@@ -48,6 +50,12 @@ class EnviarEmailEtapaProspectoJob implements ShouldQueue
      * Job timeout in seconds.
      */
     public int $timeout = 60;
+
+    /**
+     * Tiempo (segundos) que el lock de unicidad permanece activo.
+     * Previene que el mismo job se encole dos veces en este período.
+     */
+    public int $uniqueFor = 300; // 5 minutos
 
     /**
      * Create a new job instance.
@@ -169,5 +177,21 @@ class EnviarEmailEtapaProspectoJob implements ShouldQueue
         }
 
         return $tags;
+    }
+
+    /**
+     * Llave única para idempotencia.
+     * 
+     * Combina prospecto + etapa para garantizar que solo UN job
+     * por prospecto/etapa pueda estar en cola a la vez.
+     * 
+     * Esto previene duplicados cuando:
+     * - Cloud Run mata una instancia y re-encola el job
+     * - Hay race conditions al crear jobs
+     * - Se reintenta manualmente una etapa
+     */
+    public function uniqueId(): string
+    {
+        return "email:{$this->prospectoEnFlujoId}:{$this->etapaEjecucionId}";
     }
 }
