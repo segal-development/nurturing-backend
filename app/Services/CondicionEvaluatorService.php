@@ -192,15 +192,47 @@ class CondicionEvaluatorService
     /**
      * Obtiene los envíos de una etapa para un conjunto de prospectos.
      * 
+     * Procesa en chunks para evitar el límite de 65,535 parámetros de PostgreSQL.
+     * 
      * @param int $etapaEjecucionId ID de FlujoEjecucionEtapa
      * @param array $prospectoIds IDs de prospectos
      * @return Collection<Envio>
      */
     private function obtenerEnviosPorEtapa(int $etapaEjecucionId, array $prospectoIds): Collection
     {
-        return Envio::where('flujo_ejecucion_etapa_id', $etapaEjecucionId)
-            ->whereIn('prospecto_id', $prospectoIds)
-            ->get();
+        // PostgreSQL/PDO tiene límite de 65,535 parámetros por query
+        // Usamos chunks de 10,000 para tener margen de seguridad
+        $chunkSize = 10000;
+        
+        if (count($prospectoIds) <= $chunkSize) {
+            return Envio::where('flujo_ejecucion_etapa_id', $etapaEjecucionId)
+                ->whereIn('prospecto_id', $prospectoIds)
+                ->get();
+        }
+        
+        Log::info('CondicionEvaluatorService: Procesando envíos en chunks', [
+            'total_prospectos' => count($prospectoIds),
+            'chunk_size' => $chunkSize,
+            'total_chunks' => ceil(count($prospectoIds) / $chunkSize),
+        ]);
+        
+        $envios = collect();
+        
+        foreach (array_chunk($prospectoIds, $chunkSize) as $index => $chunk) {
+            $chunkEnvios = Envio::where('flujo_ejecucion_etapa_id', $etapaEjecucionId)
+                ->whereIn('prospecto_id', $chunk)
+                ->get();
+            
+            $envios = $envios->concat($chunkEnvios);
+            
+            Log::debug('CondicionEvaluatorService: Chunk procesado', [
+                'chunk' => $index + 1,
+                'envios_en_chunk' => $chunkEnvios->count(),
+                'total_acumulado' => $envios->count(),
+            ]);
+        }
+        
+        return $envios;
     }
 
     /**

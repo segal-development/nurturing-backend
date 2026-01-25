@@ -32,7 +32,7 @@ class VerificarCondicionJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public $timeout = 120; // 2 minutos (reducido para evitar locks)
+    public $timeout = 600; // 10 minutos para volúmenes grandes (300k+ prospectos)
 
     public $tries = 3;
 
