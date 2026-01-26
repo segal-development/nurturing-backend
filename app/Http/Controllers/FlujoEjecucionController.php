@@ -382,9 +382,17 @@ class FlujoEjecucionController extends Controller
             ->orderBy('created_at', 'desc')
             ->get();
 
+        // Transform to exclude prospectos_ids (can be 300k+ items causing browser OOM)
+        $data = $ejecuciones->map(function ($ejecucion) {
+            $arr = $ejecucion->toArray();
+            $arr['prospectos_count'] = count($ejecucion->prospectos_ids ?? []);
+            unset($arr['prospectos_ids']);
+            return $arr;
+        });
+
         return response()->json([
             'error' => false,
-            'data' => $ejecuciones,
+            'data' => $data,
         ]);
     }
 
