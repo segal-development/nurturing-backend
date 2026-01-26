@@ -13,7 +13,7 @@ return [
     |
     */
 
-    'default' => 'database', // Forzado a database por problema con Redis
+    'default' => env('QUEUE_CONNECTION', 'database'),
 
     /*
     |--------------------------------------------------------------------------
