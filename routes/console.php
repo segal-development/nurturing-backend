@@ -177,19 +177,19 @@ Schedule::job(new \App\Jobs\SincronizarDesuscripcionesAthenaJob(7))
 
 // ============================================================================
 // RESUMEN DIARIO DE MÉTRICAS
-// Envía un email con el resumen de envíos del día anterior.
-// Se ejecuta todos los días a la hora configurada (default: 8:00 AM).
+// DISABLED: La info ya está disponible en /metricas y /costos del dashboard.
+// Si se necesita reactivar, descomentar el bloque de abajo.
 // ============================================================================
-Schedule::job(new \App\Jobs\EnviarResumenDiarioJob())
-  ->dailyAt(sprintf('%02d:00', config('envios.alerts.daily_summary_hour', 8)))
-  ->name('alertas:resumen-diario')
-  ->withoutOverlapping()
-  ->onSuccess(function () {
-      Log::info('Scheduler: Resumen diario enviado correctamente');
-  })
-  ->onFailure(function () {
-      Log::error('Scheduler: Falló el envío del resumen diario');
-  });
+// Schedule::job(new \App\Jobs\EnviarResumenDiarioJob())
+//   ->dailyAt(sprintf('%02d:00', config('envios.alerts.daily_summary_hour', 8)))
+//   ->name('alertas:resumen-diario')
+//   ->withoutOverlapping()
+//   ->onSuccess(function () {
+//       Log::info('Scheduler: Resumen diario enviado correctamente');
+//   })
+//   ->onFailure(function () {
+//       Log::error('Scheduler: Falló el envío del resumen diario');
+//   });
 
 // ============================================================================
 // RECUPERACIÓN DE ETAPAS ESTANCADAS
