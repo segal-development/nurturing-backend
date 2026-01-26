@@ -374,15 +374,54 @@ class FlujoEjecucionController extends Controller
      * Lista todas las ejecuciones de un flujo
      *
      * GET /api/flujos/{flujo}/ejecuciones
+     *
+     * IMPORTANT: This endpoint excludes large arrays (prospectos_ids) to prevent
+     * browser OOM errors. Each array can contain 300k+ IDs.
      */
     public function index(Flujo $flujo): JsonResponse
     {
         $ejecuciones = $flujo->ejecuciones()
-            ->with(['etapas', 'condiciones', 'jobs'])
+            ->with([
+                // Exclude prospectos_ids from etapas - can be 300k+ IDs per etapa
+                'etapas' => function ($query) {
+                    $query->select([
+                        'id',
+                        'flujo_ejecucion_id',
+                        'etapa_id',
+                        'node_id',
+                        'fecha_programada',
+                        'fecha_ejecucion',
+                        'estado',
+                        'ejecutado',
+                        'message_id',
+                        'error_mensaje',
+                        'created_at',
+                        'updated_at',
+                        // Explicitly NOT selecting: prospectos_ids, response_athenacampaign
+                    ]);
+                },
+                'condiciones',
+                // Exclude large job_data and error_details from jobs
+                'jobs' => function ($query) {
+                    $query->select([
+                        'id',
+                        'flujo_ejecucion_id',
+                        'job_id',
+                        'job_type',
+                        'estado',
+                        'fecha_queued',
+                        'fecha_procesado',
+                        'intentos',
+                        'created_at',
+                        'updated_at',
+                        // Explicitly NOT selecting: job_data, error_details (can be large)
+                    ]);
+                },
+            ])
             ->orderBy('created_at', 'desc')
             ->get();
 
-        // Transform to exclude prospectos_ids (can be 300k+ items causing browser OOM)
+        // Transform to exclude prospectos_ids from ejecucion (can be 300k+ items)
         $data = $ejecuciones->map(function ($ejecucion) {
             $arr = $ejecucion->toArray();
             $arr['prospectos_count'] = count($ejecucion->prospectos_ids ?? []);
@@ -411,7 +450,42 @@ class FlujoEjecucionController extends Controller
             ], 404);
         }
 
-        $ejecucion->load(['etapas', 'condiciones', 'jobs']);
+        // Load relations without large arrays to prevent memory issues
+        $ejecucion->load([
+            'etapas' => function ($query) {
+                $query->select([
+                    'id',
+                    'flujo_ejecucion_id',
+                    'etapa_id',
+                    'node_id',
+                    'fecha_programada',
+                    'fecha_ejecucion',
+                    'estado',
+                    'ejecutado',
+                    'message_id',
+                    'error_mensaje',
+                    'created_at',
+                    'updated_at',
+                    // Explicitly NOT selecting: prospectos_ids, response_athenacampaign
+                ]);
+            },
+            'condiciones',
+            'jobs' => function ($query) {
+                $query->select([
+                    'id',
+                    'flujo_ejecucion_id',
+                    'job_id',
+                    'job_type',
+                    'estado',
+                    'fecha_queued',
+                    'fecha_procesado',
+                    'intentos',
+                    'created_at',
+                    'updated_at',
+                    // Explicitly NOT selecting: job_data, error_details
+                ]);
+            },
+        ]);
 
         // Obtener estadísticas de envíos por etapa
         $enviosPorEtapa = \DB::table('envios')
@@ -603,7 +677,21 @@ class FlujoEjecucionController extends Controller
         $ejecucion = FlujoEjecucion::where('flujo_id', $flujo->id)
             ->whereIn('estado', ['in_progress', 'paused'])
             ->with(['etapas' => function ($query) {
-                $query->orderBy('fecha_programada', 'asc');
+                // Exclude prospectos_ids to prevent memory issues
+                $query->select([
+                    'id',
+                    'flujo_ejecucion_id',
+                    'etapa_id',
+                    'node_id',
+                    'fecha_programada',
+                    'fecha_ejecucion',
+                    'estado',
+                    'ejecutado',
+                    'message_id',
+                    'error_mensaje',
+                    'created_at',
+                    'updated_at',
+                ])->orderBy('fecha_programada', 'asc');
             }])
             ->first();
 
