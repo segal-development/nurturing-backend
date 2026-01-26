@@ -247,50 +247,154 @@ class FlujoController extends Controller
 
     /**
      * Add prospectos to flujo based on criteria.
+     * 
+     * Supports multiple modes:
+     * 1. By prospecto_ids: Specific list of prospect IDs
+     * 2. By origen + tipo_prospecto_id: All prospects matching criteria
+     * 3. By select_all_from_origin: All prospects from a given origin
+     * 
+     * For large volumes (>100), uses async processing via Job.
      */
     public function agregarProspectos(Request $request, Flujo $flujo): JsonResponse
     {
         $request->validate([
-            'importacion_id' => 'nullable|exists:importaciones,id',
             'prospecto_ids' => 'nullable|array',
-            'prospecto_ids.*' => 'exists:prospectos,id',
+            'prospecto_ids.*' => 'integer',
+            'origen' => 'nullable|string',
+            'tipo_prospecto_id' => 'nullable|integer|exists:tipo_prospecto,id',
+            'select_all_from_origin' => 'nullable|boolean',
+            'canal_asignado' => 'nullable|in:email,sms',
         ]);
 
         try {
-            DB::beginTransaction();
+            $canalAsignado = $request->input('canal_asignado', 'email');
+            $selectAllFromOrigin = $request->boolean('select_all_from_origin', false);
+            $origen = $request->input('origen', $flujo->origen);
+            $tipoProspectoId = $request->input('tipo_prospecto_id', $flujo->tipo_prospecto_id);
 
-            $prospectosQuery = Prospecto::query()
-                ->where('tipo_prospecto_id', $flujo->tipo_prospecto_id)
-                ->whereHas('importacion', function ($query) use ($flujo) {
-                    $query->where('origen', $flujo->origen);
-                });
+            // CASE 1: Select all from origin (async processing for large volumes)
+            if ($selectAllFromOrigin && $origen) {
+                // Update flujo with origen if not set
+                if (!$flujo->origen && $origen) {
+                    $flujo->update(['origen' => $origen]);
+                }
+                if (!$flujo->tipo_prospecto_id && $tipoProspectoId) {
+                    $flujo->update(['tipo_prospecto_id' => $tipoProspectoId]);
+                }
 
-            // Si se especifica una importación, filtrar por ella
-            if ($request->filled('importacion_id')) {
-                $prospectosQuery->where('importacion_id', $request->input('importacion_id'));
+                // Count prospects matching criteria
+                $query = Prospecto::query()
+                    ->whereHas('importacion', fn($q) => $q->where('origen', $origen));
+                
+                if ($tipoProspectoId) {
+                    // Check if it's the "Todos" type
+                    $tipoProspecto = TipoProspecto::find($tipoProspectoId);
+                    if ($tipoProspecto && !$tipoProspecto->esTipoTodos()) {
+                        $query->where('tipo_prospecto_id', $tipoProspectoId);
+                    }
+                }
+
+                $totalEstimado = $query->count();
+
+                if ($totalEstimado === 0) {
+                    return response()->json([
+                        'mensaje' => 'No se encontraron prospectos con los criterios especificados',
+                        'resumen' => ['total_encontrados' => 0, 'agregados' => 0],
+                    ]);
+                }
+
+                // Use async processing for large volumes
+                if ($totalEstimado > 100) {
+                    $criterios = new \App\DTOs\CriteriosSeleccionProspectos(
+                        origen: $origen,
+                        tipoProspectoId: $tipoProspectoId,
+                        selectAllFromOrigin: true,
+                        prospectoIds: []
+                    );
+
+                    \App\Jobs\AsignarProspectosAFlujoJob::dispatch($flujo, $criterios, $canalAsignado);
+                    $flujo->update(['estado_procesamiento' => 'procesando']);
+
+                    return response()->json([
+                        'mensaje' => 'Procesamiento de prospectos iniciado en segundo plano',
+                        'resumen' => [
+                            'total_estimado' => $totalEstimado,
+                            'procesamiento_async' => true,
+                        ],
+                    ]);
+                }
+
+                // Sync processing for small volumes
+                $prospectoIds = $query->pluck('id')->toArray();
+                return $this->agregarProspectosPorIds($flujo, $prospectoIds, $canalAsignado);
             }
 
-            // Si se especifican IDs específicos, usarlos
+            // CASE 2: Specific prospect IDs provided
             if ($request->filled('prospecto_ids')) {
-                $prospectosQuery->whereIn('id', $request->input('prospecto_ids'));
+                $prospectoIds = $request->input('prospecto_ids');
+                
+                // Update flujo origen/tipo if needed
+                if (!$flujo->origen && $origen) {
+                    $flujo->update(['origen' => $origen]);
+                }
+                if (!$flujo->tipo_prospecto_id && $tipoProspectoId) {
+                    $flujo->update(['tipo_prospecto_id' => $tipoProspectoId]);
+                }
+
+                // Async for large volumes
+                if (count($prospectoIds) > 100) {
+                    $criterios = \App\DTOs\CriteriosSeleccionProspectos::fromProspectoIds($prospectoIds);
+                    \App\Jobs\AsignarProspectosAFlujoJob::dispatch($flujo, $criterios, $canalAsignado);
+                    $flujo->update(['estado_procesamiento' => 'procesando']);
+
+                    return response()->json([
+                        'mensaje' => 'Procesamiento de prospectos iniciado en segundo plano',
+                        'resumen' => [
+                            'total_estimado' => count($prospectoIds),
+                            'procesamiento_async' => true,
+                        ],
+                    ]);
+                }
+
+                return $this->agregarProspectosPorIds($flujo, $prospectoIds, $canalAsignado);
             }
 
-            $prospectos = $prospectosQuery->get();
+            return response()->json([
+                'mensaje' => 'Debe especificar prospecto_ids o usar select_all_from_origin',
+                'error' => 'validation_error',
+            ], 422);
 
+        } catch (\Exception $e) {
+            return response()->json([
+                'mensaje' => 'Error al agregar prospectos al flujo',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Helper: Add prospects by IDs synchronously
+     */
+    private function agregarProspectosPorIds(Flujo $flujo, array $prospectoIds, string $canalAsignado): JsonResponse
+    {
+        DB::beginTransaction();
+        try {
             $agregados = 0;
             $yaExistentes = 0;
 
-            foreach ($prospectos as $prospecto) {
+            foreach ($prospectoIds as $prospectoId) {
                 $existe = ProspectoEnFlujo::where('flujo_id', $flujo->id)
-                    ->where('prospecto_id', $prospecto->id)
+                    ->where('prospecto_id', $prospectoId)
                     ->exists();
 
-                if (! $existe) {
+                if (!$existe) {
                     ProspectoEnFlujo::create([
                         'flujo_id' => $flujo->id,
-                        'prospecto_id' => $prospecto->id,
+                        'prospecto_id' => $prospectoId,
+                        'canal_asignado' => $canalAsignado,
                         'estado' => 'pendiente',
                         'etapa_actual_id' => null,
+                        'fecha_inicio' => now(),
                     ]);
                     $agregados++;
                 } else {
@@ -298,23 +402,20 @@ class FlujoController extends Controller
                 }
             }
 
+            $flujo->update(['estado_procesamiento' => 'completado']);
             DB::commit();
 
             return response()->json([
                 'mensaje' => 'Prospectos agregados al flujo exitosamente',
                 'resumen' => [
-                    'total_encontrados' => $prospectos->count(),
+                    'total_encontrados' => count($prospectoIds),
                     'agregados' => $agregados,
                     'ya_existentes' => $yaExistentes,
                 ],
             ]);
         } catch (\Exception $e) {
             DB::rollBack();
-
-            return response()->json([
-                'mensaje' => 'Error al agregar prospectos al flujo',
-                'error' => $e->getMessage(),
-            ], 500);
+            throw $e;
         }
     }
 
