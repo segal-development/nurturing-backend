@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Configuracion;
 use App\Models\Envio;
 use App\Models\Flujo;
 use App\Models\FlujoEjecucion;
@@ -187,8 +188,8 @@ class DashboardController extends Controller
             $desuscritos = (int) ($stats->desuscritos ?? 0);
             $validos = $conEmail - $invalidos;
 
-            // Costo por email hardcodeado (después se puede mover a config/env)
-            $costoEmail = (float) config('nurturing.email_costo', 0.01);
+            // Costo por email desde tabla configuracion
+            $costoEmail = (float) (Configuracion::get()->email_costo ?? 1.00);
             $ahorroEstimado = round($invalidos * $costoEmail, 2);
 
             return [
