@@ -55,6 +55,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/prospectos/conteo-por-tipo', [ProspectoController::class, 'conteoPorTipo']);
     Route::get('/prospectos/estadisticas', [ProspectoController::class, 'estadisticas']);
     Route::get('/prospectos/opciones-filtrado', [ProspectoController::class, 'opcionesFiltrado']);
+    
+    // Rutas de Calidad de Emails
+    Route::get('/prospectos/calidad-emails', [ProspectoController::class, 'calidadEmails']);
+    Route::get('/prospectos/emails-invalidos', [ProspectoController::class, 'emailsInvalidos']);
+    Route::post('/prospectos/{prospecto}/rehabilitar-email', [ProspectoController::class, 'rehabilitarEmail']);
+    
     Route::apiResource('prospectos', ProspectoController::class);
 
     // Rutas de Tipos de Prospecto (categorías por monto)

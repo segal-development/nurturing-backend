@@ -6,11 +6,15 @@ use App\Http\Requests\StoreProspectoRequest;
 use App\Http\Requests\UpdateProspectoRequest;
 use App\Http\Resources\ProspectoResource;
 use App\Models\Prospecto;
+use App\Services\EmailValidationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class ProspectoController extends Controller
 {
+    public function __construct(
+        private EmailValidationService $emailValidationService
+    ) {}
     /**
      * Get count of prospectos matching filters (without loading data).
      */
@@ -486,6 +490,126 @@ class ProspectoController extends Controller
                 'origenes' => $origenes,
                 'estados' => $estados,
                 'tipos_prospecto' => $tiposProspecto,
+            ],
+        ]);
+    }
+
+    // =========================================================================
+    // CALIDAD DE EMAILS - Endpoints de reporte
+    // =========================================================================
+
+    /**
+     * Get email quality statistics by origin (importation source).
+     * 
+     * Returns breakdown of valid/invalid/unsubscribed emails per origin,
+     * plus most common invalidity reasons.
+     */
+    public function calidadEmails(): JsonResponse
+    {
+        $estadisticas = $this->emailValidationService->obtenerEstadisticasCalidad();
+        $motivosComunes = $this->emailValidationService->obtenerMotivosComunes(10);
+
+        // Calcular totales globales
+        $totales = [
+            'total_prospectos' => 0,
+            'con_email' => 0,
+            'emails_validos' => 0,
+            'emails_invalidos' => 0,
+            'desuscritos' => 0,
+        ];
+
+        foreach ($estadisticas as $row) {
+            $totales['total_prospectos'] += $row['total_prospectos'];
+            $totales['con_email'] += $row['con_email'];
+            $totales['emails_validos'] += $row['emails_validos'];
+            $totales['emails_invalidos'] += $row['emails_invalidos'];
+            $totales['desuscritos'] += $row['desuscritos'];
+        }
+
+        $totales['tasa_validez_global'] = $totales['con_email'] > 0
+            ? round(($totales['emails_validos'] / $totales['con_email']) * 100, 2)
+            : 0;
+
+        // Calcular ahorro potencial (emails que no se enviarán)
+        $precioEmail = \App\Models\Configuracion::get()?->email_costo ?? 0.01;
+        $totales['ahorro_por_invalidos'] = round($totales['emails_invalidos'] * $precioEmail, 2);
+
+        return response()->json([
+            'data' => [
+                'totales' => $totales,
+                'por_origen' => $estadisticas,
+                'motivos_comunes' => $motivosComunes,
+                'precio_email_usado' => $precioEmail,
+            ],
+        ]);
+    }
+
+    /**
+     * Get prospectos with invalid emails (paginated).
+     * Useful for reviewing and potentially correcting emails.
+     */
+    public function emailsInvalidos(Request $request): JsonResponse
+    {
+        $query = Prospecto::query()
+            ->with(['tipoProspecto', 'importacion'])
+            ->where('email_invalido', true)
+            ->orderBy('email_invalido_at', 'desc');
+
+        // Filtrar por origen
+        if ($request->filled('origen')) {
+            $query->whereHas('importacion', function ($q) use ($request) {
+                $q->where('origen', $request->input('origen'));
+            });
+        }
+
+        // Filtrar por motivo
+        if ($request->filled('motivo')) {
+            $query->where('email_invalido_motivo', 'like', '%' . $request->input('motivo') . '%');
+        }
+
+        $perPage = $request->input('per_page', 50);
+        $prospectos = $query->paginate($perPage);
+
+        return response()->json([
+            'data' => $prospectos->map(function ($p) {
+                return [
+                    'id' => $p->id,
+                    'nombre' => $p->nombre,
+                    'email' => $p->email,
+                    'email_invalido_motivo' => $p->email_invalido_motivo,
+                    'email_invalido_at' => $p->email_invalido_at?->toISOString(),
+                    'origen' => $p->importacion?->origen,
+                    'tipo_prospecto' => $p->tipoProspecto?->nombre,
+                ];
+            }),
+            'meta' => [
+                'current_page' => $prospectos->currentPage(),
+                'total' => $prospectos->total(),
+                'per_page' => $prospectos->perPage(),
+                'last_page' => $prospectos->lastPage(),
+            ],
+        ]);
+    }
+
+    /**
+     * Rehabilitate a prospect's email (mark as valid again).
+     * Useful when the email has been corrected.
+     */
+    public function rehabilitarEmail(Prospecto $prospecto): JsonResponse
+    {
+        if (!$prospecto->email_invalido) {
+            return response()->json([
+                'mensaje' => 'El email de este prospecto no está marcado como inválido',
+            ], 422);
+        }
+
+        $prospecto->rehabilitarEmail();
+
+        return response()->json([
+            'mensaje' => 'Email rehabilitado exitosamente',
+            'data' => [
+                'prospecto_id' => $prospecto->id,
+                'email' => $prospecto->email,
             ],
         ]);
     }

@@ -7,12 +7,14 @@ use App\Models\Prospecto;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use App\Services\DesuscripcionService;
+use App\Services\EmailValidationService;
 
 class EnvioService
 {
     public function __construct(
         private AthenaCampaignService $athenaService,
-        private DesuscripcionService $desuscripcionService
+        private DesuscripcionService $desuscripcionService,
+        private EmailValidationService $emailValidationService
     ) {}
 
     /**
@@ -252,6 +254,50 @@ class EnvioService
             ];
         }
 
+        // =====================================================================
+        // VALIDACIÓN DE EMAIL - Detectar emails inválidos ANTES de enviar
+        // =====================================================================
+        
+        // Si ya está marcado como inválido, no intentar enviar
+        if ($prospecto->isEmailInvalido()) {
+            Log::debug('EnvioService: Email ya marcado como inválido, omitiendo', [
+                'prospecto_id' => $prospecto->id,
+                'email' => $prospecto->email,
+                'motivo' => $prospecto->email_invalido_motivo,
+            ]);
+            return [
+                'success' => false,
+                'envio_id' => null,
+                'error' => 'Email marcado como inválido: ' . $prospecto->email_invalido_motivo,
+                'email_invalido' => true,
+            ];
+        }
+
+        // Validar formato y dominio del email ANTES de intentar enviar
+        $validacion = $this->emailValidationService->validar($prospecto->email);
+        if (!$validacion['valid']) {
+            $prospecto->marcarEmailInvalido($validacion['motivo']);
+            
+            Log::info('EnvioService: Email detectado como inválido en pre-validación', [
+                'prospecto_id' => $prospecto->id,
+                'email' => $prospecto->email,
+                'motivo' => $validacion['motivo'],
+                'sugerencia' => $validacion['sugerencia'],
+            ]);
+            
+            return [
+                'success' => false,
+                'envio_id' => null,
+                'error' => 'Email inválido: ' . $validacion['motivo'],
+                'email_invalido' => true,
+                'sugerencia' => $validacion['sugerencia'],
+            ];
+        }
+
+        // =====================================================================
+        // VALIDACIONES EXISTENTES
+        // =====================================================================
+
         // Verificar si ya existe un envío para este prospecto en esta etapa (evitar duplicados)
         if ($etapaEjecucionId) {
             $envioExistente = Envio::where('prospecto_id', $prospecto->id)
@@ -287,6 +333,10 @@ class EnvioService
                 'error' => 'Prospecto desuscrito de comunicaciones por email',
             ];
         }
+
+        // =====================================================================
+        // ENVÍO DEL EMAIL
+        // =====================================================================
 
         $envio = null;
 
@@ -336,15 +386,22 @@ class EnvioService
                 $envio->marcarComoFallido($e->getMessage());
             }
 
+            // =====================================================================
+            // DETECCIÓN DE EMAILS INVÁLIDOS POR ERROR DE ENVÍO
+            // =====================================================================
+            $emailMarcado = $this->emailValidationService->procesarErrorEnvio($prospecto, $e->getMessage());
+
             Log::error('EnvioService: Error al enviar email', [
                 'email' => $prospecto->email ?? 'unknown',
                 'error' => $e->getMessage(),
+                'email_marcado_invalido' => $emailMarcado,
             ]);
 
             return [
                 'success' => false,
                 'envio_id' => $envio?->id,
                 'error' => $e->getMessage(),
+                'email_invalido' => $emailMarcado,
             ];
         }
     }

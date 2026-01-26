@@ -16,6 +16,9 @@ class Prospecto extends Model
         'nombre',
         'rut',
         'email',
+        'email_invalido',
+        'email_invalido_motivo',
+        'email_invalido_at',
         'telefono',
         'url_informe',
         'tipo_prospecto_id',
@@ -36,6 +39,8 @@ class Prospecto extends Model
             'metadata' => 'array',
             'preferencias_comunicacion' => 'array',
             'fecha_desuscripcion' => 'datetime',
+            'email_invalido' => 'boolean',
+            'email_invalido_at' => 'datetime',
         ];
     }
 
@@ -175,6 +180,89 @@ class Prospecto extends Model
                 $q->whereNull('preferencias_comunicacion')
                   ->orWhereRaw("(preferencias_comunicacion->>'sms')::boolean = true");
             });
+    }
+
+    // =========================================================================
+    // EMAIL INVÁLIDO - Scopes y Métodos
+    // =========================================================================
+
+    /**
+     * Scope para prospectos con email válido (no marcado como inválido).
+     */
+    public function scopeConEmailValido($query)
+    {
+        return $query->where(function ($q) {
+            $q->where('email_invalido', false)
+              ->orWhereNull('email_invalido');
+        });
+    }
+
+    /**
+     * Scope para prospectos con email inválido.
+     */
+    public function scopeConEmailInvalido($query)
+    {
+        return $query->where('email_invalido', true);
+    }
+
+    /**
+     * Scope para prospectos que pueden recibir emails (no desuscritos Y email válido).
+     * Este es el scope a usar para envíos masivos.
+     */
+    public function scopeAptoParaEnvioEmail($query)
+    {
+        return $query->where('estado', '!=', 'desuscrito')
+            ->where(function ($q) {
+                $q->where('email_invalido', false)
+                  ->orWhereNull('email_invalido');
+            })
+            ->whereNotNull('email')
+            ->where('email', '!=', '');
+    }
+
+    /**
+     * Verifica si el prospecto tiene un email válido para envíos.
+     */
+    public function tieneEmailValido(): bool
+    {
+        return !empty($this->email) 
+            && !$this->email_invalido 
+            && $this->estado !== 'desuscrito';
+    }
+
+    /**
+     * Marca el email como inválido con un motivo.
+     * 
+     * @param string $motivo Razón por la que el email es inválido
+     */
+    public function marcarEmailInvalido(string $motivo): void
+    {
+        $this->update([
+            'email_invalido' => true,
+            'email_invalido_motivo' => $motivo,
+            'email_invalido_at' => now(),
+        ]);
+    }
+
+    /**
+     * Rehabilita un email previamente marcado como inválido.
+     * Útil si el usuario corrige su email.
+     */
+    public function rehabilitarEmail(): void
+    {
+        $this->update([
+            'email_invalido' => false,
+            'email_invalido_motivo' => null,
+            'email_invalido_at' => null,
+        ]);
+    }
+
+    /**
+     * Verifica si el email fue marcado como inválido.
+     */
+    public function isEmailInvalido(): bool
+    {
+        return (bool) $this->email_invalido;
     }
 
     public function getOrigenAttribute(): ?string
