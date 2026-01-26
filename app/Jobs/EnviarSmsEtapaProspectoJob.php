@@ -9,6 +9,7 @@ use Illuminate\Bus\Batchable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -85,21 +86,38 @@ class EnviarSmsEtapaProspectoJob implements ShouldQueue, ShouldBeUnique
             return;
         }
 
-        $prospectoEnFlujo = $this->loadProspectoEnFlujo();
+        // Distributed lock to prevent duplicate processing across workers
+        $lockKey = "processing:sms:{$this->prospectoEnFlujoId}:{$this->etapaEjecucionId}";
+        $lock = Cache::lock($lockKey, 120); // 2 minutes max
 
-        if (! $prospectoEnFlujo) {
+        if (! $lock->get()) {
+            // Another worker is already processing this, skip silently
+            Log::debug('EnviarSmsEtapaProspectoJob: Lock already held, skipping', [
+                'prospecto_en_flujo_id' => $this->prospectoEnFlujoId,
+                'etapa_ejecucion_id' => $this->etapaEjecucionId,
+            ]);
             return;
         }
 
-        $result = $envioService->enviarSmsAProspecto(
-            prospectoEnFlujo: $prospectoEnFlujo,
-            contenido: $this->contenido,
-            flujoId: $this->flujoId,
-            etapaEjecucionId: $this->etapaEjecucionId
-        );
+        try {
+            $prospectoEnFlujo = $this->loadProspectoEnFlujo();
 
-        if (! $result['success']) {
-            throw new \Exception($result['error'] ?? 'Error desconocido al enviar SMS');
+            if (! $prospectoEnFlujo) {
+                return;
+            }
+
+            $result = $envioService->enviarSmsAProspecto(
+                prospectoEnFlujo: $prospectoEnFlujo,
+                contenido: $this->contenido,
+                flujoId: $this->flujoId,
+                etapaEjecucionId: $this->etapaEjecucionId
+            );
+
+            if (! $result['success']) {
+                throw new \Exception($result['error'] ?? 'Error desconocido al enviar SMS');
+            }
+        } finally {
+            $lock->release();
         }
     }
 
