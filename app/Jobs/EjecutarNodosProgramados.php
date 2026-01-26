@@ -189,8 +189,20 @@ class EjecutarNodosProgramados implements ShouldQueue
                 'ejecutado' => $etapaExistente->ejecutado,
             ]);
             
-            // Buscar el siguiente nodo para actualizar la ejecución
-            $this->programarSiguienteNodo($ejecucion, $stage['id'], $branches);
+            // ✅ FIX: Si la etapa está en 'executing', NO avanzar al siguiente nodo todavía
+            // Esperar a que termine (el cron de recuperación lo manejará)
+            if ($etapaExistente->estado === 'executing') {
+                Log::info('EjecutarNodosProgramados: Etapa en executing, esperando que termine', [
+                    'ejecucion_id' => $ejecucion->id,
+                    'nodo_id' => $nodoId,
+                ]);
+                return;
+            }
+            
+            // Solo avanzar si la etapa está 'completed'
+            if ($etapaExistente->estado === 'completed') {
+                $this->programarSiguienteNodo($ejecucion, $stage['id'], $branches);
+            }
             return;
         }
 
