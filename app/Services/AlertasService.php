@@ -136,20 +136,19 @@ class AlertasService
 
     /**
      * Alerta cuando el circuit breaker se abre
+     * 
+     * DISABLED: Con 20+ workers y alto volumen, el circuit breaker se abre/cierra
+     * frecuentemente de forma normal. Solo se loguea, no se envía alerta.
      */
     public function alertaCircuitBreakerAbierto(string $canal, int $fallos): void
     {
-        $this->alertaCritica(
-            "🚨 Circuit Breaker ABIERTO - {$canal}",
-            "El sistema de envíos por {$canal} ha sido pausado automáticamente después de {$fallos} fallos consecutivos. " .
-            "Se reintentará automáticamente en " . config('envios.circuit_breaker.recovery_time') . " segundos.",
-            [
-                'canal' => $canal,
-                'fallos' => $fallos,
-                'recovery_time' => config('envios.circuit_breaker.recovery_time'),
-                'timestamp' => now()->toIso8601String(),
-            ]
-        );
+        // Solo loguear, no enviar alerta por email/SMS
+        Log::warning("[CircuitBreaker] Circuit breaker abierto para {$canal}", [
+            'canal' => $canal,
+            'fallos' => $fallos,
+            'recovery_time' => config('envios.circuit_breaker.recovery_time'),
+            'timestamp' => now()->toIso8601String(),
+        ]);
     }
 
     /**
