@@ -10,6 +10,7 @@ use App\Models\OfertaInfocom;
 use App\Models\Prospecto;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
 class DashboardController extends Controller
@@ -30,6 +31,9 @@ class DashboardController extends Controller
             // Gráficos
             'prospectos_por_flujo' => $this->getProspectosPorFlujo(),
             'envios_por_dia' => $this->getEnviosPorDia(),
+
+            // Calidad de lista (cacheado 5 min)
+            'calidad_emails' => $this->getCalidadEmails(),
         ];
 
         return response()->json($stats);
@@ -159,5 +163,45 @@ class DashboardController extends Controller
         }
 
         return $resultado;
+    }
+
+    /**
+     * Calidad de emails (válidos, inválidos, desuscritos)
+     * Cacheado por 5 minutos para optimizar performance
+     */
+    private function getCalidadEmails(): array
+    {
+        return Cache::remember('dashboard:calidad_emails', 300, function () {
+            $stats = DB::table('prospectos')
+                ->selectRaw("
+                    COUNT(*) as total,
+                    SUM(CASE WHEN email IS NOT NULL AND email != '' THEN 1 ELSE 0 END) as con_email,
+                    SUM(CASE WHEN email_invalido = true THEN 1 ELSE 0 END) as invalidos,
+                    SUM(CASE WHEN estado = 'desuscrito' THEN 1 ELSE 0 END) as desuscritos
+                ")
+                ->first();
+
+            $total = (int) ($stats->total ?? 0);
+            $conEmail = (int) ($stats->con_email ?? 0);
+            $invalidos = (int) ($stats->invalidos ?? 0);
+            $desuscritos = (int) ($stats->desuscritos ?? 0);
+            $validos = $conEmail - $invalidos;
+
+            // Costo por email desde configuración (fallback a $0.01)
+            $costoEmail = (float) (DB::table('configuraciones')->value('email_costo') ?? 0.01);
+            $ahorroEstimado = round($invalidos * $costoEmail, 2);
+
+            return [
+                'total_prospectos' => $total,
+                'con_email' => $conEmail,
+                'sin_email' => $total - $conEmail,
+                'emails_validos' => $validos,
+                'emails_invalidos' => $invalidos,
+                'desuscritos' => $desuscritos,
+                'tasa_validez' => $conEmail > 0 ? round(($validos / $conEmail) * 100, 1) : 0,
+                'ahorro_estimado' => $ahorroEstimado,
+                'costo_email' => $costoEmail,
+            ];
+        });
     }
 }
