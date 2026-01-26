@@ -531,7 +531,7 @@ class ProspectoController extends Controller
             : 0;
 
         // Calcular ahorro potencial (emails que no se enviarán)
-        $precioEmail = \App\Models\Configuracion::get()?->email_costo ?? 0.01;
+        $precioEmail = (float) config('nurturing.email_costo', 0.01);
         $totales['ahorro_por_invalidos'] = round($totales['emails_invalidos'] * $precioEmail, 2);
 
         return response()->json([

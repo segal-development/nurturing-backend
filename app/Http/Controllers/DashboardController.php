@@ -187,8 +187,8 @@ class DashboardController extends Controller
             $desuscritos = (int) ($stats->desuscritos ?? 0);
             $validos = $conEmail - $invalidos;
 
-            // Costo por email desde configuración (fallback a $0.01)
-            $costoEmail = (float) (DB::table('configuraciones')->value('email_costo') ?? 0.01);
+            // Costo por email hardcodeado (después se puede mover a config/env)
+            $costoEmail = (float) config('nurturing.email_costo', 0.01);
             $ahorroEstimado = round($invalidos * $costoEmail, 2);
 
             return [
