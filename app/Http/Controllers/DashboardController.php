@@ -103,8 +103,9 @@ class DashboardController extends Controller
             return 0.0;
         }
 
+        // Incluir 'abierto' y 'clickeado' como exitosos (son estados posteriores a 'enviado')
         $exitosos = Envio::where('fecha_enviado', '>=', $fechaInicio)
-            ->whereIn('estado', ['enviado', 'entregado', 'exitoso'])
+            ->whereIn('estado', ['enviado', 'entregado', 'exitoso', 'abierto', 'clickeado'])
             ->count();
 
         return round(($exitosos / $total) * 100, 1);

@@ -44,10 +44,11 @@ class SincronizarDesuscripcionesAthenaJob implements ShouldQueue
         $errores = 0;
 
         // Obtener envíos recientes que tengan message_id de Athena
+        // Incluir 'abierto' y 'clickeado' (son estados posteriores a 'enviado')
         $envios = Envio::where('created_at', '>=', $desde)
             ->where('canal', 'email')
             ->whereNotNull('athena_message_id')
-            ->whereIn('estado', ['enviado', 'entregado'])
+            ->whereIn('estado', ['enviado', 'entregado', 'abierto', 'clickeado'])
             ->select('id', 'athena_message_id', 'prospecto_id', 'flujo_id')
             ->cursor();
 

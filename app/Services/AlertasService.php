@@ -297,8 +297,9 @@ class AlertasService
         $ayer = now()->subDay();
 
         $totalEnvios = Envio::whereDate('created_at', $ayer->toDateString())->count();
+        // Incluir 'abierto' y 'clickeado' como exitosos (son estados posteriores a 'enviado')
         $exitosos = Envio::whereDate('created_at', $ayer->toDateString())
-            ->whereIn('estado', ['enviado', 'entregado'])
+            ->whereIn('estado', ['enviado', 'entregado', 'abierto', 'clickeado'])
             ->count();
         $fallidos = Envio::whereDate('created_at', $ayer->toDateString())
             ->where('estado', 'fallido')

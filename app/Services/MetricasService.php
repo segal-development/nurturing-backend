@@ -60,8 +60,9 @@ class MetricasService
         $desde = now()->subDays($dias);
 
         $totalEnvios = Envio::where('created_at', '>=', $desde)->count();
+        // Incluir 'abierto' y 'clickeado' como exitosos (son estados posteriores a 'enviado')
         $enviosExitosos = Envio::where('created_at', '>=', $desde)
-            ->whereIn('estado', ['enviado', 'entregado'])
+            ->whereIn('estado', ['enviado', 'entregado', 'abierto', 'clickeado'])
             ->count();
 
         $totalAperturas = EmailApertura::where('created_at', '>=', $desde)->count();
@@ -283,10 +284,11 @@ class MetricasService
             ->toArray();
 
         // Por día y estado
+        // Incluir 'abierto' y 'clickeado' como exitosos (son estados posteriores a 'enviado')
         $porDia = DB::table('envios')
             ->select(
                 DB::raw('DATE(created_at) as fecha'),
-                DB::raw("COUNT(CASE WHEN estado IN ('enviado', 'entregado') THEN 1 END) as exitosos"),
+                DB::raw("COUNT(CASE WHEN estado IN ('enviado', 'entregado', 'abierto', 'clickeado') THEN 1 END) as exitosos"),
                 DB::raw("COUNT(CASE WHEN estado = 'fallido' THEN 1 END) as fallidos"),
                 DB::raw("COUNT(CASE WHEN estado = 'pendiente' THEN 1 END) as pendientes")
             )
@@ -311,13 +313,14 @@ class MetricasService
         }
 
         // Por flujo
+        // Incluir 'abierto' y 'clickeado' como exitosos (son estados posteriores a 'enviado')
         $porFlujo = DB::table('envios as e')
             ->join('flujos as f', 'f.id', '=', 'e.flujo_id')
             ->select(
                 'f.id as flujo_id',
                 'f.nombre as flujo_nombre',
                 DB::raw('COUNT(*) as total'),
-                DB::raw("COUNT(CASE WHEN e.estado IN ('enviado', 'entregado') THEN 1 END) as exitosos"),
+                DB::raw("COUNT(CASE WHEN e.estado IN ('enviado', 'entregado', 'abierto', 'clickeado') THEN 1 END) as exitosos"),
                 DB::raw("COUNT(CASE WHEN e.estado = 'fallido' THEN 1 END) as fallidos")
             )
             ->where('e.created_at', '>=', $desde)
