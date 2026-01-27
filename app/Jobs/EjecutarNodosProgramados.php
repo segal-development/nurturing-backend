@@ -52,7 +52,11 @@ class EjecutarNodosProgramados implements ShouldQueue
     {
         Log::info('EjecutarNodosProgramados: Iniciando verificación de nodos programados');
 
-        // Obtener ejecuciones con nodos programados listos para ejecutar
+        // ✅ PASO 1: Verificar etapas en 'executing' que pueden haber terminado
+        // Esto es CRÍTICO para volúmenes grandes que no tienen callback
+        $this->verificarEtapasEjecutando();
+
+        // PASO 2: Obtener ejecuciones con nodos programados listos para ejecutar
         $ejecuciones = FlujoEjecucion::conNodosProgramados()->get();
 
         if ($ejecuciones->isEmpty()) {
@@ -83,6 +87,51 @@ class EjecutarNodosProgramados implements ShouldQueue
         }
 
         Log::info('EjecutarNodosProgramados: Verificación completada');
+    }
+
+    /**
+     * Verifica etapas en 'executing' que pueden haber terminado de procesar.
+     * 
+     * CRÍTICO para volúmenes grandes (large_volume_chunked) que no tienen
+     * callback global - el cron debe detectar cuando terminaron.
+     */
+    private function verificarEtapasEjecutando(): void
+    {
+        $ejecucionesConEtapasEjecutando = FlujoEjecucion::conEtapasEjecutando()->get();
+
+        if ($ejecucionesConEtapasEjecutando->isEmpty()) {
+            return;
+        }
+
+        Log::info('EjecutarNodosProgramados: Verificando etapas en executing', [
+            'cantidad' => $ejecucionesConEtapasEjecutando->count(),
+        ]);
+
+        foreach ($ejecucionesConEtapasEjecutando as $ejecucion) {
+            $etapasEjecutando = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
+                ->where('estado', 'executing')
+                ->get();
+
+            foreach ($etapasEjecutando as $etapa) {
+                $this->verificarSiEtapaTermino($etapa, $ejecucion);
+            }
+        }
+    }
+
+    /**
+     * Verifica si una etapa en 'executing' ya terminó de procesar todos sus envíos.
+     */
+    private function verificarSiEtapaTermino(FlujoEjecucionEtapa $etapa, FlujoEjecucion $ejecucion): void
+    {
+        $batchInfo = $etapa->response_athenacampaign ?? [];
+        $esVolumenGrande = isset($batchInfo['modo']) && $batchInfo['modo'] === 'large_volume_chunked';
+
+        if ($esVolumenGrande) {
+            $this->verificarYCompletarEtapaVolumenGrande($etapa, $ejecucion, $batchInfo);
+        } else {
+            // Para volúmenes normales, verificar por envíos
+            $this->verificarYCompletarEtapaPorEnvios($etapa, $ejecucion);
+        }
     }
 
     /**

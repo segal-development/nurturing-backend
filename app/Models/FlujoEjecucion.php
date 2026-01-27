@@ -121,4 +121,16 @@ class FlujoEjecucion extends Model
             ->whereNotNull('fecha_proximo_nodo')
             ->where('fecha_proximo_nodo', '<=', now());
     }
+
+    /**
+     * Ejecuciones que tienen etapas en 'executing' (posiblemente terminadas).
+     * Usado para detectar etapas de volumen grande que terminaron de procesar.
+     */
+    public function scopeConEtapasEjecutando($query)
+    {
+        return $query->where('estado', 'in_progress')
+            ->whereHas('etapas', function ($q) {
+                $q->where('estado', 'executing');
+            });
+    }
 }
