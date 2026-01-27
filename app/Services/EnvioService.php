@@ -596,6 +596,9 @@ class EnvioService
 
         try {
             $contenidoPersonalizado = $this->personalizarContenido($contenido, $prospecto);
+            
+            // Truncar SMS si excede 160 caracteres (después de personalización)
+            $contenidoPersonalizado = $this->truncarSmsSimesNecesario($contenidoPersonalizado, $prospecto->id);
 
             $envio = Envio::create([
                 'prospecto_id' => $prospecto->id,
@@ -658,11 +661,27 @@ class EnvioService
      */
     private function personalizarContenido(string $contenido, Prospecto $prospecto): string
     {
+        // Formatear monto de deuda con separador de miles
+        $montoFormateado = $prospecto->monto_deuda 
+            ? '$' . number_format($prospecto->monto_deuda, 0, ',', '.')
+            : '';
+
         $variables = [
-            '{{nombre}}' => $prospecto->nombre,
-            '{{email}}' => $prospecto->email,
-            '{{telefono}}' => $prospecto->telefono,
-            // Agregar más variables según necesidad
+            '{{nombre}}' => $prospecto->nombre ?? '',
+            '{{email}}' => $prospecto->email ?? '',
+            '{{telefono}}' => $prospecto->telefono ?? '',
+            '{{monto_deuda}}' => $montoFormateado,
+            '{{monto}}' => $montoFormateado, // Alias
+            '{{rut}}' => $prospecto->rut ?? '',
+            '{{url_informe}}' => $prospecto->url_informe ?? '',
+            // Variables con formato alternativo (sin llaves dobles)
+            '{nombre}' => $prospecto->nombre ?? '',
+            '{email}' => $prospecto->email ?? '',
+            '{telefono}' => $prospecto->telefono ?? '',
+            '{monto_deuda}' => $montoFormateado,
+            '{monto}' => $montoFormateado,
+            '{rut}' => $prospecto->rut ?? '',
+            '{url_informe}' => $prospecto->url_informe ?? '',
         ];
 
         return str_replace(
@@ -670,5 +689,33 @@ class EnvioService
             array_values($variables),
             $contenido
         );
+    }
+
+    /**
+     * Trunca un SMS a 160 caracteres si es necesario.
+     * Los SMS estándar tienen límite de 160 caracteres GSM-7.
+     * 
+     * @param string $contenido Contenido del SMS
+     * @param int $prospectoId ID del prospecto (para logging)
+     * @return string Contenido truncado si excede 160 caracteres
+     */
+    private function truncarSmsSimesNecesario(string $contenido, int $prospectoId): string
+    {
+        $maxLength = 160;
+        $length = mb_strlen($contenido);
+
+        if ($length <= $maxLength) {
+            return $contenido;
+        }
+
+        Log::warning('EnvioService: SMS truncado por exceder 160 caracteres', [
+            'prospecto_id' => $prospectoId,
+            'longitud_original' => $length,
+            'longitud_truncada' => $maxLength - 3, // -3 por "..."
+            'contenido_original' => mb_substr($contenido, 0, 50) . '...',
+        ]);
+
+        // Truncar y agregar "..." al final
+        return mb_substr($contenido, 0, $maxLength - 3) . '...';
     }
 }

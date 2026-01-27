@@ -65,6 +65,10 @@ class Plantilla extends Model
 
     /**
      * Validar longitud de SMS (considerando caracteres especiales)
+     * 
+     * IMPORTANTE: Esta validación usa la plantilla sin personalizar.
+     * Las variables como {{nombre}} serán reemplazadas por valores reales
+     * que pueden ser más largos, por lo que se recomienda dejar margen.
      */
     public function validarLongitudSMS(): array
     {
@@ -74,12 +78,47 @@ class Plantilla extends Model
 
         $contenido = $this->contenido ?? '';
         $longitud = $this->calcularLongitudSMS($contenido);
+        
+        // Detectar variables en el contenido
+        preg_match_all('/\{\{?\w+\}?\}/', $contenido, $matches);
+        $variables = $matches[0] ?? [];
+        $tieneVariables = count($variables) > 0;
+        
+        // Estimar longitud máxima con variables expandidas
+        // Asumimos: nombre ~30 chars, monto ~15 chars, otros ~20 chars
+        $longitudEstimadaVariables = 0;
+        foreach ($variables as $var) {
+            $varName = strtolower(trim($var, '{}'));
+            $longitudEstimadaVariables += match(true) {
+                str_contains($varName, 'nombre') => 30 - strlen($var),
+                str_contains($varName, 'monto') => 15 - strlen($var),
+                str_contains($varName, 'email') => 35 - strlen($var),
+                str_contains($varName, 'telefono') => 12 - strlen($var),
+                str_contains($varName, 'rut') => 12 - strlen($var),
+                default => 20 - strlen($var),
+            };
+        }
+        
+        $longitudEstimada = $longitud + max(0, $longitudEstimadaVariables);
+        
+        // Advertencias
+        $advertencias = [];
+        if ($tieneVariables && $longitudEstimada > 160) {
+            $advertencias[] = "Con variables expandidas, el SMS podría exceder 160 caracteres (~{$longitudEstimada} estimados). Se truncará automáticamente.";
+        }
+        if ($tieneVariables && $longitud > 120) {
+            $advertencias[] = "Recomendamos mantener la plantilla bajo 120 caracteres cuando usa variables para evitar truncamiento.";
+        }
 
         return [
             'valido' => $longitud <= 160,
             'longitud' => $longitud,
+            'longitud_estimada_con_variables' => $tieneVariables ? $longitudEstimada : null,
             'disponibles' => max(0, 160 - $longitud),
             'porcentaje' => min(100, ($longitud / 160) * 100),
+            'tiene_variables' => $tieneVariables,
+            'variables_detectadas' => $variables,
+            'advertencias' => $advertencias,
         ];
     }
 
