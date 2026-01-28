@@ -70,7 +70,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/lotes/abiertos', [LoteController::class, 'abiertos']);
     Route::get('/lotes/{lote}/progreso', [LoteController::class, 'progreso']);
     Route::post('/lotes/{lote}/cerrar', [LoteController::class, 'cerrar']);
-    Route::apiResource('lotes', LoteController::class)->only(['index', 'store', 'show']);
+    Route::apiResource('lotes', LoteController::class)->only(['index', 'store', 'show', 'destroy']);
 
     // Rutas de Importaciones
     Route::get('/importaciones/health', [ImportacionController::class, 'health']);

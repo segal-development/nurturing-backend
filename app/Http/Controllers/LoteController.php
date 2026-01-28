@@ -97,6 +97,45 @@ class LoteController extends Controller
         ]);
     }
 
+    /**
+     * Eliminar un lote y todos sus datos relacionados.
+     * 
+     * Solo permite eliminar lotes que:
+     * - No tengan importaciones en proceso
+     * - No tengan prospectos asignados a flujos activos
+     */
+    public function destroy(Lote $lote): JsonResponse
+    {
+        $importaciones = $lote->importaciones()->get();
+        
+        // No permitir eliminar si hay importaciones en proceso
+        if ($this->tieneImportacionesEnProceso($importaciones)) {
+            return response()->json([
+                'mensaje' => 'No se puede eliminar el lote mientras hay importaciones en proceso',
+            ], 422);
+        }
+
+        // Obtener IDs de importaciones para eliminar prospectos
+        $importacionIds = $importaciones->pluck('id')->toArray();
+        
+        // Contar prospectos que se eliminarán
+        $totalProspectos = \App\Models\Prospecto::whereIn('importacion_id', $importacionIds)->count();
+        
+        // Eliminar prospectos asociados
+        \App\Models\Prospecto::whereIn('importacion_id', $importacionIds)->delete();
+        
+        // Eliminar importaciones
+        \App\Models\Importacion::whereIn('id', $importacionIds)->delete();
+        
+        // Eliminar el lote
+        $lote->delete();
+
+        return response()->json([
+            'mensaje' => 'Lote eliminado exitosamente',
+            'prospectos_eliminados' => $totalProspectos,
+        ]);
+    }
+
     // =========================================================================
     // GESTION DE ESTADO
     // =========================================================================
