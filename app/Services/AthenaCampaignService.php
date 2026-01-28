@@ -140,12 +140,14 @@ class AthenaCampaignService
 
             $resultados = [];
             $exitosos = 0;
+            $errores = [];
 
             // Enviar SMS a cada destinatario (la API solo acepta 1 por request)
             foreach ($destinatarios as $destinatario) {
                 $phone = $destinatario['telefono'] ?? '';
 
                 if (empty($phone)) {
+                    $errores[] = ['phone' => $phone, 'error' => 'Teléfono vacío'];
                     continue;
                 }
 
@@ -156,21 +158,31 @@ class AthenaCampaignService
                 ]);
 
                 if (! $response->successful()) {
+                    $errorMsg = "HTTP {$response->status()}";
                     Log::error('AthenaCampaign SMS: Error al enviar', [
                         'phone' => $phone,
                         'status' => $response->status(),
                         'body' => $response->body(),
                     ]);
 
+                    $errores[] = ['phone' => $phone, 'error' => $errorMsg, 'status' => $response->status()];
                     continue;
                 }
 
                 $data = $response->json();
                 $resultados[] = $data;
 
-                if ($data['STATUS'] === 'statusOK') {
+                if (($data['STATUS'] ?? '') === 'statusOK') {
                     $exitosos++;
+                } else {
+                    $errores[] = ['phone' => $phone, 'error' => $data['STATUS'] ?? 'Unknown status', 'response' => $data];
                 }
+            }
+
+            // Si NINGÚN SMS se envió correctamente, lanzar excepción
+            if ($exitosos === 0 && count($errores) > 0) {
+                $primerError = $errores[0];
+                throw new \Exception("Error enviando SMS: {$primerError['error']} (teléfono: {$primerError['phone']})");
             }
 
             // Normalizar respuesta al formato esperado
@@ -184,6 +196,7 @@ class AthenaCampaignService
                     'Recipients' => $exitosos,
                     'STATUS' => 'SMS_SENT',
                     'resultados' => $resultados,
+                    'errores' => $errores,
                 ],
             ];
 
