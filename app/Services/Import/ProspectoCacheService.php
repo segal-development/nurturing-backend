@@ -98,7 +98,9 @@ final class ProspectoCacheService
      */
     public function findExistingProspectoId(?string $email, ?string $telefono): ?int
     {
-        return $this->findByEmail($email) ?? $this->findByTelefono($telefono);
+        // TODO: TEMPORAL - Deshabilitado findByTelefono para pruebas SMS. REACTIVAR después.
+        return $this->findByEmail($email);
+        // return $this->findByEmail($email) ?? $this->findByTelefono($telefono);
     }
 
     private function findByEmail(?string $email): ?int
