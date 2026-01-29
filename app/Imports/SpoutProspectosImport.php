@@ -350,10 +350,11 @@ class SpoutProspectosImport
             return $this->emailsExistentes[$email];
         }
 
+        // TODO: TEMPORAL - Deshabilitado para pruebas SMS. REACTIVAR después.
         // Buscar por teléfono
-        if (!empty($telefono) && isset($this->telefonosExistentes[$telefono])) {
-            return $this->telefonosExistentes[$telefono];
-        }
+        // if (!empty($telefono) && isset($this->telefonosExistentes[$telefono])) {
+        //     return $this->telefonosExistentes[$telefono];
+        // }
 
         return null;
     }
