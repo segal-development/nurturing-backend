@@ -24,9 +24,8 @@ class ProspectoController extends Controller
 
         // Aplicar los mismos filtros que en index()
         if ($request->filled('lote_id')) {
-            $query->whereHas('importacion', function ($q) use ($request) {
-                $q->where('lote_id', $request->input('lote_id'));
-            });
+            $importacionIds = \App\Models\Importacion::where('lote_id', $request->input('lote_id'))->pluck('id');
+            $query->whereIn('importacion_id', $importacionIds);
         }
 
         if ($request->filled('importacion_id')) {
@@ -34,9 +33,8 @@ class ProspectoController extends Controller
         }
 
         if ($request->filled('origen')) {
-            $query->whereHas('importacion', function ($q) use ($request) {
-                $q->where('origen', $request->input('origen'));
-            });
+            $importacionIds = \App\Models\Importacion::where('origen', $request->input('origen'))->pluck('id');
+            $query->whereIn('importacion_id', $importacionIds);
         }
 
         if ($request->filled('estado')) {
@@ -117,9 +115,10 @@ class ProspectoController extends Controller
             return;
         }
 
-        $query->whereHas('importacion', function ($q) use ($request) {
-            $q->where('lote_id', $request->input('lote_id'));
-        });
+        // JOIN directo en vez de whereHas (evita subquery EXISTS, más rápido con 350k+ rows)
+        $loteId = $request->input('lote_id');
+        $importacionIds = \App\Models\Importacion::where('lote_id', $loteId)->pluck('id');
+        $query->whereIn('importacion_id', $importacionIds);
     }
 
     private function applyImportacionFilter(\Illuminate\Database\Eloquent\Builder $query, Request $request): void
@@ -137,9 +136,10 @@ class ProspectoController extends Controller
             return;
         }
 
-        $query->whereHas('importacion', function ($q) use ($request) {
-            $q->where('origen', $request->input('origen'));
-        });
+        // whereIn directo en vez de whereHas (evita subquery EXISTS, más rápido con 350k+ rows)
+        $origen = $request->input('origen');
+        $importacionIds = \App\Models\Importacion::where('origen', $origen)->pluck('id');
+        $query->whereIn('importacion_id', $importacionIds);
     }
 
     private function applyEstadoFilter(\Illuminate\Database\Eloquent\Builder $query, Request $request): void
@@ -225,9 +225,8 @@ class ProspectoController extends Controller
 
         // Filtrar por lote (agrupa múltiples importaciones)
         if ($request->filled('lote_id')) {
-            $query->whereHas('importacion', function ($q) use ($request) {
-                $q->where('lote_id', $request->input('lote_id'));
-            });
+            $importacionIds = \App\Models\Importacion::where('lote_id', $request->input('lote_id'))->pluck('id');
+            $query->whereIn('importacion_id', $importacionIds);
         }
 
         // Filtrar por importación específica (ID) - mantener compatibilidad
@@ -237,9 +236,8 @@ class ProspectoController extends Controller
 
         // Filtrar por origen de la importación
         if ($request->filled('origen')) {
-            $query->whereHas('importacion', function ($q) use ($request) {
-                $q->where('origen', $request->input('origen'));
-            });
+            $importacionIds = \App\Models\Importacion::where('origen', $request->input('origen'))->pluck('id');
+            $query->whereIn('importacion_id', $importacionIds);
         }
 
         // Filtrar por estado
@@ -557,9 +555,8 @@ class ProspectoController extends Controller
 
         // Filtrar por origen
         if ($request->filled('origen')) {
-            $query->whereHas('importacion', function ($q) use ($request) {
-                $q->where('origen', $request->input('origen'));
-            });
+            $importacionIds = \App\Models\Importacion::where('origen', $request->input('origen'))->pluck('id');
+            $query->whereIn('importacion_id', $importacionIds);
         }
 
         // Filtrar por motivo

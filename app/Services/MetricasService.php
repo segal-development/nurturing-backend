@@ -54,32 +54,49 @@ class MetricasService
 
     /**
      * Resumen general de métricas clave (KPIs)
+     * Optimizado: 4 queries consolidadas en vez de 7 separadas
      */
     public function getResumenGeneral(int $dias = 30): array
     {
         $desde = now()->subDays($dias);
 
-        $totalEnvios = Envio::where('created_at', '>=', $desde)->count();
-        // Incluir 'abierto' y 'clickeado' como exitosos (son estados posteriores a 'enviado')
-        $enviosExitosos = Envio::where('created_at', '>=', $desde)
-            ->whereIn('estado', ['enviado', 'entregado', 'abierto', 'clickeado'])
-            ->count();
+        // Query 1: Envíos - totales y exitosos en 1 sola query
+        $envioStats = DB::table('envios')
+            ->where('created_at', '>=', $desde)
+            ->selectRaw("
+                COUNT(*) as total,
+                COUNT(CASE WHEN estado IN ('enviado', 'entregado', 'abierto', 'clickeado') THEN 1 END) as exitosos
+            ")
+            ->first();
 
-        $totalAperturas = EmailApertura::where('created_at', '>=', $desde)->count();
-        $enviosConApertura = EmailApertura::where('created_at', '>=', $desde)
-            ->distinct('envio_id')
-            ->count('envio_id');
+        $totalEnvios = (int) ($envioStats->total ?? 0);
+        $enviosExitosos = (int) ($envioStats->exitosos ?? 0);
 
-        $totalClicks = EmailClick::where('created_at', '>=', $desde)->count();
-        $enviosConClick = EmailClick::where('created_at', '>=', $desde)
-            ->distinct('envio_id')
-            ->count('envio_id');
+        // Query 2: Aperturas - total y únicas en 1 sola query
+        $aperturaStats = DB::table('email_aperturas')
+            ->where('created_at', '>=', $desde)
+            ->selectRaw('COUNT(*) as total, COUNT(DISTINCT envio_id) as unicos')
+            ->first();
 
-        $totalDesuscripciones = Schema::hasTable('desuscripciones') 
-            ? Desuscripcion::where('created_at', '>=', $desde)->count()
+        $totalAperturas = (int) ($aperturaStats->total ?? 0);
+        $enviosConApertura = (int) ($aperturaStats->unicos ?? 0);
+
+        // Query 3: Clicks - total y únicos en 1 sola query
+        $clickStats = DB::table('email_clicks')
+            ->where('created_at', '>=', $desde)
+            ->selectRaw('COUNT(*) as total, COUNT(DISTINCT envio_id) as unicos')
+            ->first();
+
+        $totalClicks = (int) ($clickStats->total ?? 0);
+        $enviosConClick = (int) ($clickStats->unicos ?? 0);
+
+        // Query 4: Desuscripciones + conversiones
+        $totalDesuscripciones = Schema::hasTable('desuscripciones')
+            ? DB::table('desuscripciones')->where('created_at', '>=', $desde)->count()
             : 0;
 
-        $prospectosConvertidos = Prospecto::where('estado', 'convertido')
+        $prospectosConvertidos = DB::table('prospectos')
+            ->where('estado', 'convertido')
             ->where('updated_at', '>=', $desde)
             ->count();
 
@@ -103,7 +120,7 @@ class MetricasService
                 'entrega' => $tasaEntrega,
                 'apertura' => $tasaApertura,
                 'click' => $tasaClick,
-                'ctr' => $tasaClick, // Click-through rate (desde aperturas)
+                'ctr' => $tasaClick,
                 'desuscripcion' => $tasaDesuscripcion,
             ],
         ];
@@ -500,6 +517,7 @@ class MetricasService
 
     /**
      * Tendencias comparativas (este período vs anterior)
+     * Optimizado: 4 queries con conditional aggregation en vez de 8 separadas
      */
     public function getTendencias(int $dias = 30): array
     {
@@ -507,26 +525,52 @@ class MetricasService
         $desdeAnterior = now()->subDays($dias * 2);
         $hastaAnterior = now()->subDays($dias);
 
-        // Período actual
-        $enviosActual = Envio::where('created_at', '>=', $desdeActual)->count();
-        $aperturasActual = EmailApertura::where('created_at', '>=', $desdeActual)->count();
-        $clicksActual = EmailClick::where('created_at', '>=', $desdeActual)->count();
-        $desuscripcionesActual = Schema::hasTable('desuscripciones')
-            ? Desuscripcion::where('created_at', '>=', $desdeActual)->count()
-            : 0;
+        // 1 query para envíos (actual + anterior)
+        $envios = DB::table('envios')
+            ->where('created_at', '>=', $desdeAnterior)
+            ->selectRaw("
+                COUNT(CASE WHEN created_at >= ? THEN 1 END) as actual,
+                COUNT(CASE WHEN created_at >= ? AND created_at < ? THEN 1 END) as anterior
+            ", [$desdeActual, $desdeAnterior, $hastaAnterior])
+            ->first();
 
-        // Período anterior
-        $enviosAnterior = Envio::whereBetween('created_at', [$desdeAnterior, $hastaAnterior])->count();
-        $aperturasAnterior = EmailApertura::whereBetween('created_at', [$desdeAnterior, $hastaAnterior])->count();
-        $clicksAnterior = EmailClick::whereBetween('created_at', [$desdeAnterior, $hastaAnterior])->count();
-        $desuscripcionesAnterior = Schema::hasTable('desuscripciones')
-            ? Desuscripcion::whereBetween('created_at', [$desdeAnterior, $hastaAnterior])->count()
-            : 0;
+        // 1 query para aperturas (actual + anterior)
+        $aperturas = DB::table('email_aperturas')
+            ->where('created_at', '>=', $desdeAnterior)
+            ->selectRaw("
+                COUNT(CASE WHEN created_at >= ? THEN 1 END) as actual,
+                COUNT(CASE WHEN created_at >= ? AND created_at < ? THEN 1 END) as anterior
+            ", [$desdeActual, $desdeAnterior, $hastaAnterior])
+            ->first();
+
+        // 1 query para clicks (actual + anterior)
+        $clicks = DB::table('email_clicks')
+            ->where('created_at', '>=', $desdeAnterior)
+            ->selectRaw("
+                COUNT(CASE WHEN created_at >= ? THEN 1 END) as actual,
+                COUNT(CASE WHEN created_at >= ? AND created_at < ? THEN 1 END) as anterior
+            ", [$desdeActual, $desdeAnterior, $hastaAnterior])
+            ->first();
+
+        // 1 query para desuscripciones (actual + anterior)
+        $desuscripcionesActual = 0;
+        $desuscripcionesAnterior = 0;
+        if (Schema::hasTable('desuscripciones')) {
+            $desus = DB::table('desuscripciones')
+                ->where('created_at', '>=', $desdeAnterior)
+                ->selectRaw("
+                    COUNT(CASE WHEN created_at >= ? THEN 1 END) as actual,
+                    COUNT(CASE WHEN created_at >= ? AND created_at < ? THEN 1 END) as anterior
+                ", [$desdeActual, $desdeAnterior, $hastaAnterior])
+                ->first();
+            $desuscripcionesActual = (int) ($desus->actual ?? 0);
+            $desuscripcionesAnterior = (int) ($desus->anterior ?? 0);
+        }
 
         return [
-            'envios' => $this->calcularTendencia($enviosActual, $enviosAnterior),
-            'aperturas' => $this->calcularTendencia($aperturasActual, $aperturasAnterior),
-            'clicks' => $this->calcularTendencia($clicksActual, $clicksAnterior),
+            'envios' => $this->calcularTendencia((int) ($envios->actual ?? 0), (int) ($envios->anterior ?? 0)),
+            'aperturas' => $this->calcularTendencia((int) ($aperturas->actual ?? 0), (int) ($aperturas->anterior ?? 0)),
+            'clicks' => $this->calcularTendencia((int) ($clicks->actual ?? 0), (int) ($clicks->anterior ?? 0)),
             'desuscripciones' => $this->calcularTendencia($desuscripcionesActual, $desuscripcionesAnterior),
         ];
     }

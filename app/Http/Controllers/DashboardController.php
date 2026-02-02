@@ -17,25 +17,32 @@ use Illuminate\Support\Facades\DB;
 class DashboardController extends Controller
 {
     /**
+     * Cache TTL en segundos (2 minutos para stats, 5 min para calidad)
+     */
+    private const STATS_CACHE_TTL = 120;
+
+    /**
      * Obtener todas las estadísticas del dashboard en un solo endpoint
      */
     public function stats(): JsonResponse
     {
-        $stats = [
-            // Stats Cards
-            'total_prospectos' => $this->getTotalProspectos(),
-            'envios_hoy' => $this->getEnviosHoy(),
-            'envios_programados' => $this->getEnviosProgramados(),
-            'ofertas_activas' => $this->getOfertasActivas(),
-            'tasa_entrega' => $this->getTasaEntrega(),
+        $stats = Cache::remember('dashboard:stats', self::STATS_CACHE_TTL, function () {
+            return [
+                // Stats Cards
+                'total_prospectos' => $this->getTotalProspectos(),
+                'envios_hoy' => $this->getEnviosHoy(),
+                'envios_programados' => $this->getEnviosProgramados(),
+                'ofertas_activas' => $this->getOfertasActivas(),
+                'tasa_entrega' => $this->getTasaEntrega(),
 
-            // Gráficos
-            'prospectos_por_flujo' => $this->getProspectosPorFlujo(),
-            'envios_por_dia' => $this->getEnviosPorDia(),
+                // Gráficos
+                'prospectos_por_flujo' => $this->getProspectosPorFlujo(),
+                'envios_por_dia' => $this->getEnviosPorDia(),
+            ];
+        });
 
-            // Calidad de lista (cacheado 5 min)
-            'calidad_emails' => $this->getCalidadEmails(),
-        ];
+        // Calidad de lista tiene su propio cache (5 min)
+        $stats['calidad_emails'] = $this->getCalidadEmails();
 
         return response()->json($stats);
     }
@@ -92,23 +99,25 @@ class DashboardController extends Controller
 
     /**
      * Tasa de entrega en los últimos 30 días
+     * Optimizado: 1 query en vez de 2
      */
     private function getTasaEntrega(): float
     {
         $fechaInicio = Carbon::now()->subDays(30);
 
-        $total = Envio::where('fecha_enviado', '>=', $fechaInicio)->count();
+        $stats = DB::table('envios')
+            ->where('fecha_enviado', '>=', $fechaInicio)
+            ->selectRaw("
+                COUNT(*) as total,
+                COUNT(CASE WHEN estado IN ('enviado', 'entregado', 'exitoso', 'abierto', 'clickeado') THEN 1 END) as exitosos
+            ")
+            ->first();
 
-        if ($total === 0) {
+        if (!$stats || $stats->total === 0) {
             return 0.0;
         }
 
-        // Incluir 'abierto' y 'clickeado' como exitosos (son estados posteriores a 'enviado')
-        $exitosos = Envio::where('fecha_enviado', '>=', $fechaInicio)
-            ->whereIn('estado', ['enviado', 'entregado', 'exitoso', 'abierto', 'clickeado'])
-            ->count();
-
-        return round(($exitosos / $total) * 100, 1);
+        return round(($stats->exitosos / $stats->total) * 100, 1);
     }
 
     /**
