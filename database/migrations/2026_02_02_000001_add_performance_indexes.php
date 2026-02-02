@@ -81,9 +81,10 @@ return new class extends Migration
         DB::statement('CREATE EXTENSION IF NOT EXISTS pg_trgm');
 
         // GIN trigram indexes for fast LIKE '%search%' queries
-        DB::statement('CREATE INDEX CONCURRENTLY IF NOT EXISTS prospectos_nombre_trgm_idx ON prospectos USING gin (nombre gin_trgm_ops)');
-        DB::statement('CREATE INDEX CONCURRENTLY IF NOT EXISTS prospectos_email_trgm_idx ON prospectos USING gin (email gin_trgm_ops)');
-        DB::statement('CREATE INDEX CONCURRENTLY IF NOT EXISTS prospectos_telefono_trgm_idx ON prospectos USING gin (telefono gin_trgm_ops)');
+        // Note: Cannot use CONCURRENTLY inside a transaction (Laravel wraps migrations in transactions for PostgreSQL)
+        DB::statement('CREATE INDEX IF NOT EXISTS prospectos_nombre_trgm_idx ON prospectos USING gin (nombre gin_trgm_ops)');
+        DB::statement('CREATE INDEX IF NOT EXISTS prospectos_email_trgm_idx ON prospectos USING gin (email gin_trgm_ops)');
+        DB::statement('CREATE INDEX IF NOT EXISTS prospectos_telefono_trgm_idx ON prospectos USING gin (telefono gin_trgm_ops)');
     }
 
     public function down(): void
