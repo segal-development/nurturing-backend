@@ -296,48 +296,64 @@ class TrackingController extends Controller
      * 
      * GET /api/flujos/{flujoId}/estadisticas-aperturas
      */
+    /**
+     * Obtiene estadísticas generales de aperturas para un flujo
+     * 
+     * Uses DB aggregation instead of loading all envios into memory.
+     * Before: O(n) memory for ALL envios (300k+ rows = OOM crash)
+     * After: O(1) memory, all counting done in PostgreSQL
+     * 
+     * GET /api/flujos/{flujoId}/estadisticas-aperturas
+     */
     public function estadisticasFlujo(int $flujoId)
     {
-        $envios = Envio::where('flujo_id', $flujoId)
+        // Aggregate counts in DB instead of loading all envios into memory
+        $resumen = Envio::where('flujo_id', $flujoId)
             ->where('canal', 'email')
-            ->with('prospecto')
-            ->get();
+            ->selectRaw("
+                COUNT(*) as total_enviados,
+                COUNT(*) FILTER (WHERE estado IN ('abierto', 'clickeado')) as total_abiertos
+            ")
+            ->first();
 
-        $totalEnviados = $envios->count();
-        $totalAbiertos = $envios->where('estado', 'abierto')->count();
-        $totalAbiertos += $envios->where('estado', 'clickeado')->count();
-        
-        $tasaApertura = $totalEnviados > 0 
-            ? round(($totalAbiertos / $totalEnviados) * 100, 2) 
+        $totalEnviados = $resumen->total_enviados;
+        $totalAbiertos = $resumen->total_abiertos;
+        $tasaApertura = $totalEnviados > 0
+            ? round(($totalAbiertos / $totalEnviados) * 100, 2)
             : 0;
 
+        // Get envio IDs for this flujo (only IDs, not full models)
+        $envioIds = Envio::where('flujo_id', $flujoId)
+            ->where('canal', 'email')
+            ->pluck('id');
+
         // Agrupar por dispositivo
-        $porDispositivo = EmailApertura::whereIn('envio_id', $envios->pluck('id'))
+        $porDispositivo = EmailApertura::whereIn('envio_id', $envioIds)
             ->selectRaw('dispositivo, COUNT(*) as total')
             ->groupBy('dispositivo')
             ->pluck('total', 'dispositivo')
             ->toArray();
 
         // Agrupar por cliente de email
-        $porCliente = EmailApertura::whereIn('envio_id', $envios->pluck('id'))
+        $porCliente = EmailApertura::whereIn('envio_id', $envioIds)
             ->selectRaw('cliente_email, COUNT(*) as total')
             ->groupBy('cliente_email')
             ->pluck('total', 'cliente_email')
             ->toArray();
 
-        // Lista de prospectos que abrieron
-        $prospectosQueAbrieron = $envios
-            ->filter(fn($e) => in_array($e->estado, ['abierto', 'clickeado']))
-            ->map(function ($envio) {
-                return [
-                    'prospecto_id' => $envio->prospecto_id,
-                    'nombre' => $envio->prospecto->nombre,
-                    'email' => $envio->prospecto->email,
-                    'fecha_apertura' => $envio->fecha_abierto,
-                    'total_aperturas' => $envio->total_aperturas,
-                ];
-            })
-            ->values();
+        // Prospectos que abrieron: query only the ones that actually opened
+        $prospectosQueAbrieron = Envio::where('flujo_id', $flujoId)
+            ->where('canal', 'email')
+            ->whereIn('estado', ['abierto', 'clickeado'])
+            ->join('prospectos', 'envios.prospecto_id', '=', 'prospectos.id')
+            ->select(
+                'envios.prospecto_id',
+                'prospectos.nombre',
+                'prospectos.email',
+                'envios.fecha_abierto as fecha_apertura',
+                'envios.total_aperturas'
+            )
+            ->get();
 
         return response()->json([
             'flujo_id' => $flujoId,
@@ -401,39 +417,55 @@ class TrackingController extends Controller
      * 
      * GET /api/flujos/{flujoId}/estadisticas-clicks
      */
+    /**
+     * Obtiene estadísticas generales de clicks para un flujo
+     * 
+     * Uses DB aggregation instead of loading all envios into memory.
+     * Before: O(n) memory for ALL envios (300k+ rows = OOM crash)
+     * After: O(1) memory, all counting done in PostgreSQL
+     * 
+     * GET /api/flujos/{flujoId}/estadisticas-clicks
+     */
     public function estadisticasClicksFlujo(int $flujoId)
     {
-        $envios = Envio::where('flujo_id', $flujoId)
+        // Aggregate counts in DB instead of loading all envios into memory
+        $resumen = Envio::where('flujo_id', $flujoId)
             ->where('canal', 'email')
-            ->with('prospecto')
-            ->get();
+            ->selectRaw("
+                COUNT(*) as total_enviados,
+                COUNT(*) FILTER (WHERE estado = 'clickeado') as total_con_clicks,
+                COALESCE(SUM(total_clicks), 0) as total_clicks
+            ")
+            ->first();
 
-        $totalEnviados = $envios->count();
-        $totalConClicks = $envios->where('estado', 'clickeado')->count();
-        
-        $tasaClicks = $totalEnviados > 0 
-            ? round(($totalConClicks / $totalEnviados) * 100, 2) 
+        $totalEnviados = $resumen->total_enviados;
+        $totalConClicks = $resumen->total_con_clicks;
+        $totalClicks = $resumen->total_clicks;
+        $tasaClicks = $totalEnviados > 0
+            ? round(($totalConClicks / $totalEnviados) * 100, 2)
             : 0;
 
-        // Total de clicks (no únicos)
-        $totalClicks = $envios->sum('total_clicks');
+        // Get envio IDs for this flujo (only IDs, not full models)
+        $envioIds = Envio::where('flujo_id', $flujoId)
+            ->where('canal', 'email')
+            ->pluck('id');
 
         // Agrupar por dispositivo
-        $porDispositivo = EmailClick::whereIn('envio_id', $envios->pluck('id'))
+        $porDispositivo = EmailClick::whereIn('envio_id', $envioIds)
             ->selectRaw('dispositivo, COUNT(*) as total')
             ->groupBy('dispositivo')
             ->pluck('total', 'dispositivo')
             ->toArray();
 
         // Agrupar por navegador
-        $porNavegador = EmailClick::whereIn('envio_id', $envios->pluck('id'))
+        $porNavegador = EmailClick::whereIn('envio_id', $envioIds)
             ->selectRaw('navegador, COUNT(*) as total')
             ->groupBy('navegador')
             ->pluck('total', 'navegador')
             ->toArray();
 
         // Top URLs más clickeadas
-        $topUrls = EmailClick::whereIn('envio_id', $envios->pluck('id'))
+        $topUrls = EmailClick::whereIn('envio_id', $envioIds)
             ->selectRaw('url_original, COUNT(*) as total')
             ->groupBy('url_original')
             ->orderByDesc('total')
@@ -441,19 +473,19 @@ class TrackingController extends Controller
             ->pluck('total', 'url_original')
             ->toArray();
 
-        // Lista de prospectos que clickearon
-        $prospectosQueClickearon = $envios
-            ->filter(fn($e) => $e->estado === 'clickeado')
-            ->map(function ($envio) {
-                return [
-                    'prospecto_id' => $envio->prospecto_id,
-                    'nombre' => $envio->prospecto->nombre,
-                    'email' => $envio->prospecto->email,
-                    'fecha_primer_click' => $envio->fecha_clickeado,
-                    'total_clicks' => $envio->total_clicks,
-                ];
-            })
-            ->values();
+        // Prospectos que clickearon: query only the ones that actually clicked
+        $prospectosQueClickearon = Envio::where('flujo_id', $flujoId)
+            ->where('canal', 'email')
+            ->where('estado', 'clickeado')
+            ->join('prospectos', 'envios.prospecto_id', '=', 'prospectos.id')
+            ->select(
+                'envios.prospecto_id',
+                'prospectos.nombre',
+                'prospectos.email',
+                'envios.fecha_clickeado as fecha_primer_click',
+                'envios.total_clicks'
+            )
+            ->get();
 
         return response()->json([
             'flujo_id' => $flujoId,

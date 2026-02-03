@@ -131,8 +131,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/ejecuciones/{ejecucion}/costo', [CostoController::class, 'getCostoEjecucion']);
     Route::post('/ejecuciones/{ejecucion}/recalcular-costo', [CostoController::class, 'recalcularCosto']);
 
-    // Rutas de Testing (solo para desarrollo/staging)
-    Route::prefix('testing')->group(function () {
+    // Rutas de Testing (solo para super_admin en desarrollo/staging)
+    Route::prefix('testing')->middleware('role:super_admin')->group(function () {
         Route::get('/check-ip', [TestingController::class, 'checkIp']);
         Route::post('/simular-estadisticas', [TestingController::class, 'simularEstadisticas']);
         Route::post('/forzar-verificacion-condicion', [TestingController::class, 'forzarVerificacionCondicion']);

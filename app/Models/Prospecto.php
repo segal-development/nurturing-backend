@@ -265,8 +265,19 @@ class Prospecto extends Model
         return (bool) $this->email_invalido;
     }
 
+    /**
+     * Get the origen from the related importacion.
+     * 
+     * Only accesses the relation if already eager-loaded to prevent N+1 queries.
+     * Before: Triggered a lazy-load query per prospecto in list views (50 prospectos = 50 queries).
+     * After: Returns null if importacion is not eager-loaded. Callers must use ->with('importacion').
+     */
     public function getOrigenAttribute(): ?string
     {
+        if (!$this->relationLoaded('importacion')) {
+            return null;
+        }
+
         return $this->importacion?->origen;
     }
 
