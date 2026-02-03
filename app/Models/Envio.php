@@ -5,7 +5,6 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Envio extends Model
@@ -63,30 +62,12 @@ class Envio extends Model
         return $this->belongsTo(EtapaFlujo::class);
     }
 
-    public function plantillaMensaje(): BelongsTo
-    {
-        return $this->belongsTo(PlantillaMensaje::class);
-    }
-
-    public function prospectoEnFlujo(): BelongsTo
-    {
-        return $this->belongsTo(ProspectoEnFlujo::class);
-    }
-
     public function flujoEjecucionEtapa(): BelongsTo
     {
         return $this->belongsTo(FlujoEjecucionEtapa::class);
     }
 
-    public function ofertas(): BelongsToMany
-    {
-        return $this->belongsToMany(
-            OfertaInfocom::class,
-            'envio_oferta',
-            'envio_id',
-            'oferta_infocom_id'
-        )->withTimestamps();
-    }
+    // Relationships cleaned: removed unused plantillaMensaje(), prospectoEnFlujo(), ofertas() — 2026-02-03
 
     public function scopePendientes($query)
     {

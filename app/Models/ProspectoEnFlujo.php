@@ -5,7 +5,6 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class ProspectoEnFlujo extends Model
 {
@@ -50,10 +49,7 @@ class ProspectoEnFlujo extends Model
         return $this->belongsTo(EtapaFlujo::class, 'etapa_actual_id');
     }
 
-    public function envios(): HasMany
-    {
-        return $this->hasMany(Envio::class);
-    }
+    // Relationships cleaned: removed unused envios() — 2026-02-03
 
     public function scopeActivos($query)
     {

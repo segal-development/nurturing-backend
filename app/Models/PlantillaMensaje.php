@@ -4,7 +4,6 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class PlantillaMensaje extends Model
 {
@@ -29,15 +28,7 @@ class PlantillaMensaje extends Model
         ];
     }
 
-    public function etapas(): HasMany
-    {
-        return $this->hasMany(EtapaFlujo::class);
-    }
-
-    public function envios(): HasMany
-    {
-        return $this->hasMany(Envio::class);
-    }
+    // Relationships cleaned: removed unused etapas(), envios() — 2026-02-03
 
     public function scopeActivos($query)
     {

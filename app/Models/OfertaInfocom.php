@@ -44,15 +44,7 @@ class OfertaInfocom extends Model
             ->withTimestamps();
     }
 
-    public function envios(): BelongsToMany
-    {
-        return $this->belongsToMany(
-            Envio::class,
-            'envio_oferta',
-            'oferta_infocom_id',
-            'envio_id'
-        )->withTimestamps();
-    }
+    // Relationships cleaned: removed unused envios() — 2026-02-03
 
     public function scopeActivos($query)
     {

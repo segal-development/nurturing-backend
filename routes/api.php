@@ -86,7 +86,6 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/flujos/estadisticas-costos', [FlujoController::class, 'estadisticasCostos']);
     Route::get('/flujos/opciones-creacion', [FlujoController::class, 'opcionesCreacion']);
     Route::get('/flujos/opciones-filtrado', [FlujoController::class, 'opcionesFiltrado']);
-    Route::post('/flujos/debug-payload', [FlujoController::class, 'debugPayload']); // TEMPORAL
     Route::post('/flujos/crear-con-prospectos', [FlujoController::class, 'crearFlujoConProspectos']);
     Route::get('/flujos/{flujo}/progreso', [FlujoController::class, 'progreso']);
     Route::post('/flujos/{flujo}/agregar-prospectos', [FlujoController::class, 'agregarProspectos']);

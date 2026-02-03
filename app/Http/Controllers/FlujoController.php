@@ -656,19 +656,6 @@ class FlujoController extends Controller
     }
 
     /**
-     * Debug: Ver qué datos llegan al endpoint (TEMPORAL).
-     */
-    public function debugPayload(Request $request): JsonResponse
-    {
-        return response()->json([
-            'content_type' => $request->header('Content-Type'),
-            'all_data' => $request->all(),
-            'keys' => array_keys($request->all()),
-            'raw' => $request->getContent(),
-        ]);
-    }
-
-    /**
      * Crear flujo con prospectos y distribución de canales (email/sms).
      * Soporta tanto el formato antiguo como el nuevo FlowBuilder.
      */
