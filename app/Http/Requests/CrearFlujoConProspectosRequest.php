@@ -110,16 +110,8 @@ class CrearFlujoConProspectosRequest extends FormRequest
                 }
             }
 
-            // Validate that at least one prospect selection method is used
-            $idsSeleccionados = $this->input('prospectos.ids_seleccionados', []);
-            $selectAllFromOrigin = $this->boolean('prospectos.select_all_from_origin', false);
-
-            if (empty($idsSeleccionados) && ! $selectAllFromOrigin) {
-                $validator->errors()->add(
-                    'prospectos',
-                    'Debe seleccionar al menos un prospecto o usar "Seleccionar Todos del Origen".'
-                );
-            }
+            // Prospectos are optional — a flujo can be created without them
+            // and prospects can be assigned later via POST /flujos/{flujo}/agregar-prospectos
         });
     }
 }
