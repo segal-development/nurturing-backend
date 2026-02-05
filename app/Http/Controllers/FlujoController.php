@@ -661,11 +661,25 @@ class FlujoController extends Controller
      */
     public function crearFlujoConProspectos(\App\Http\Requests\CrearFlujoConProspectosRequest $request): JsonResponse
     {
-        // Early return: Validar tipo de prospecto antes de iniciar transacción
-        $tipoProspecto = $this->findTipoProspecto($request->input('flujo.tipo_prospecto'));
+        // Resolve tipo_prospecto: required only when prospects are being assigned
+        $tipoProspectoInput = $request->input('flujo.tipo_prospecto');
+        $hasProspects = !empty($request->input('prospectos.ids_seleccionados'))
+            || $request->boolean('prospectos.select_all_from_origin', false);
 
+        $tipoProspecto = $tipoProspectoInput ? $this->findTipoProspecto($tipoProspectoInput) : null;
+
+        if ($hasProspects && $tipoProspecto === null) {
+            return $this->tipoProspectoNotFoundResponse($tipoProspectoInput);
+        }
+
+        // For flows without prospects, use first available tipo_prospecto as default
         if ($tipoProspecto === null) {
-            return $this->tipoProspectoNotFoundResponse($request->input('flujo.tipo_prospecto'));
+            $tipoProspecto = TipoProspecto::first();
+            if ($tipoProspecto === null) {
+                return response()->json([
+                    'message' => 'No hay tipos de prospecto configurados en el sistema.',
+                ], 422);
+            }
         }
 
         try {
