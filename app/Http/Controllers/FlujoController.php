@@ -46,7 +46,14 @@ class FlujoController extends Controller
 
         // Filtrar por origen_id si se proporciona
         if ($request->filled('origen_id')) {
-            $query->where('origen_id', $request->input('origen_id'));
+            $origenId = $request->input('origen_id');
+
+            if ($origenId === '_sin_origen') {
+                $query->whereNull('origen_id');
+            } elseif ($origenId !== '_todos') {
+                $query->where('origen_id', $origenId);
+            }
+            // '_todos' = no filter, show all
         }
 
         $flujos = $query->withCount('prospectosEnFlujo')
