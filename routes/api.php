@@ -20,47 +20,47 @@ use App\Http\Controllers\TipoProspectoController;
 use App\Http\Controllers\TrackingController;
 use Illuminate\Support\Facades\Route;
 
-// Rutas públicas de autenticación
-Route::post('/register', [AuthController::class, 'register']);
-Route::post('/login', [AuthController::class, 'login']);
+// Rutas públicas de autenticación (rate limited: 5/min por IP - prevenir brute force)
+Route::middleware('throttle:auth')->group(function () {
+    Route::post('/register', [AuthController::class, 'register']);
+    Route::post('/login', [AuthController::class, 'login']);
+});
 
 // Rutas para Cloud Scheduler - procesar jobs de la cola
 // Protegidas por un header secreto en lugar de auth
-Route::post('/cron/process-queue', [TestingController::class, 'processQueue'])
-    ->middleware('cron.secret');
-Route::get('/cron/debug-ejecuciones', [TestingController::class, 'debugEjecuciones'])
-    ->middleware('cron.secret');
-Route::get('/cron/debug-flujo/{flujoId}', [TestingController::class, 'debugFlujo'])
-    ->middleware('cron.secret');
-Route::get('/cron/debug-contenido/{stageId}', [TestingController::class, 'debugContenido'])
-    ->middleware('cron.secret');
-Route::get('/cron/monitor-envios/{ejecucionId}', [TestingController::class, 'monitorEnvios'])
-    ->middleware('cron.secret');
-Route::post('/cron/reiniciar-ejecucion/{ejecucionId}', [TestingController::class, 'reiniciarEjecucion'])
-    ->middleware('cron.secret');
-Route::get('/cron/debug-etapa/{etapaId}', [TestingController::class, 'debugEtapa'])
-    ->middleware('cron.secret');
+// Sin rate limit (throttle:cron) porque son internas
+Route::middleware(['cron.secret', 'throttle:cron'])->prefix('cron')->group(function () {
+    Route::post('/process-queue', [TestingController::class, 'processQueue']);
+    Route::get('/debug-ejecuciones', [TestingController::class, 'debugEjecuciones']);
+    Route::get('/debug-flujo/{flujoId}', [TestingController::class, 'debugFlujo']);
+    Route::get('/debug-contenido/{stageId}', [TestingController::class, 'debugContenido']);
+    Route::get('/monitor-envios/{ejecucionId}', [TestingController::class, 'monitorEnvios']);
+    Route::post('/reiniciar-ejecucion/{ejecucionId}', [TestingController::class, 'reiniciarEjecucion']);
+    Route::get('/debug-etapa/{etapaId}', [TestingController::class, 'debugEtapa']);
+});
 
 // Rutas protegidas con Sanctum (sesión o token)
-Route::middleware('auth:sanctum')->group(function () {
+// Rate limited: 60 requests/min por usuario autenticado
+Route::middleware(['auth:sanctum', 'throttle:api'])->group(function () {
     // Autenticación
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/me', [AuthController::class, 'me']);
 
-    // Dashboard
-    Route::get('/dashboard/stats', [DashboardController::class, 'stats']);
+    // Dashboard (rate limited: 10/min - operación pesada)
+    Route::get('/dashboard/stats', [DashboardController::class, 'stats'])
+        ->middleware('throttle:heavy');
 
     // Rutas de Prospectos
     Route::get('/prospectos/count', [ProspectoController::class, 'count']);
     Route::get('/prospectos/conteo-por-tipo', [ProspectoController::class, 'conteoPorTipo']);
     Route::get('/prospectos/estadisticas', [ProspectoController::class, 'estadisticas']);
     Route::get('/prospectos/opciones-filtrado', [ProspectoController::class, 'opcionesFiltrado']);
-    
+
     // Rutas de Calidad de Emails
     Route::get('/prospectos/calidad-emails', [ProspectoController::class, 'calidadEmails']);
     Route::get('/prospectos/emails-invalidos', [ProspectoController::class, 'emailsInvalidos']);
     Route::post('/prospectos/{prospecto}/rehabilitar-email', [ProspectoController::class, 'rehabilitarEmail']);
-    
+
     Route::apiResource('prospectos', ProspectoController::class);
 
     // Rutas de Tipos de Prospecto (categorías por monto)
@@ -123,9 +123,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/flujos/{flujoId}/estadisticas-aperturas', [TrackingController::class, 'estadisticasFlujo']);
     Route::get('/flujos/{flujoId}/estadisticas-clicks', [TrackingController::class, 'estadisticasClicksFlujo']);
 
-    // Rutas de Costos
+    // Rutas de Costos (dashboard con rate limit heavy)
     Route::get('/costos/precios', [CostoController::class, 'getPrecios']);
-    Route::get('/costos/dashboard', [CostoController::class, 'getDashboard']);
+    Route::get('/costos/dashboard', [CostoController::class, 'getDashboard'])
+        ->middleware('throttle:heavy');
     Route::get('/flujos/{flujo}/costo-estimado', [CostoController::class, 'getCostoEstimado']);
     Route::get('/ejecuciones/{ejecucion}/costo', [CostoController::class, 'getCostoEjecucion']);
     Route::post('/ejecuciones/{ejecucion}/recalcular-costo', [CostoController::class, 'recalcularCosto']);
@@ -151,7 +152,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/health', [MonitoreoController::class, 'health']);
         Route::post('/queue/retry-failed', [MonitoreoController::class, 'retryFailedJobs']);
         Route::delete('/queue/failed', [MonitoreoController::class, 'clearFailedJobs']);
-        
+
         // Alertas - testing y configuración
         Route::get('/alertas/config', [MonitoreoController::class, 'getAlertasConfig']);
         Route::post('/alertas/test', [MonitoreoController::class, 'testAlerta']);
@@ -163,8 +164,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/estadisticas', [DesuscripcionController::class, 'estadisticas']);
     });
 
-    // Rutas de Métricas y Analytics
-    Route::prefix('metricas')->group(function () {
+    // Rutas de Métricas y Analytics (rate limited: 10/min - operaciones pesadas)
+    Route::prefix('metricas')->middleware('throttle:heavy')->group(function () {
         Route::get('/dashboard', [MetricasController::class, 'dashboard']);
         Route::get('/resumen', [MetricasController::class, 'resumen']);
         Route::get('/aperturas', [MetricasController::class, 'aperturas']);
