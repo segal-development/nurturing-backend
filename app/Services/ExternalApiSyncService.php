@@ -150,21 +150,31 @@ class ExternalApiSyncService
     }
 
     /**
-     * Llama a la API externa y obtiene todos los datos con paginación automática.
-     * Incluye retry con backoff y delay entre páginas para no saturar la API.
+     * Llama a la API externa y obtiene datos con paginación automática.
+     *
+     * SYNC INCREMENTAL: Si la fuente tiene last_synced_at, solo trae registros
+     * con updatedAt > last_synced_at. La API devuelve ordenado por updatedAt DESC,
+     * así que paramos cuando encontramos un registro anterior al último sync.
      */
     private function fetchFromApi(ExternalApiSource $source): array
     {
         $allData = [];
         $page = 1;
         $limit = $source->sync_filters['limit'] ?? 100;
-        $maxPages = 2000; // Límite de seguridad para evitar loops infinitos
-        $delayBetweenPages = 500; // 500ms entre páginas para no saturar
+        $maxPages = 2000;
+        $delayBetweenPages = 1000; // 1 segundo entre páginas para no saturar
         $maxRetries = 3;
 
-        Log::info('ExternalApiSyncService: Iniciando fetch con paginación', [
+        // Para sync incremental: fecha del último sync
+        $lastSyncedAt = $source->last_synced_at;
+        $isIncrementalSync = $lastSyncedAt !== null;
+        $reachedOldRecords = false;
+
+        Log::info('ExternalApiSyncService: Iniciando fetch', [
             'source' => $source->name,
             'limit_per_page' => $limit,
+            'incremental' => $isIncrementalSync,
+            'last_synced_at' => $lastSyncedAt?->toISOString(),
         ]);
 
         do {
@@ -185,18 +195,38 @@ class ExternalApiSyncService
                 throw new \Exception('La respuesta de la API no tiene el formato esperado');
             }
 
-            $allData = array_merge($allData, $data);
             $total = $response->json('total') ?? count($data);
             $fetchedCount = count($data);
 
-            // Log cada 10 páginas para no saturar los logs
-            if ($page % 10 === 1 || $fetchedCount < $limit) {
+            // Si es sync incremental, filtrar solo registros nuevos
+            if ($isIncrementalSync && $fetchedCount > 0) {
+                $newRecords = [];
+                foreach ($data as $record) {
+                    $updatedAt = $record['updatedAt'] ?? null;
+                    if ($updatedAt) {
+                        $recordDate = \Carbon\Carbon::parse($updatedAt);
+                        if ($recordDate->lte($lastSyncedAt)) {
+                            // Este registro y los siguientes ya los tenemos
+                            $reachedOldRecords = true;
+                            break;
+                        }
+                    }
+                    $newRecords[] = $record;
+                }
+                $data = $newRecords;
+            }
+
+            $allData = array_merge($allData, $data);
+
+            // Log cada 10 páginas o cuando hay eventos importantes
+            if ($page % 10 === 1 || $fetchedCount < $limit || $reachedOldRecords) {
                 Log::info('ExternalApiSyncService: Progreso de paginación', [
                     'page' => $page,
                     'registros_pagina' => $fetchedCount,
+                    'registros_nuevos' => count($data),
                     'total_acumulado' => count($allData),
                     'total_api' => $total,
-                    'progreso' => round((count($allData) / max($total, 1)) * 100, 1).'%',
+                    'reached_old_records' => $reachedOldRecords,
                 ]);
             }
 
@@ -206,11 +236,15 @@ class ExternalApiSyncService
             // 1. No hay más datos en esta página
             // 2. Ya tenemos todos los registros según el total de la API
             // 3. Alcanzamos el límite de páginas (seguridad)
-            $hasMorePages = $fetchedCount >= $limit && count($allData) < $total && $page <= $maxPages;
+            // 4. SYNC INCREMENTAL: Llegamos a registros que ya teníamos
+            $hasMorePages = ! $reachedOldRecords
+                && $fetchedCount >= $limit
+                && count($allData) < $total
+                && $page <= $maxPages;
 
             // Delay entre páginas para no saturar la API
             if ($hasMorePages) {
-                usleep($delayBetweenPages * 1000); // convertir ms a microsegundos
+                usleep($delayBetweenPages * 1000);
             }
 
         } while ($hasMorePages);
@@ -218,6 +252,8 @@ class ExternalApiSyncService
         Log::info('ExternalApiSyncService: Fetch completado', [
             'total_registros' => count($allData),
             'paginas_procesadas' => $page - 1,
+            'incremental' => $isIncrementalSync,
+            'stopped_at_old_records' => $reachedOldRecords,
         ]);
 
         return $allData;
