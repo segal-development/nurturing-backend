@@ -566,7 +566,7 @@ class ExternalApiSyncService
      */
     private function loadTiposProspecto(): Collection
     {
-        return TipoProspecto::orderBy('monto_minimo', 'desc')->get();
+        return TipoProspecto::orderBy('monto_min', 'desc')->get();
     }
 
     /**
@@ -575,7 +575,7 @@ class ExternalApiSyncService
     private function resolveTipoProspectoId(int $monto, Collection $tiposProspecto): ?int
     {
         foreach ($tiposProspecto as $tipo) {
-            if ($monto >= $tipo->monto_minimo && $monto <= $tipo->monto_maximo) {
+            if ($monto >= $tipo->monto_min && $monto <= $tipo->monto_max) {
                 return $tipo->id;
             }
         }
