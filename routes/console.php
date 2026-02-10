@@ -207,3 +207,19 @@ Schedule::command('etapas:recover-stuck --minutes=30')
   ->onFailure(function () {
       Log::error('Scheduler: Falló la verificación de etapas estancadas');
   });
+
+// ============================================================================
+// SINCRONIZACIÓN SEMANAL DE APIs EXTERNAS (Informes Comerciales, Sysgal, etc.)
+// Todos los viernes a las 6:00 AM sincroniza prospectos desde APIs externas.
+// Usa sync incremental: solo trae registros nuevos desde el último sync.
+// ============================================================================
+Schedule::job(new \App\Jobs\SyncExternalApiJob(null, 1)) // null = todas las activas, 1 = user_id sistema
+  ->weeklyOn(5, '06:00') // Viernes a las 6:00 AM
+  ->name('external-api:sync-weekly')
+  ->withoutOverlapping()
+  ->onSuccess(function () {
+      Log::info('Scheduler: Sincronización semanal de APIs externas completada');
+  })
+  ->onFailure(function () {
+      Log::error('Scheduler: Falló la sincronización semanal de APIs externas');
+  });
