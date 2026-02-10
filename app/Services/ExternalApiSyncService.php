@@ -150,32 +150,70 @@ class ExternalApiSyncService
     }
 
     /**
-     * Llama a la API externa y obtiene los datos.
+     * Llama a la API externa y obtiene todos los datos con paginación automática.
      */
     private function fetchFromApi(ExternalApiSource $source): array
     {
-        $url = $source->endpoint_url;
+        $allData = [];
+        $page = 1;
+        $limit = $source->sync_filters['limit'] ?? 100;
+        $maxPages = 1000; // Límite de seguridad para evitar loops infinitos
 
-        // Agregar filtros si están configurados
-        if (! empty($source->sync_filters)) {
-            $url .= (str_contains($url, '?') ? '&' : '?').http_build_query($source->sync_filters);
-        }
+        Log::info('ExternalApiSyncService: Iniciando fetch con paginación', [
+            'source' => $source->name,
+            'limit_per_page' => $limit,
+        ]);
 
-        $response = Http::withHeaders($source->getRequestHeaders())
-            ->timeout(120)
-            ->get($url);
+        do {
+            $url = $source->endpoint_url;
+            $params = array_merge($source->sync_filters ?? [], [
+                'limit' => $limit,
+                'page' => $page,
+            ]);
 
-        if (! $response->successful()) {
-            throw new \Exception("Error HTTP {$response->status()}: {$response->body()}");
-        }
+            $url .= (str_contains($url, '?') ? '&' : '?').http_build_query($params);
 
-        $data = $response->json('data') ?? $response->json();
+            $response = Http::withHeaders($source->getRequestHeaders())
+                ->timeout(120)
+                ->get($url);
 
-        if (! is_array($data)) {
-            throw new \Exception('La respuesta de la API no tiene el formato esperado');
-        }
+            if (! $response->successful()) {
+                throw new \Exception("Error HTTP {$response->status()}: {$response->body()}");
+            }
 
-        return $data;
+            $data = $response->json('data') ?? $response->json();
+
+            if (! is_array($data)) {
+                throw new \Exception('La respuesta de la API no tiene el formato esperado');
+            }
+
+            $allData = array_merge($allData, $data);
+            $total = $response->json('total') ?? count($data);
+            $fetchedCount = count($data);
+
+            Log::info('ExternalApiSyncService: Página procesada', [
+                'page' => $page,
+                'registros_pagina' => $fetchedCount,
+                'total_acumulado' => count($allData),
+                'total_api' => $total,
+            ]);
+
+            $page++;
+
+            // Condiciones de salida:
+            // 1. No hay más datos en esta página
+            // 2. Ya tenemos todos los registros según el total de la API
+            // 3. Alcanzamos el límite de páginas (seguridad)
+            $hasMorePages = $fetchedCount >= $limit && count($allData) < $total && $page <= $maxPages;
+
+        } while ($hasMorePages);
+
+        Log::info('ExternalApiSyncService: Fetch completado', [
+            'total_registros' => count($allData),
+            'paginas_procesadas' => $page - 1,
+        ]);
+
+        return $allData;
     }
 
     /**
