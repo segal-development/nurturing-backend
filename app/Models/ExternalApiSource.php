@@ -18,6 +18,11 @@ class ExternalApiSource extends Model
         'auth_token',
         'headers',
         'field_mapping',
+        'clasificacion_field',
+        'clasificacion_values',
+        'sync_filters',
+        'sync_frequency',
+        'lote_prefix',
         'is_active',
         'last_synced_at',
         'last_sync_count',
@@ -29,6 +34,8 @@ class ExternalApiSource extends Model
         return [
             'headers' => 'array',
             'field_mapping' => 'array',
+            'clasificacion_values' => 'array',
+            'sync_filters' => 'array',
             'is_active' => 'boolean',
             'last_synced_at' => 'datetime',
             'auth_token' => 'encrypted',
@@ -41,6 +48,14 @@ class ExternalApiSource extends Model
     public function importaciones(): HasMany
     {
         return $this->hasMany(Importacion::class);
+    }
+
+    /**
+     * Lotes generados desde esta fuente externa.
+     */
+    public function lotes(): HasMany
+    {
+        return $this->hasMany(Lote::class);
     }
 
     /**
@@ -87,13 +102,13 @@ class ExternalApiSource extends Model
         // Agregar header de autenticación según el tipo
         switch ($this->auth_type) {
             case 'bearer':
-                $headers['Authorization'] = 'Bearer ' . $this->auth_token;
+                $headers['Authorization'] = 'Bearer '.$this->auth_token;
                 break;
             case 'api_key':
                 $headers['X-API-Key'] = $this->auth_token;
                 break;
             case 'basic':
-                $headers['Authorization'] = 'Basic ' . $this->auth_token;
+                $headers['Authorization'] = 'Basic '.$this->auth_token;
                 break;
         }
 
@@ -121,5 +136,45 @@ class ExternalApiSource extends Model
             'last_synced_at' => now(),
             'last_sync_error' => $error,
         ]);
+    }
+
+    /**
+     * Genera el nombre del lote para un valor de clasificación.
+     * Ej: "IC_form_2026-02-10"
+     */
+    public function generarNombreLote(string $clasificacionValue): string
+    {
+        $prefix = $this->lote_prefix ?: strtoupper(substr($this->name, 0, 3));
+        $fecha = now()->format('Y-m-d');
+
+        return "{$prefix}_{$clasificacionValue}_{$fecha}";
+    }
+
+    /**
+     * Verifica si la fuente tiene configurado un campo de clasificación.
+     */
+    public function tieneClasificacion(): bool
+    {
+        return ! empty($this->clasificacion_field);
+    }
+
+    /**
+     * Obtiene o crea un lote para un valor de clasificación específico.
+     */
+    public function obtenerOCrearLote(string $clasificacionValue, int $userId): Lote
+    {
+        $nombreLote = $this->generarNombreLote($clasificacionValue);
+
+        return Lote::firstOrCreate(
+            [
+                'external_api_source_id' => $this->id,
+                'clasificacion_value' => $clasificacionValue,
+                'nombre' => $nombreLote,
+            ],
+            [
+                'user_id' => $userId,
+                'estado' => 'abierto',
+            ]
+        );
     }
 }

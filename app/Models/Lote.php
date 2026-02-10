@@ -17,6 +17,8 @@ class Lote extends Model
     protected $fillable = [
         'nombre',
         'user_id',
+        'external_api_source_id',
+        'clasificacion_value',
         'total_archivos',
         'total_registros',
         'registros_exitosos',
@@ -39,6 +41,11 @@ class Lote extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    public function externalApiSource(): BelongsTo
+    {
+        return $this->belongsTo(ExternalApiSource::class);
     }
 
     public function importaciones(): HasMany
@@ -71,6 +78,30 @@ class Lote extends Model
     }
 
     /**
+     * Verifica si el lote proviene de una API externa.
+     */
+    public function isFromExternalApi(): bool
+    {
+        return $this->external_api_source_id !== null;
+    }
+
+    /**
+     * Scope para lotes de API externa.
+     */
+    public function scopeFromExternalApi($query)
+    {
+        return $query->whereNotNull('external_api_source_id');
+    }
+
+    /**
+     * Scope para lotes de importación Excel (no API).
+     */
+    public function scopeFromExcel($query)
+    {
+        return $query->whereNull('external_api_source_id');
+    }
+
+    /**
      * Recalcula los totales del lote basado en sus importaciones
      */
     public function recalcularTotales(): void
@@ -79,16 +110,16 @@ class Lote extends Model
         $this->total_registros = $this->importaciones()->sum('total_registros');
         $this->registros_exitosos = $this->importaciones()->sum('registros_exitosos');
         $this->registros_fallidos = $this->importaciones()->sum('registros_fallidos');
-        
+
         // Actualizar estado basado en importaciones
         $this->actualizarEstado();
-        
+
         $this->save();
     }
 
     /**
      * Actualiza el estado del lote basado en sus importaciones.
-     * 
+     *
      * IMPORTANTE: NO cierra el lote automáticamente (completado/fallido).
      * El lote solo puede cerrarse manualmente via POST /api/lotes/{id}/cerrar.
      * Esto permite agregar múltiples archivos al mismo lote.
@@ -96,9 +127,10 @@ class Lote extends Model
     public function actualizarEstado(): void
     {
         $importaciones = $this->importaciones;
-        
+
         if ($importaciones->isEmpty()) {
             $this->estado = 'abierto';
+
             return;
         }
 
@@ -108,7 +140,7 @@ class Lote extends Model
             return;
         }
 
-        $algunoProcesando = $importaciones->contains(fn($i) => in_array($i->estado, ['procesando', 'pendiente']));
+        $algunoProcesando = $importaciones->contains(fn ($i) => in_array($i->estado, ['procesando', 'pendiente']));
 
         // Solo alternamos entre "procesando" y "abierto"
         // NUNCA cerramos automáticamente

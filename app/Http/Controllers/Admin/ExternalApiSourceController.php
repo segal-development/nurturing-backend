@@ -12,7 +12,7 @@ use Illuminate\Support\Facades\Validator;
 
 /**
  * Controller para gestionar fuentes de APIs externas.
- * 
+ *
  * Endpoints:
  * - GET    /api/admin/external-sources           - Listar fuentes
  * - POST   /api/admin/external-sources           - Crear fuente
@@ -30,7 +30,7 @@ class ExternalApiSourceController extends Controller
 
     /**
      * Listar todas las fuentes externas.
-     * 
+     *
      * GET /api/admin/external-sources
      */
     public function index(Request $request): JsonResponse
@@ -57,7 +57,7 @@ class ExternalApiSourceController extends Controller
 
     /**
      * Crear una nueva fuente externa.
-     * 
+     *
      * POST /api/admin/external-sources
      */
     public function store(Request $request): JsonResponse
@@ -102,14 +102,14 @@ class ExternalApiSourceController extends Controller
 
     /**
      * Ver una fuente externa específica.
-     * 
+     *
      * GET /api/admin/external-sources/{id}
      */
     public function show(int $id): JsonResponse
     {
         $source = ExternalApiSource::find($id);
 
-        if (!$source) {
+        if (! $source) {
             return response()->json([
                 'message' => 'Fuente no encontrada',
             ], 404);
@@ -127,14 +127,14 @@ class ExternalApiSourceController extends Controller
 
     /**
      * Actualizar una fuente externa.
-     * 
+     *
      * PUT /api/admin/external-sources/{id}
      */
     public function update(Request $request, int $id): JsonResponse
     {
         $source = ExternalApiSource::find($id);
 
-        if (!$source) {
+        if (! $source) {
             return response()->json([
                 'message' => 'Fuente no encontrada',
             ], 404);
@@ -177,14 +177,14 @@ class ExternalApiSourceController extends Controller
 
     /**
      * Eliminar una fuente externa.
-     * 
+     *
      * DELETE /api/admin/external-sources/{id}
      */
     public function destroy(int $id): JsonResponse
     {
         $source = ExternalApiSource::find($id);
 
-        if (!$source) {
+        if (! $source) {
             return response()->json([
                 'message' => 'Fuente no encontrada',
             ], 404);
@@ -209,20 +209,20 @@ class ExternalApiSourceController extends Controller
 
     /**
      * Sincronizar una fuente externa manualmente.
-     * 
+     *
      * POST /api/admin/external-sources/{id}/sync
      */
     public function sync(Request $request, int $id): JsonResponse
     {
         $source = ExternalApiSource::find($id);
 
-        if (!$source) {
+        if (! $source) {
             return response()->json([
                 'message' => 'Fuente no encontrada',
             ], 404);
         }
 
-        if (!$source->is_active) {
+        if (! $source->is_active) {
             return response()->json([
                 'message' => 'La fuente está inactiva',
             ], 400);
@@ -242,15 +242,21 @@ class ExternalApiSourceController extends Controller
 
         // Ejecutar sincrónicamente
         try {
-            $importacion = $this->syncService->sync($source, $request->user()?->id);
+            $resultado = $this->syncService->sync($source, $request->user()?->id);
 
             return response()->json([
                 'message' => 'Sincronización completada',
                 'data' => [
-                    'importacion_id' => $importacion->id,
-                    'total_registros' => $importacion->total_registros,
-                    'registros_exitosos' => $importacion->registros_exitosos,
-                    'registros_fallidos' => $importacion->registros_fallidos,
+                    'lotes_creados' => count($resultado['lotes']),
+                    'lotes' => collect($resultado['lotes'])->map(fn ($lote) => [
+                        'id' => $lote->id,
+                        'nombre' => $lote->nombre,
+                        'clasificacion_value' => $lote->clasificacion_value,
+                    ]),
+                    'total_prospectos' => $resultado['total_prospectos'],
+                    'nuevos' => $resultado['nuevos'],
+                    'actualizados' => $resultado['actualizados'],
+                    'omitidos_en_flujo' => $resultado['omitidos_en_flujo'],
                 ],
             ]);
         } catch (\Exception $e) {
@@ -263,14 +269,14 @@ class ExternalApiSourceController extends Controller
 
     /**
      * Probar la conexión a una fuente externa.
-     * 
+     *
      * POST /api/admin/external-sources/{id}/test
      */
     public function test(int $id): JsonResponse
     {
         $source = ExternalApiSource::find($id);
 
-        if (!$source) {
+        if (! $source) {
             return response()->json([
                 'message' => 'Fuente no encontrada',
             ], 404);
@@ -285,7 +291,7 @@ class ExternalApiSourceController extends Controller
 
     /**
      * Probar conexión con datos temporales (para crear nueva fuente).
-     * 
+     *
      * POST /api/admin/external-sources/test-new
      */
     public function testNew(Request $request): JsonResponse
@@ -332,7 +338,7 @@ class ExternalApiSourceController extends Controller
             'display_name' => $source->display_name,
             'endpoint_url' => $source->endpoint_url,
             'auth_type' => $source->auth_type,
-            'has_auth_token' => !empty($source->auth_token),
+            'has_auth_token' => ! empty($source->auth_token),
             'headers' => $source->headers,
             'field_mapping' => $source->field_mapping,
             'is_active' => $source->is_active,

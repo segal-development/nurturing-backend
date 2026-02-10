@@ -13,7 +13,7 @@ use Illuminate\Support\Facades\Log;
 
 /**
  * Job para sincronizar prospectos desde APIs externas.
- * 
+ *
  * Se puede ejecutar:
  * - Programado (cada viernes a las 2am)
  * - Manualmente desde el admin
@@ -78,34 +78,39 @@ class SyncExternalApiJob implements ShouldQueue
     {
         $source = ExternalApiSource::find($this->sourceId);
 
-        if (!$source) {
+        if (! $source) {
             Log::warning('SyncExternalApiJob: Fuente no encontrada', [
                 'source_id' => $this->sourceId,
             ]);
+
             return;
         }
 
-        if (!$source->is_active) {
+        if (! $source->is_active) {
             Log::info('SyncExternalApiJob: Fuente inactiva, omitiendo', [
                 'source' => $source->name,
             ]);
+
             return;
         }
 
         try {
-            $importacion = $service->sync($source, $this->userId);
-            
+            $resultado = $service->sync($source, $this->userId);
+
             Log::info('SyncExternalApiJob: Fuente sincronizada', [
                 'source' => $source->name,
-                'importacion_id' => $importacion->id,
-                'registros_exitosos' => $importacion->registros_exitosos,
+                'lotes_creados' => count($resultado['lotes']),
+                'total_prospectos' => $resultado['total_prospectos'],
+                'nuevos' => $resultado['nuevos'],
+                'actualizados' => $resultado['actualizados'],
+                'omitidos_en_flujo' => $resultado['omitidos_en_flujo'],
             ]);
         } catch (\Exception $e) {
             Log::error('SyncExternalApiJob: Error en fuente', [
                 'source' => $source->name,
                 'error' => $e->getMessage(),
             ]);
-            
+
             // Re-lanzar para que el job falle y se reintente
             throw $e;
         }
@@ -117,7 +122,7 @@ class SyncExternalApiJob implements ShouldQueue
     private function syncAllSources(ExternalApiSyncService $service): void
     {
         $sources = ExternalApiSource::active()->get();
-        
+
         Log::info('SyncExternalApiJob: Sincronizando todas las fuentes', [
             'count' => $sources->count(),
         ]);
@@ -126,18 +131,18 @@ class SyncExternalApiJob implements ShouldQueue
 
         foreach ($sources as $source) {
             try {
-                $importacion = $service->sync($source, $this->userId);
+                $resultado = $service->sync($source, $this->userId);
                 $resultados[$source->name] = [
                     'status' => 'success',
-                    'importacion_id' => $importacion->id,
-                    'registros' => $importacion->registros_exitosos,
+                    'lotes_creados' => count($resultado['lotes']),
+                    'total_prospectos' => $resultado['total_prospectos'],
                 ];
             } catch (\Exception $e) {
                 $resultados[$source->name] = [
                     'status' => 'error',
                     'error' => $e->getMessage(),
                 ];
-                
+
                 // Continuar con las otras fuentes, no fallar todo
                 Log::error('SyncExternalApiJob: Error en fuente (continuando)', [
                     'source' => $source->name,
