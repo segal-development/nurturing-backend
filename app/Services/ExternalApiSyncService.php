@@ -151,13 +151,16 @@ class ExternalApiSyncService
 
     /**
      * Llama a la API externa y obtiene todos los datos con paginación automática.
+     * Incluye retry con backoff y delay entre páginas para no saturar la API.
      */
     private function fetchFromApi(ExternalApiSource $source): array
     {
         $allData = [];
         $page = 1;
         $limit = $source->sync_filters['limit'] ?? 100;
-        $maxPages = 1000; // Límite de seguridad para evitar loops infinitos
+        $maxPages = 2000; // Límite de seguridad para evitar loops infinitos
+        $delayBetweenPages = 500; // 500ms entre páginas para no saturar
+        $maxRetries = 3;
 
         Log::info('ExternalApiSyncService: Iniciando fetch con paginación', [
             'source' => $source->name,
@@ -173,13 +176,8 @@ class ExternalApiSyncService
 
             $url .= (str_contains($url, '?') ? '&' : '?').http_build_query($params);
 
-            $response = Http::withHeaders($source->getRequestHeaders())
-                ->timeout(120)
-                ->get($url);
-
-            if (! $response->successful()) {
-                throw new \Exception("Error HTTP {$response->status()}: {$response->body()}");
-            }
+            // Retry con backoff exponencial
+            $response = $this->fetchWithRetry($url, $source->getRequestHeaders(), $maxRetries);
 
             $data = $response->json('data') ?? $response->json();
 
@@ -191,12 +189,16 @@ class ExternalApiSyncService
             $total = $response->json('total') ?? count($data);
             $fetchedCount = count($data);
 
-            Log::info('ExternalApiSyncService: Página procesada', [
-                'page' => $page,
-                'registros_pagina' => $fetchedCount,
-                'total_acumulado' => count($allData),
-                'total_api' => $total,
-            ]);
+            // Log cada 10 páginas para no saturar los logs
+            if ($page % 10 === 1 || $fetchedCount < $limit) {
+                Log::info('ExternalApiSyncService: Progreso de paginación', [
+                    'page' => $page,
+                    'registros_pagina' => $fetchedCount,
+                    'total_acumulado' => count($allData),
+                    'total_api' => $total,
+                    'progreso' => round((count($allData) / max($total, 1)) * 100, 1).'%',
+                ]);
+            }
 
             $page++;
 
@@ -206,6 +208,11 @@ class ExternalApiSyncService
             // 3. Alcanzamos el límite de páginas (seguridad)
             $hasMorePages = $fetchedCount >= $limit && count($allData) < $total && $page <= $maxPages;
 
+            // Delay entre páginas para no saturar la API
+            if ($hasMorePages) {
+                usleep($delayBetweenPages * 1000); // convertir ms a microsegundos
+            }
+
         } while ($hasMorePages);
 
         Log::info('ExternalApiSyncService: Fetch completado', [
@@ -214,6 +221,65 @@ class ExternalApiSyncService
         ]);
 
         return $allData;
+    }
+
+    /**
+     * Hace una request HTTP con retry y backoff exponencial.
+     */
+    private function fetchWithRetry(string $url, array $headers, int $maxRetries): \Illuminate\Http\Client\Response
+    {
+        $attempt = 0;
+        $lastException = null;
+
+        while ($attempt < $maxRetries) {
+            try {
+                $response = Http::withHeaders($headers)
+                    ->timeout(120)
+                    ->get($url);
+
+                if ($response->successful()) {
+                    return $response;
+                }
+
+                // Si es error 5xx, reintentar
+                if ($response->serverError()) {
+                    $attempt++;
+                    $lastException = new \Exception("Error HTTP {$response->status()}: {$response->body()}");
+
+                    if ($attempt < $maxRetries) {
+                        $waitSeconds = pow(2, $attempt); // 2, 4, 8 segundos
+                        Log::warning('ExternalApiSyncService: Error 5xx, reintentando', [
+                            'attempt' => $attempt,
+                            'wait_seconds' => $waitSeconds,
+                            'status' => $response->status(),
+                        ]);
+                        sleep($waitSeconds);
+
+                        continue;
+                    }
+                }
+
+                // Error 4xx - no reintentar
+                throw new \Exception("Error HTTP {$response->status()}: {$response->body()}");
+            } catch (\Illuminate\Http\Client\ConnectionException $e) {
+                $attempt++;
+                $lastException = $e;
+
+                if ($attempt < $maxRetries) {
+                    $waitSeconds = pow(2, $attempt);
+                    Log::warning('ExternalApiSyncService: Error de conexión, reintentando', [
+                        'attempt' => $attempt,
+                        'wait_seconds' => $waitSeconds,
+                        'error' => $e->getMessage(),
+                    ]);
+                    sleep($waitSeconds);
+
+                    continue;
+                }
+            }
+        }
+
+        throw $lastException ?? new \Exception('Error desconocido después de reintentos');
     }
 
     /**
