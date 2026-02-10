@@ -44,6 +44,9 @@ class ExternalApiSyncService
     /**
      * Sincroniza prospectos desde una fuente externa.
      *
+     * PRIMER SYNC (sin last_synced_at): Hace sync status por status para no saturar la API.
+     * SYNCS SIGUIENTES: Sync incremental, solo trae registros nuevos.
+     *
      * @param  ExternalApiSource  $source  La fuente a sincronizar
      * @param  int|null  $userId  ID del usuario que ejecuta (null = sistema)
      * @return array{lotes: array<Lote>, total_prospectos: int, nuevos: int, actualizados: int, omitidos_en_flujo: int}
@@ -52,10 +55,13 @@ class ExternalApiSyncService
      */
     public function sync(ExternalApiSource $source, ?int $userId = null): array
     {
+        $isFirstSync = $source->last_synced_at === null;
+
         Log::info('ExternalApiSyncService: Iniciando sincronización', [
             'source' => $source->name,
             'endpoint' => $source->endpoint_url,
             'clasificacion_field' => $source->clasificacion_field,
+            'is_first_sync' => $isFirstSync,
         ]);
 
         try {
@@ -65,16 +71,17 @@ class ExternalApiSyncService
             // 2. Cargar IDs de prospectos ya en flujos activos
             $this->loadProspectosEnFlujoActivo();
 
-            // 3. Llamar a la API externa
-            $data = $this->fetchFromApi($source);
+            // 3. Si es primer sync Y tiene clasificación, hacer sync por status
+            if ($isFirstSync && $source->tieneClasificacion() && ! empty($source->clasificacion_values)) {
+                $resultado = $this->syncPorClasificacion($source, $userId ?? 1);
+            } else {
+                // Sync normal (incremental o sin clasificación)
+                $data = $this->fetchFromApi($source);
+                $grupos = $this->agruparPorClasificacion($data, $source);
+                $resultado = $this->procesarGrupos($grupos, $source, $userId ?? 1);
+            }
 
-            // 4. Agrupar por clasificación (si está configurada)
-            $grupos = $this->agruparPorClasificacion($data, $source);
-
-            // 5. Procesar cada grupo como un lote separado
-            $resultado = $this->procesarGrupos($grupos, $source, $userId ?? 1);
-
-            // 6. Marcar la fuente como sincronizada
+            // 4. Marcar la fuente como sincronizada
             $source->markAsSynced($resultado['total_prospectos']);
 
             Log::info('ExternalApiSyncService: Sincronización completada', [
@@ -98,6 +105,166 @@ class ExternalApiSyncService
 
             throw $e;
         }
+    }
+
+    /**
+     * Sync por clasificación para primer sync (carga inicial).
+     * Hace un sync separado por cada valor de clasificación con pausas entre cada uno.
+     */
+    private function syncPorClasificacion(ExternalApiSource $source, int $userId): array
+    {
+        $clasificacionValues = $source->clasificacion_values;
+        $valoresAExcluir = $this->getValoresAExcluir($source);
+        $pausaEntreStatus = 30; // 30 segundos entre cada status
+
+        $lotes = [];
+        $totalProspectos = 0;
+        $totalNuevos = 0;
+        $totalActualizados = 0;
+        $totalOmitidosEnFlujo = 0;
+
+        $fieldMapping = $source->getFieldMappingWithDefaults();
+        $tiposProspecto = $this->loadTiposProspecto();
+
+        foreach ($clasificacionValues as $index => $clasificacionValue) {
+            // Saltar valores excluidos (ej: "pagado")
+            if (in_array($clasificacionValue, $valoresAExcluir, true)) {
+                Log::info("ExternalApiSyncService: Saltando clasificación excluida: {$clasificacionValue}");
+
+                continue;
+            }
+
+            Log::info("ExternalApiSyncService: Sincronizando status '{$clasificacionValue}'", [
+                'progreso' => ($index + 1).'/'.count($clasificacionValues),
+            ]);
+
+            try {
+                // Fetch solo este status
+                $data = $this->fetchFromApiByStatus($source, $clasificacionValue);
+
+                if (empty($data)) {
+                    Log::info("ExternalApiSyncService: No hay registros para status '{$clasificacionValue}'");
+
+                    continue;
+                }
+
+                // Crear lote para este status
+                $lote = $source->obtenerOCrearLote($clasificacionValue, $userId);
+
+                // Crear importación
+                $importacion = $this->createImportacion($source, $lote, $userId, count($data));
+
+                // Procesar prospectos
+                $resultado = $this->processProspectos(
+                    $importacion,
+                    $data,
+                    $fieldMapping,
+                    $tiposProspecto,
+                    $source
+                );
+
+                // Finalizar
+                $this->finalizeImportacion($importacion, $resultado);
+                $lote->recalcularTotales();
+                $lote->update(['estado' => 'completado']);
+
+                $lotes[] = $lote;
+                $totalProspectos += $resultado['exitosos'];
+                $totalNuevos += $resultado['nuevos'];
+                $totalActualizados += $resultado['actualizados'];
+                $totalOmitidosEnFlujo += $resultado['omitidos_en_flujo'];
+
+                Log::info("ExternalApiSyncService: Status '{$clasificacionValue}' completado", [
+                    'prospectos' => $resultado['exitosos'],
+                    'nuevos' => $resultado['nuevos'],
+                ]);
+
+            } catch (\Exception $e) {
+                Log::error("ExternalApiSyncService: Error en status '{$clasificacionValue}'", [
+                    'error' => $e->getMessage(),
+                ]);
+                // Continuar con el siguiente status
+            }
+
+            // Pausa entre status para no saturar la API
+            if ($index < count($clasificacionValues) - 1) {
+                Log::info("ExternalApiSyncService: Pausa de {$pausaEntreStatus} segundos antes del siguiente status");
+                sleep($pausaEntreStatus);
+            }
+        }
+
+        return [
+            'lotes' => $lotes,
+            'total_prospectos' => $totalProspectos,
+            'nuevos' => $totalNuevos,
+            'actualizados' => $totalActualizados,
+            'omitidos_en_flujo' => $totalOmitidosEnFlujo,
+        ];
+    }
+
+    /**
+     * Fetch de la API filtrando por un status específico.
+     */
+    private function fetchFromApiByStatus(ExternalApiSource $source, string $status): array
+    {
+        $allData = [];
+        $page = 1;
+        $limit = $source->sync_filters['limit'] ?? 100;
+        $maxPages = 500; // Límite por status
+        $delayBetweenPages = 1000; // 1 segundo entre páginas
+        $maxRetries = 3;
+
+        Log::info("ExternalApiSyncService: Fetch status '{$status}'", [
+            'limit_per_page' => $limit,
+        ]);
+
+        do {
+            $url = $source->endpoint_url;
+            $params = [
+                'limit' => $limit,
+                'page' => $page,
+                'status' => $status,
+            ];
+
+            $url .= (str_contains($url, '?') ? '&' : '?').http_build_query($params);
+
+            $response = $this->fetchWithRetry($url, $source->getRequestHeaders(), $maxRetries);
+
+            $data = $response->json('data') ?? $response->json();
+
+            if (! is_array($data)) {
+                throw new \Exception('La respuesta de la API no tiene el formato esperado');
+            }
+
+            $allData = array_merge($allData, $data);
+            $total = $response->json('total') ?? count($data);
+            $fetchedCount = count($data);
+
+            // Log cada 10 páginas
+            if ($page % 10 === 1 || $fetchedCount < $limit) {
+                Log::info("ExternalApiSyncService: Progreso status '{$status}'", [
+                    'page' => $page,
+                    'total_acumulado' => count($allData),
+                    'total_api' => $total,
+                    'progreso' => round((count($allData) / max($total, 1)) * 100, 1).'%',
+                ]);
+            }
+
+            $page++;
+            $hasMorePages = $fetchedCount >= $limit && count($allData) < $total && $page <= $maxPages;
+
+            if ($hasMorePages) {
+                usleep($delayBetweenPages * 1000);
+            }
+
+        } while ($hasMorePages);
+
+        Log::info("ExternalApiSyncService: Fetch status '{$status}' completado", [
+            'total_registros' => count($allData),
+            'paginas' => $page - 1,
+        ]);
+
+        return $allData;
     }
 
     /**
