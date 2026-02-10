@@ -273,8 +273,9 @@ class ExternalApiSyncService
             // Actualizar importación
             $this->finalizeImportacion($importacion, $resultado);
 
-            // Actualizar totales del lote
+            // Actualizar totales del lote y cerrar (los lotes de API se cierran automáticamente)
             $lote->recalcularTotales();
+            $lote->update(['estado' => 'completado']);
 
             $lotes[] = $lote;
             $totalProspectos += $resultado['exitosos'];
