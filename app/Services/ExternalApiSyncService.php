@@ -115,7 +115,7 @@ class ExternalApiSyncService
     {
         $clasificacionValues = $source->clasificacion_values;
         $valoresAExcluir = $this->getValoresAExcluir($source);
-        $pausaEntreStatus = 30; // 30 segundos entre cada status
+        $pausaEntreStatus = 60; // 60 segundos entre cada status para no saturar la API
 
         $lotes = [];
         $totalProspectos = 0;
@@ -211,8 +211,8 @@ class ExternalApiSyncService
         $page = 1;
         $limit = $source->sync_filters['limit'] ?? 100;
         $maxPages = 500; // Límite por status
-        $delayBetweenPages = 1000; // 1 segundo entre páginas
-        $maxRetries = 3;
+        $delayBetweenPages = 2000; // 2 segundos entre páginas para no saturar la API
+        $maxRetries = 5; // Más reintentos por si hay errores 502
 
         Log::info("ExternalApiSyncService: Fetch status '{$status}'", [
             'limit_per_page' => $limit,
