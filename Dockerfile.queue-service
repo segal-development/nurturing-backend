@@ -2,7 +2,7 @@
 # Dockerfile para Cloud Run Service - Queue Worker Persistente
 # =============================================================================
 
-FROM php:8.3-cli-alpine
+FROM php:8.4-cli-alpine
 
 # Instalar dependencias del sistema
 RUN apk add --no-cache \
@@ -35,7 +35,7 @@ RUN composer install --no-dev --no-scripts --no-autoloader --prefer-dist --ignor
 COPY . .
 
 # Generar autoloader optimizado
-RUN composer dump-autoload --optimize
+RUN composer dump-autoload --optimize --ignore-platform-reqs
 
 # =============================================================================
 # Configuración de Supervisor
