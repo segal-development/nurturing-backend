@@ -140,14 +140,14 @@ class ExternalApiSource extends Model
 
     /**
      * Genera el nombre del lote para un valor de clasificación.
-     * Ej: "IC_form_2026-02-10"
+     * NO incluye fecha para reutilizar el mismo lote en syncs futuros.
+     * Ej: "IC_rechazado"
      */
     public function generarNombreLote(string $clasificacionValue): string
     {
         $prefix = $this->lote_prefix ?: strtoupper(substr($this->name, 0, 3));
-        $fecha = now()->format('Y-m-d');
 
-        return "{$prefix}_{$clasificacionValue}_{$fecha}";
+        return "{$prefix}_{$clasificacionValue}";
     }
 
     /**
@@ -160,18 +160,18 @@ class ExternalApiSource extends Model
 
     /**
      * Obtiene o crea un lote para un valor de clasificación específico.
+     * Reutiliza lotes existentes de la misma fuente y clasificación.
      */
     public function obtenerOCrearLote(string $clasificacionValue, int $userId): Lote
     {
-        $nombreLote = $this->generarNombreLote($clasificacionValue);
-
+        // Buscar solo por source + clasificación (NO por nombre, que antes incluía fecha)
         return Lote::firstOrCreate(
             [
                 'external_api_source_id' => $this->id,
                 'clasificacion_value' => $clasificacionValue,
-                'nombre' => $nombreLote,
             ],
             [
+                'nombre' => $this->generarNombreLote($clasificacionValue),
                 'user_id' => $userId,
                 'estado' => 'abierto',
             ]

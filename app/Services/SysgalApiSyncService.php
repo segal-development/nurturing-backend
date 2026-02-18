@@ -297,16 +297,16 @@ class SysgalApiSyncService
     private function obtenerOCrearLote(ExternalApiSource $source, string $clasificacionValue, int $userId): Lote
     {
         $prefix = $source->lote_prefix ?: 'SG';
-        $fecha = now()->format('Y-m-d');
-        $nombreLote = "{$prefix}_{$clasificacionValue}_{$fecha}";
+        // NO incluir fecha - reutilizar el mismo lote para cada clasificación
+        $nombreLote = "{$prefix}_{$clasificacionValue}";
 
         return Lote::firstOrCreate(
             [
                 'external_api_source_id' => $source->id,
                 'clasificacion_value' => $clasificacionValue,
-                'nombre' => $nombreLote,
             ],
             [
+                'nombre' => $nombreLote,
                 'user_id' => $userId,
                 'estado' => 'abierto',
             ]
