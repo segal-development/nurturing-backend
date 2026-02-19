@@ -108,7 +108,7 @@ class FlujoController extends Controller
     public function show(Flujo $flujo): JsonResponse
     {
         $flujo->loadCount('prospectosEnFlujo');
-        
+
         $flujo->load([
             'tipoProspecto',
             'user',
@@ -153,6 +153,7 @@ class FlujoController extends Controller
             'descripcion' => 'nullable|string',
             'canal_envio' => 'sometimes|in:email,sms,ambos',
             'activo' => 'sometimes|boolean',
+            'auto_asignar_nuevos' => 'sometimes|boolean',
             'config_visual' => 'sometimes|array',
             'config_visual.nodes' => 'sometimes|array',
             'config_visual.edges' => 'sometimes|array',
@@ -172,6 +173,7 @@ class FlujoController extends Controller
                 'descripcion',
                 'canal_envio',
                 'activo',
+                'auto_asignar_nuevos',
                 'config_visual',
                 'config_structure',
             ]));
@@ -254,12 +256,12 @@ class FlujoController extends Controller
 
     /**
      * Add prospectos to flujo based on criteria.
-     * 
+     *
      * Supports multiple modes:
      * 1. By prospecto_ids: Specific list of prospect IDs
      * 2. By origen + tipo_prospecto_id: All prospects matching criteria
      * 3. By select_all_from_origin: All prospects from a given origin
-     * 
+     *
      * For large volumes (>100), uses async processing via Job.
      */
     public function agregarProspectos(Request $request, Flujo $flujo): JsonResponse
@@ -282,21 +284,21 @@ class FlujoController extends Controller
             // CASE 1: Select all from origin (async processing for large volumes)
             if ($selectAllFromOrigin && $origen) {
                 // Update flujo with origen if not set
-                if (!$flujo->origen && $origen) {
+                if (! $flujo->origen && $origen) {
                     $flujo->update(['origen' => $origen]);
                 }
-                if (!$flujo->tipo_prospecto_id && $tipoProspectoId) {
+                if (! $flujo->tipo_prospecto_id && $tipoProspectoId) {
                     $flujo->update(['tipo_prospecto_id' => $tipoProspectoId]);
                 }
 
                 // Count prospects matching criteria
                 $query = Prospecto::query()
-                    ->whereHas('importacion', fn($q) => $q->where('origen', $origen));
-                
+                    ->whereHas('importacion', fn ($q) => $q->where('origen', $origen));
+
                 if ($tipoProspectoId) {
                     // Check if it's the "Todos" type
                     $tipoProspecto = TipoProspecto::find($tipoProspectoId);
-                    if ($tipoProspecto && !$tipoProspecto->esTipoTodos()) {
+                    if ($tipoProspecto && ! $tipoProspecto->esTipoTodos()) {
                         $query->where('tipo_prospecto_id', $tipoProspectoId);
                     }
                 }
@@ -333,18 +335,19 @@ class FlujoController extends Controller
 
                 // Sync processing for small volumes
                 $prospectoIds = $query->pluck('id')->toArray();
+
                 return $this->agregarProspectosPorIds($flujo, $prospectoIds, $canalAsignado);
             }
 
             // CASE 2: Specific prospect IDs provided
             if ($request->filled('prospecto_ids')) {
                 $prospectoIds = $request->input('prospecto_ids');
-                
+
                 // Update flujo origen/tipo if needed
-                if (!$flujo->origen && $origen) {
+                if (! $flujo->origen && $origen) {
                     $flujo->update(['origen' => $origen]);
                 }
-                if (!$flujo->tipo_prospecto_id && $tipoProspectoId) {
+                if (! $flujo->tipo_prospecto_id && $tipoProspectoId) {
                     $flujo->update(['tipo_prospecto_id' => $tipoProspectoId]);
                 }
 
@@ -394,7 +397,7 @@ class FlujoController extends Controller
                     ->where('prospecto_id', $prospectoId)
                     ->exists();
 
-                if (!$existe) {
+                if (! $existe) {
                     ProspectoEnFlujo::create([
                         'flujo_id' => $flujo->id,
                         'prospecto_id' => $prospectoId,
@@ -670,7 +673,7 @@ class FlujoController extends Controller
     {
         // Resolve tipo_prospecto: required only when prospects are being assigned
         $tipoProspectoInput = $request->input('flujo.tipo_prospecto');
-        $hasProspects = !empty($request->input('prospectos.ids_seleccionados'))
+        $hasProspects = ! empty($request->input('prospectos.ids_seleccionados'))
             || $request->boolean('prospectos.select_all_from_origin', false);
 
         $tipoProspecto = $tipoProspectoInput ? $this->findTipoProspecto($tipoProspectoInput) : null;
@@ -910,7 +913,7 @@ class FlujoController extends Controller
 
         // Solo filtrar por tipo si no es "Todos"
         $tipoProspecto = $flujo->tipoProspecto;
-        if ($tipoProspecto && !$tipoProspecto->esTipoTodos()) {
+        if ($tipoProspecto && ! $tipoProspecto->esTipoTodos()) {
             $query->where('tipo_prospecto_id', $flujo->tipo_prospecto_id);
         }
 

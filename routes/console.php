@@ -32,20 +32,20 @@ Artisan::command('inspire', function () {
 // ============================================================================
 Schedule::call(function () {
     Log::info('Scheduler: Iniciando verificación de importaciones stuck');
-    
-    $service = new ImportacionRecoveryService();
+
+    $service = new ImportacionRecoveryService;
     $result = $service->recoverStuckImportations();
-    
+
     if ($result['recovered'] > 0) {
-        Log::warning('Scheduler: Recuperadas ' . $result['recovered'] . ' importaciones stuck', [
+        Log::warning('Scheduler: Recuperadas '.$result['recovered'].' importaciones stuck', [
             'importacion_ids' => $result['importaciones'],
         ]);
     }
-    
+
     return $result;
 })->everyMinute()
-  ->name('importaciones:auto-recovery')
-  ->withoutOverlapping();
+    ->name('importaciones:auto-recovery')
+    ->withoutOverlapping();
 
 // ============================================================================
 // VERIFICACIÓN DE IMPORTACIONES PENDIENTES
@@ -56,44 +56,44 @@ Schedule::call(function () {
         ->where('created_at', '<', now()->subMinutes(2)) // Más de 2 minutos pendiente
         ->whereNotNull('ruta_archivo')
         ->get();
-    
+
     if ($pendientes->isEmpty()) {
         return ['requeued' => 0];
     }
-    
+
     $requeued = [];
-    
+
     foreach ($pendientes as $importacion) {
         // Verificar si ya hay un job en cola
         $hasJob = DB::table('jobs')
             ->where('payload', 'like', '%ProcesarImportacionJob%')
-            ->where('payload', 'like', '%"importacionId";i:' . $importacion->id . ';%')
+            ->where('payload', 'like', '%"importacionId";i:'.$importacion->id.';%')
             ->exists();
-        
+
         if ($hasJob) {
             continue;
         }
-        
+
         // Re-encolar
         $disk = $importacion->metadata['disk'] ?? 'gcs';
-        
+
         \App\Jobs\ProcesarImportacionJob::dispatch(
             $importacion->id,
             $importacion->ruta_archivo,
             $disk
         );
-        
+
         $requeued[] = $importacion->id;
-        
+
         Log::warning('Scheduler: Re-encolada importación pendiente sin job', [
             'importacion_id' => $importacion->id,
         ]);
     }
-    
+
     return ['requeued' => count($requeued), 'importaciones' => $requeued];
 })->everyMinute()
-  ->name('importaciones:check-pendientes')
-  ->withoutOverlapping();
+    ->name('importaciones:check-pendientes')
+    ->withoutOverlapping();
 
 // ============================================================================
 // ACTUALIZACIÓN DE ESTADO DE LOTES
@@ -102,15 +102,15 @@ Schedule::call(function () {
 Schedule::call(function () {
     $lotesActivos = \App\Models\Lote::whereIn('estado', ['abierto', 'procesando'])
         ->get();
-    
+
     foreach ($lotesActivos as $lote) {
         $lote->recalcularTotales();
     }
-    
+
     return ['lotes_actualizados' => $lotesActivos->count()];
 })->everyMinute()
-  ->name('lotes:recalcular-totales')
-  ->withoutOverlapping();
+    ->name('lotes:recalcular-totales')
+    ->withoutOverlapping();
 
 // ============================================================================
 // PROCESAR COLA DE JOBS
@@ -118,13 +118,13 @@ Schedule::call(function () {
 // Esto es un fallback cuando el queue worker de Cloud Run no está corriendo
 // ============================================================================
 Schedule::command('queue:work --stop-when-empty --tries=1 --timeout=0 --max-jobs=10')
-  ->everyMinute()
-  ->name('queue:process-pending')
-  ->withoutOverlapping()
-  ->when(function () {
-      // Solo ejecutar si hay jobs en cola
-      return DB::table('jobs')->exists();
-  });
+    ->everyMinute()
+    ->name('queue:process-pending')
+    ->withoutOverlapping()
+    ->when(function () {
+        // Solo ejecutar si hay jobs en cola
+        return DB::table('jobs')->exists();
+    });
 
 // ============================================================================
 // AGREGACIÓN MENSUAL DE ENVÍOS
@@ -132,15 +132,15 @@ Schedule::command('queue:work --stop-when-empty --tries=1 --timeout=0 --max-jobs
 // Esto pre-calcula totales para evitar COUNT(*) sobre millones de registros.
 // ============================================================================
 Schedule::command('envios:agregar-mensuales')
-  ->monthlyOn(1, '03:00')
-  ->name('envios:agregar-mensuales')
-  ->withoutOverlapping()
-  ->onSuccess(function () {
-      Log::info('Scheduler: Agregación mensual de envíos completada');
-  })
-  ->onFailure(function () {
-      Log::error('Scheduler: Falló la agregación mensual de envíos');
-  });
+    ->monthlyOn(1, '03:00')
+    ->name('envios:agregar-mensuales')
+    ->withoutOverlapping()
+    ->onSuccess(function () {
+        Log::info('Scheduler: Agregación mensual de envíos completada');
+    })
+    ->onFailure(function () {
+        Log::error('Scheduler: Falló la agregación mensual de envíos');
+    });
 
 // ============================================================================
 // LIMPIEZA MENSUAL DE DATOS
@@ -149,15 +149,15 @@ Schedule::command('envios:agregar-mensuales')
 // Política de retención: 3 meses.
 // ============================================================================
 Schedule::command('datos:limpiar --ejecutar')
-  ->monthlyOn(1, '05:00')
-  ->name('datos:limpiar')
-  ->withoutOverlapping()
-  ->onSuccess(function () {
-      Log::info('Scheduler: Limpieza mensual completada');
-  })
-  ->onFailure(function () {
-      Log::error('Scheduler: Falló la limpieza mensual');
-  });
+    ->monthlyOn(1, '05:00')
+    ->name('datos:limpiar')
+    ->withoutOverlapping()
+    ->onSuccess(function () {
+        Log::info('Scheduler: Limpieza mensual completada');
+    })
+    ->onFailure(function () {
+        Log::error('Scheduler: Falló la limpieza mensual');
+    });
 
 // ============================================================================
 // SINCRONIZACIÓN DE DESUSCRIPCIONES DESDE ATHENA
@@ -165,15 +165,15 @@ Schedule::command('datos:limpiar --ejecutar')
 // Las desuscripciones se registran en el sistema local para excluir prospectos.
 // ============================================================================
 Schedule::job(new \App\Jobs\SincronizarDesuscripcionesAthenaJob(7))
-  ->hourly()
-  ->name('athena:sincronizar-desuscripciones')
-  ->withoutOverlapping()
-  ->onSuccess(function () {
-      Log::info('Scheduler: Sincronización de desuscripciones de Athena completada');
-  })
-  ->onFailure(function () {
-      Log::error('Scheduler: Falló sincronización de desuscripciones de Athena');
-  });
+    ->hourly()
+    ->name('athena:sincronizar-desuscripciones')
+    ->withoutOverlapping()
+    ->onSuccess(function () {
+        Log::info('Scheduler: Sincronización de desuscripciones de Athena completada');
+    })
+    ->onFailure(function () {
+        Log::error('Scheduler: Falló sincronización de desuscripciones de Athena');
+    });
 
 // ============================================================================
 // RESUMEN DIARIO DE MÉTRICAS
@@ -198,15 +198,15 @@ Schedule::job(new \App\Jobs\SincronizarDesuscripcionesAthenaJob(7))
 // Threshold: 30 minutos sin actividad.
 // ============================================================================
 Schedule::command('etapas:recover-stuck --minutes=30')
-  ->everyTenMinutes()
-  ->name('etapas:recover-stuck')
-  ->withoutOverlapping()
-  ->onSuccess(function () {
-      Log::info('Scheduler: Verificación de etapas estancadas completada');
-  })
-  ->onFailure(function () {
-      Log::error('Scheduler: Falló la verificación de etapas estancadas');
-  });
+    ->everyTenMinutes()
+    ->name('etapas:recover-stuck')
+    ->withoutOverlapping()
+    ->onSuccess(function () {
+        Log::info('Scheduler: Verificación de etapas estancadas completada');
+    })
+    ->onFailure(function () {
+        Log::error('Scheduler: Falló la verificación de etapas estancadas');
+    });
 
 // ============================================================================
 // SINCRONIZACIÓN SEMANAL DE APIs EXTERNAS (Informes Comerciales, Sysgal, etc.)
@@ -214,12 +214,29 @@ Schedule::command('etapas:recover-stuck --minutes=30')
 // Usa sync incremental: solo trae registros nuevos desde el último sync.
 // ============================================================================
 Schedule::job(new \App\Jobs\SyncExternalApiJob(null, 1)) // null = todas las activas, 1 = user_id sistema
-  ->weeklyOn(5, '06:00') // Viernes a las 6:00 AM
-  ->name('external-api:sync-weekly')
-  ->withoutOverlapping()
-  ->onSuccess(function () {
-      Log::info('Scheduler: Sincronización semanal de APIs externas completada');
-  })
-  ->onFailure(function () {
-      Log::error('Scheduler: Falló la sincronización semanal de APIs externas');
-  });
+    ->weeklyOn(5, '06:00') // Viernes a las 6:00 AM
+    ->name('external-api:sync-weekly')
+    ->withoutOverlapping()
+    ->onSuccess(function () {
+        Log::info('Scheduler: Sincronización semanal de APIs externas completada');
+    })
+    ->onFailure(function () {
+        Log::error('Scheduler: Falló la sincronización semanal de APIs externas');
+    });
+
+// ============================================================================
+// AUTO-ASIGNACIÓN DE NUEVOS PROSPECTOS A FLUJOS
+// Todos los viernes a las 7:00 AM (después del sync de APIs externas).
+// Busca flujos con auto_asignar_nuevos=true y asigna prospectos nuevos
+// del mismo origen que aún no están en el flujo (empezando desde etapa 1).
+// ============================================================================
+Schedule::job(new \App\Jobs\AsignarNuevosProspectosAFlujoJob)
+    ->weeklyOn(5, '07:00') // Viernes a las 7:00 AM
+    ->name('flujos:auto-asignar-nuevos')
+    ->withoutOverlapping()
+    ->onSuccess(function () {
+        Log::info('Scheduler: Auto-asignación de nuevos prospectos completada');
+    })
+    ->onFailure(function () {
+        Log::error('Scheduler: Falló la auto-asignación de nuevos prospectos');
+    });

@@ -22,6 +22,7 @@ class Flujo extends Model
         'descripcion',
         'canal_envio',
         'activo',
+        'auto_asignar_nuevos',
         'estado_procesamiento',
         'user_id',
         'metadata',
@@ -33,6 +34,7 @@ class Flujo extends Model
     {
         return [
             'activo' => 'boolean',
+            'auto_asignar_nuevos' => 'boolean',
             'metadata' => 'array',
             'config_visual' => 'array',
             'config_structure' => 'array',
