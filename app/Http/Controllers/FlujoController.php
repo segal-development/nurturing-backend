@@ -759,6 +759,202 @@ class FlujoController extends Controller
     }
 
     /**
+     * Get comprehensive statistics for a flujo.
+     *
+     * Returns:
+     * - Funnel metrics (prospectos → enviados → abiertos → clicks)
+     * - Rates (apertura, click, fallo)
+     * - Cost metrics
+     * - Per-stage breakdown
+     *
+     * GET /api/flujos/{flujo}/estadisticas-completas
+     */
+    public function estadisticasCompletas(Flujo $flujo): JsonResponse
+    {
+        // Get aggregated send stats for this flujo
+        $enviosStats = DB::table('envios')
+            ->where('flujo_id', $flujo->id)
+            ->select(
+                DB::raw('COUNT(*) as total'),
+                DB::raw("SUM(CASE WHEN estado IN ('enviado', 'abierto', 'clickeado') THEN 1 ELSE 0 END) as enviados"),
+                DB::raw("SUM(CASE WHEN estado = 'fallido' THEN 1 ELSE 0 END) as fallidos"),
+                DB::raw("SUM(CASE WHEN estado IN ('abierto', 'clickeado') THEN 1 ELSE 0 END) as abiertos"),
+                DB::raw("SUM(CASE WHEN estado = 'clickeado' THEN 1 ELSE 0 END) as clickeados"),
+                DB::raw("SUM(CASE WHEN estado = 'pendiente' THEN 1 ELSE 0 END) as pendientes"),
+                DB::raw("SUM(CASE WHEN canal = 'email' AND estado IN ('enviado', 'abierto', 'clickeado') THEN 1 ELSE 0 END) as emails_enviados"),
+                DB::raw("SUM(CASE WHEN canal = 'sms' AND estado IN ('enviado', 'abierto', 'clickeado') THEN 1 ELSE 0 END) as sms_enviados")
+            )
+            ->first();
+
+        // Get prospect stats
+        $prospectosStats = DB::table('prospecto_en_flujo')
+            ->where('flujo_id', $flujo->id)
+            ->select(
+                DB::raw('COUNT(*) as total'),
+                DB::raw("SUM(CASE WHEN estado = 'completado' THEN 1 ELSE 0 END) as completados"),
+                DB::raw("SUM(CASE WHEN estado = 'en_proceso' THEN 1 ELSE 0 END) as en_proceso"),
+                DB::raw("SUM(CASE WHEN estado = 'pendiente' THEN 1 ELSE 0 END) as pendientes"),
+                DB::raw("SUM(CASE WHEN estado = 'cancelado' THEN 1 ELSE 0 END) as cancelados")
+            )
+            ->first();
+
+        // Get cost info from flujo metadata
+        $costos = $flujo->metadata['costos_vigentes'] ?? null;
+        $costoTotal = $costos['costo_total'] ?? 0;
+
+        // Get per-stage stats
+        $configVisual = $flujo->config_visual;
+        $stageStats = [];
+
+        if ($configVisual && ! empty($configVisual['nodes'])) {
+            // Get all etapa IDs grouped by node_id
+            $etapasPorNodeId = DB::table('flujo_ejecucion_etapas as fee')
+                ->join('flujo_ejecuciones as fe', 'fee.flujo_ejecucion_id', '=', 'fe.id')
+                ->where('fe.flujo_id', $flujo->id)
+                ->select('fee.id as etapa_id', 'fee.node_id')
+                ->get()
+                ->groupBy('node_id');
+
+            // Get stats for all etapas
+            $allEtapaIds = $etapasPorNodeId->flatten()->pluck('etapa_id')->toArray();
+
+            $enviosPorEtapa = [];
+            if (! empty($allEtapaIds)) {
+                $enviosPorEtapa = DB::table('envios')
+                    ->select(
+                        'flujo_ejecucion_etapa_id',
+                        'estado',
+                        DB::raw('count(*) as total')
+                    )
+                    ->whereIn('flujo_ejecucion_etapa_id', $allEtapaIds)
+                    ->groupBy('flujo_ejecucion_etapa_id', 'estado')
+                    ->get()
+                    ->groupBy('flujo_ejecucion_etapa_id');
+            }
+
+            // Build per-stage stats
+            foreach ($configVisual['nodes'] as $node) {
+                if (($node['type'] ?? '') !== 'stage') {
+                    continue;
+                }
+
+                $nodeId = $node['id'];
+                $label = $node['data']['label'] ?? $nodeId;
+                $tipoMensaje = $node['data']['tipo_mensaje'] ?? 'email';
+                $orden = $node['data']['orden'] ?? 0;
+
+                // Get etapa IDs for this node
+                $nodeEtapaIds = ($etapasPorNodeId[$nodeId] ?? collect())->pluck('etapa_id')->toArray();
+
+                // Aggregate stats
+                $enviado = 0;
+                $fallido = 0;
+                $abierto = 0;
+                $clickeado = 0;
+
+                foreach ($nodeEtapaIds as $etapaId) {
+                    $stats = $enviosPorEtapa[$etapaId] ?? collect();
+                    $enviado += $stats->whereIn('estado', ['enviado', 'abierto', 'clickeado'])->sum('total');
+                    $fallido += $stats->where('estado', 'fallido')->sum('total');
+                    $abierto += $stats->whereIn('estado', ['abierto', 'clickeado'])->sum('total');
+                    $clickeado += $stats->where('estado', 'clickeado')->sum('total');
+                }
+
+                $tasaApertura = $enviado > 0 ? round(($abierto / $enviado) * 100, 1) : 0;
+                $tasaClick = $enviado > 0 ? round(($clickeado / $enviado) * 100, 1) : 0;
+
+                $stageStats[] = [
+                    'node_id' => $nodeId,
+                    'label' => $label,
+                    'tipo_mensaje' => $tipoMensaje,
+                    'orden' => $orden,
+                    'enviados' => $enviado,
+                    'fallidos' => $fallido,
+                    'abiertos' => in_array($tipoMensaje, ['email', 'ambos']) ? $abierto : null,
+                    'clickeados' => in_array($tipoMensaje, ['email', 'ambos']) ? $clickeado : null,
+                    'tasa_apertura' => in_array($tipoMensaje, ['email', 'ambos']) ? $tasaApertura : null,
+                    'tasa_click' => in_array($tipoMensaje, ['email', 'ambos']) ? $tasaClick : null,
+                ];
+            }
+
+            // Sort by orden
+            usort($stageStats, fn ($a, $b) => ($a['orden'] ?? 0) <=> ($b['orden'] ?? 0));
+        }
+
+        // Calculate rates
+        $totalEnviados = $enviosStats->enviados ?? 0;
+        $totalAbiertos = $enviosStats->abiertos ?? 0;
+        $totalClickeados = $enviosStats->clickeados ?? 0;
+        $totalFallidos = $enviosStats->fallidos ?? 0;
+        $totalProspectos = $prospectosStats->total ?? 0;
+        $prospectosCompletados = $prospectosStats->completados ?? 0;
+
+        $tasaApertura = $totalEnviados > 0 ? round(($totalAbiertos / $totalEnviados) * 100, 1) : 0;
+        $tasaClick = $totalEnviados > 0 ? round(($totalClickeados / $totalEnviados) * 100, 1) : 0;
+        $tasaFallo = ($totalEnviados + $totalFallidos) > 0
+            ? round(($totalFallidos / ($totalEnviados + $totalFallidos)) * 100, 1)
+            : 0;
+        $costoPorConversion = $prospectosCompletados > 0
+            ? round($costoTotal / $prospectosCompletados, 2)
+            : 0;
+
+        return response()->json([
+            'error' => false,
+            'data' => [
+                // Summary metrics (cards)
+                'resumen' => [
+                    'tasa_apertura' => $tasaApertura,
+                    'tasa_click' => $tasaClick,
+                    'tasa_fallo' => $tasaFallo,
+                    'costo_total' => round($costoTotal, 2),
+                    'costo_por_conversion' => $costoPorConversion,
+                    'emails_enviados' => $enviosStats->emails_enviados ?? 0,
+                    'sms_enviados' => $enviosStats->sms_enviados ?? 0,
+                ],
+                // Funnel data
+                'funnel' => [
+                    'prospectos' => $totalProspectos,
+                    'enviados' => $totalEnviados,
+                    'abiertos' => $totalAbiertos,
+                    'clickeados' => $totalClickeados,
+                    'conversiones' => $prospectosCompletados,
+                    // Rates between steps
+                    'tasa_envio' => $totalProspectos > 0
+                        ? round(($totalEnviados / $totalProspectos) * 100, 1)
+                        : 0,
+                    'tasa_apertura' => $tasaApertura,
+                    'tasa_click_sobre_abiertos' => $totalAbiertos > 0
+                        ? round(($totalClickeados / $totalAbiertos) * 100, 1)
+                        : 0,
+                    'tasa_conversion' => $totalProspectos > 0
+                        ? round(($prospectosCompletados / $totalProspectos) * 100, 1)
+                        : 0,
+                ],
+                // Per-stage breakdown
+                'etapas' => $stageStats,
+                // Totals
+                'totales' => [
+                    'envios' => [
+                        'total' => $enviosStats->total ?? 0,
+                        'enviados' => $totalEnviados,
+                        'fallidos' => $totalFallidos,
+                        'pendientes' => $enviosStats->pendientes ?? 0,
+                        'abiertos' => $totalAbiertos,
+                        'clickeados' => $totalClickeados,
+                    ],
+                    'prospectos' => [
+                        'total' => $totalProspectos,
+                        'completados' => $prospectosCompletados,
+                        'en_proceso' => $prospectosStats->en_proceso ?? 0,
+                        'pendientes' => $prospectosStats->pendientes ?? 0,
+                        'cancelados' => $prospectosStats->cancelados ?? 0,
+                    ],
+                ],
+            ],
+        ]);
+    }
+
+    /**
      * Get cost statistics for all flujos.
      */
     public function estadisticasCostos(): JsonResponse
