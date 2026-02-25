@@ -2,11 +2,9 @@
 
 namespace App\Http\Controllers;
 
-use App\Jobs\EnviarEtapaJob;
 use App\Models\Flujo;
 use App\Models\FlujoEjecucion;
 use App\Models\FlujoEjecucionEtapa;
-use App\Models\FlujoJob;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -48,11 +46,11 @@ class FlujoEjecucionController extends Controller
 
         // Si use_all_prospectos es true, obtener IDs de la BD
         $prospectoIds = $request->prospectos_ids ?? [];
-        
+
         if ($request->boolean('use_all_prospectos', false)) {
             // Obtener todos los prospectos_ids del flujo de la BD (sin cargar modelos)
             $prospectoIds = $flujo->prospectosEnFlujo()->pluck('prospecto_id')->toArray();
-            
+
             Log::info('FlujoEjecucion: Usando todos los prospectos del flujo', [
                 'flujo_id' => $flujo->id,
                 'total_prospectos' => count($prospectoIds),
@@ -306,7 +304,7 @@ class FlujoEjecucionController extends Controller
             // ✅ ARQUITECTURA SIMPLIFICADA: No despachamos jobs con delay
             // El cron EjecutarNodosProgramados es el ÚNICO que ejecuta nodos
             // cuando fecha_proximo_nodo <= now()
-            // 
+            //
             // Esto elimina:
             // - Race conditions entre batch callbacks y cron
             // - Jobs stuck porque available_at está en el futuro (Cloud Run no tiene worker permanente)
@@ -328,7 +326,7 @@ class FlujoEjecucionController extends Controller
                     'proximo_nodo' => $primeraEtapa['id'],
                     'fecha_proximo_nodo' => $fechaEjecucionPrimeraEtapa,
                     'prospectos_count' => count($request->prospectos_ids),
-                    'sera_ejecutado_inmediatamente' => !$fechaEjecucionPrimeraEtapa->isFuture(),
+                    'sera_ejecutado_inmediatamente' => ! $fechaEjecucionPrimeraEtapa->isFuture(),
                 ]);
             }
 
@@ -426,6 +424,7 @@ class FlujoEjecucionController extends Controller
             $arr = $ejecucion->toArray();
             $arr['prospectos_count'] = count($ejecucion->prospectos_ids ?? []);
             unset($arr['prospectos_ids']);
+
             return $arr;
         });
 
@@ -555,12 +554,12 @@ class FlujoEjecucionController extends Controller
 
         // Tiempo estimado restante
         $restantes = $totalProspectos - $procesados;
-        
+
         // Si hay muy pocos envíos en la última hora pero quedan muchos pendientes,
         // puede ser que el proceso se detuvo o los restantes son prospectos sin email
         $velocidadPorHora = $enviosUltimaHora > 100 ? $enviosUltimaHora : 9000;
         $horasRestantes = $restantes > 0 ? round($restantes / $velocidadPorHora, 1) : 0;
-        
+
         // Determinar texto de tiempo restante
         $tiempoTexto = 'Completado';
         if ($restantes > 0) {
@@ -729,10 +728,10 @@ class FlujoEjecucionController extends Controller
 
             // Calcular progreso de envíos basado en la etapa en ejecución
             $totalProspectos = count($ejecucion->prospectos_ids ?? []);
-            
+
             // Buscar la etapa actualmente en ejecución
             $etapaEnEjecucion = $ejecucion->etapas->firstWhere('estado', 'executing');
-            
+
             // Si hay una etapa ejecutando, mostrar progreso de ESA etapa
             // Si no, mostrar el progreso general (todas las etapas completadas)
             if ($etapaEnEjecucion) {
@@ -745,7 +744,7 @@ class FlujoEjecucionController extends Controller
                         SUM(CASE WHEN estado = 'pendiente' THEN 1 ELSE 0 END) as pendientes
                     ")
                     ->first();
-                
+
                 // Usar el total de envíos de la etapa como base (no todos los prospectos pasan por todas las etapas)
                 $baseProspectos = $envioStats->total ?? $totalProspectos;
             } else {
@@ -759,7 +758,7 @@ class FlujoEjecucionController extends Controller
                         SUM(CASE WHEN estado = 'pendiente' THEN 1 ELSE 0 END) as pendientes
                     ")
                     ->first();
-                
+
                 // Base = prospectos × etapas completadas (para que el % tenga sentido)
                 $etapasCompletadasCount = $ejecucion->etapas->whereIn('estado', ['completed', 'executing'])->count();
                 $baseProspectos = $totalProspectos * max(1, $etapasCompletadasCount);
@@ -771,10 +770,10 @@ class FlujoEjecucionController extends Controller
             $procesados = $exitosos + $fallidos;
 
             // Calcular velocidad (envíos de la etapa actual en última hora)
-            $etapaIdsParaVelocidad = $etapaEnEjecucion 
-                ? [$etapaEnEjecucion->id] 
+            $etapaIdsParaVelocidad = $etapaEnEjecucion
+                ? [$etapaEnEjecucion->id]
                 : $ejecucion->etapas->pluck('id')->toArray();
-            
+
             $enviosUltimaHora = \DB::table('envios')
                 ->whereIn('flujo_ejecucion_etapa_id', $etapaIdsParaVelocidad)
                 ->where('created_at', '>=', now()->subHour())
@@ -783,12 +782,12 @@ class FlujoEjecucionController extends Controller
 
             // Tiempo estimado restante (basado en la etapa actual)
             $restantes = $baseProspectos - $procesados;
-            
+
             // Si hay muy pocos envíos en la última hora pero quedan muchos pendientes,
             // puede ser que el proceso se detuvo o los restantes son prospectos sin email
             $velocidadPorHora = $enviosUltimaHora > 100 ? $enviosUltimaHora : 9000;
             $horasRestantes = $restantes > 0 ? round($restantes / $velocidadPorHora, 1) : 0;
-            
+
             // Determinar texto de tiempo restante
             $tiempoTexto = 'Completado';
             if ($restantes > 0) {
@@ -963,6 +962,158 @@ class FlujoEjecucionController extends Controller
             'error' => false,
             'mensaje' => 'Ejecución cancelada exitosamente',
         ]);
+    }
+
+    /**
+     * Obtiene el estado de ejecución para múltiples flujos en una sola llamada.
+     *
+     * PERFORMANCE: Reduce de N*3 queries a 2 queries (activas + últimas).
+     * El frontend usaba 3 llamadas por flujo (activa, lista, detalle).
+     * Con 15 flujos = 45 requests. Ahora = 1 request.
+     *
+     * GET /api/flujos/ejecuciones-batch?ids=1,2,3,4,5
+     *
+     * @return JsonResponse Map de flujo_id => estado de ejecución
+     */
+    public function batchExecutionState(Request $request): JsonResponse
+    {
+        try {
+            $ids = $request->input('ids', '');
+
+            Log::info('batchExecutionState: Iniciando', ['ids_raw' => $ids]);
+
+            // Parsear IDs (pueden venir como string "1,2,3" o array)
+            if (is_string($ids)) {
+                $flujoIds = array_filter(array_map('intval', explode(',', $ids)));
+            } else {
+                $flujoIds = array_filter(array_map('intval', (array) $ids));
+            }
+
+            Log::info('batchExecutionState: IDs parseados', ['flujoIds' => $flujoIds]);
+
+            if (empty($flujoIds)) {
+                return response()->json([
+                    'error' => false,
+                    'data' => [],
+                ]);
+            }
+
+            // Limitar a 50 flujos por request para evitar sobrecarga
+            $flujoIds = array_slice($flujoIds, 0, 50);
+
+            // Query 1: Obtener ejecuciones activas (in_progress o paused) para todos los flujos
+            $ejecucionesActivas = FlujoEjecucion::whereIn('flujo_id', $flujoIds)
+                ->whereIn('estado', ['in_progress', 'paused'])
+                ->with(['etapas' => function ($query) {
+                    $query->select([
+                        'id', 'flujo_ejecucion_id', 'node_id', 'estado',
+                        'ejecutado', 'fecha_programada', 'fecha_ejecucion',
+                    ])->orderBy('fecha_programada', 'asc');
+                }])
+                ->get()
+                ->keyBy('flujo_id');
+
+            Log::info('batchExecutionState: Ejecuciones activas', ['count' => $ejecucionesActivas->count()]);
+
+            // Query 2: Obtener última ejecución para flujos SIN ejecución activa
+            $flujosSinActiva = array_diff($flujoIds, $ejecucionesActivas->keys()->toArray());
+
+            $ultimasEjecuciones = collect();
+            if (! empty($flujosSinActiva)) {
+                // Subquery para obtener la última ejecución de cada flujo
+                $ultimasEjecuciones = FlujoEjecucion::whereIn('flujo_id', $flujosSinActiva)
+                    ->whereIn('id', function ($query) use ($flujosSinActiva) {
+                        $query->selectRaw('MAX(id)')
+                            ->from('flujo_ejecuciones')
+                            ->whereIn('flujo_id', $flujosSinActiva)
+                            ->groupBy('flujo_id');
+                    })
+                    ->with(['etapas' => function ($query) {
+                        $query->select([
+                            'id', 'flujo_ejecucion_id', 'node_id', 'estado',
+                            'ejecutado', 'fecha_programada', 'fecha_ejecucion',
+                        ])->orderBy('fecha_programada', 'asc');
+                    }])
+                    ->get()
+                    ->keyBy('flujo_id');
+            }
+
+            // Construir respuesta para cada flujo
+            $result = [];
+
+            foreach ($flujoIds as $flujoId) {
+                $ejecucionActiva = $ejecucionesActivas->get($flujoId);
+                $ultimaEjecucion = $ultimasEjecuciones->get($flujoId);
+
+                // Determinar cuál mostrar (prioridad a la activa)
+                $ejecucion = $ejecucionActiva ?? $ultimaEjecucion;
+
+                if (! $ejecucion) {
+                    $result[$flujoId] = [
+                        'tiene_ejecucion' => false,
+                        'tiene_ejecucion_activa' => false,
+                        'puede_ejecutar' => true,
+                        'ejecucion' => null,
+                    ];
+
+                    continue;
+                }
+
+                // Calcular progreso
+                $totalEtapas = $ejecucion->etapas->count();
+                $etapasCompletadas = $ejecucion->etapas->where('estado', 'completed')->count();
+                $etapasFallidas = $ejecucion->etapas->where('estado', 'failed')->count();
+
+                $progreso = [
+                    'porcentaje' => $totalEtapas > 0 ? round(($etapasCompletadas / $totalEtapas) * 100, 2) : 0,
+                    'completadas' => $etapasCompletadas,
+                    'total' => $totalEtapas,
+                    'fallidas' => $etapasFallidas,
+                ];
+
+                $tieneActiva = $ejecucionActiva !== null;
+                $puedeEjecutar = ! $tieneActiva && ! in_array($ejecucion->estado, ['in_progress', 'paused']);
+
+                $result[$flujoId] = [
+                    'tiene_ejecucion' => true,
+                    'tiene_ejecucion_activa' => $tieneActiva,
+                    'puede_ejecutar' => $puedeEjecutar,
+                    'ejecucion' => [
+                        'id' => $ejecucion->id,
+                        'estado' => $ejecucion->estado,
+                        'fecha_inicio_programada' => $ejecucion->fecha_inicio_programada,
+                        'fecha_inicio_real' => $ejecucion->fecha_inicio_real,
+                        'fecha_fin' => $ejecucion->fecha_fin,
+                        'prospectos_count' => count($ejecucion->prospectos_ids ?? []),
+                        'progreso' => $progreso,
+                        'costo_estimado' => $ejecucion->costo_estimado,
+                        'costo_real' => $ejecucion->costo_real,
+                        'etapas' => $ejecucion->etapas->map(fn ($e) => [
+                            'id' => $e->id,
+                            'node_id' => $e->node_id,
+                            'estado' => $e->estado,
+                            'ejecutado' => $e->ejecutado,
+                        ]),
+                    ],
+                ];
+            }
+
+            return response()->json([
+                'error' => false,
+                'data' => $result,
+            ]);
+        } catch (\Exception $e) {
+            Log::error('batchExecutionState: Error', [
+                'message' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return response()->json([
+                'error' => true,
+                'mensaje' => 'Error al obtener estado de ejecuciones',
+                'detalle' => $e->getMessage(),
+            ], 500);
+        }
     }
 
     /**
