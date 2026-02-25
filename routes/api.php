@@ -83,9 +83,11 @@ Route::middleware(['auth:sanctum', 'throttle:api'])->group(function () {
     ]);
 
     // Rutas de Flujos
+    // IMPORTANT: Rutas específicas ANTES del apiResource para evitar conflictos con {flujo}
     Route::get('/flujos/estadisticas-costos', [FlujoController::class, 'estadisticasCostos']);
     Route::get('/flujos/opciones-creacion', [FlujoController::class, 'opcionesCreacion']);
     Route::get('/flujos/opciones-filtrado', [FlujoController::class, 'opcionesFiltrado']);
+    Route::get('/flujos/ejecuciones-batch', [FlujoEjecucionController::class, 'batchExecutionState']);
     Route::post('/flujos/crear-con-prospectos', [FlujoController::class, 'crearFlujoConProspectos']);
     Route::get('/flujos/{flujo}/progreso', [FlujoController::class, 'progreso']);
     Route::post('/flujos/{flujo}/agregar-prospectos', [FlujoController::class, 'agregarProspectos']);
