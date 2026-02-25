@@ -629,6 +629,136 @@ class FlujoController extends Controller
     }
 
     /**
+     * Get aggregated send statistics per node for a flujo.
+     *
+     * Returns stats grouped by node_id across ALL executions:
+     * - For email: enviado, entregado, abierto, clickeado, fallido
+     * - For SMS: enviado, fallido
+     *
+     * GET /api/flujos/{flujo}/estadisticas-nodos
+     */
+    public function estadisticasNodos(Flujo $flujo): JsonResponse
+    {
+        // Get all node_ids from config_visual
+        $configVisual = $flujo->config_visual;
+        if (! $configVisual || empty($configVisual['nodes'])) {
+            return response()->json([
+                'error' => false,
+                'data' => [],
+            ]);
+        }
+
+        // Extract node info (id, type, tipo_mensaje) from config
+        $nodesInfo = collect($configVisual['nodes'])->mapWithKeys(function ($node) {
+            return [
+                $node['id'] => [
+                    'type' => $node['type'] ?? 'stage',
+                    'tipo_mensaje' => $node['data']['tipo_mensaje'] ?? 'email',
+                    'label' => $node['data']['label'] ?? $node['id'],
+                ],
+            ];
+        });
+
+        // Get all flujo_ejecucion_etapa IDs for this flujo, mapped by node_id
+        $etapasPorNodeId = DB::table('flujo_ejecucion_etapas as fee')
+            ->join('flujo_ejecuciones as fe', 'fee.flujo_ejecucion_id', '=', 'fe.id')
+            ->where('fe.flujo_id', $flujo->id)
+            ->select('fee.id as etapa_id', 'fee.node_id')
+            ->get()
+            ->groupBy('node_id');
+
+        if ($etapasPorNodeId->isEmpty()) {
+            // No executions yet, return empty stats for each node
+            $emptyStats = $nodesInfo->map(function ($info, $nodeId) {
+                $isEmail = in_array($info['tipo_mensaje'], ['email', 'ambos']);
+                $isSms = in_array($info['tipo_mensaje'], ['sms', 'ambos']);
+
+                return [
+                    'node_id' => $nodeId,
+                    'tipo_mensaje' => $info['tipo_mensaje'],
+                    'label' => $info['label'],
+                    'total_enviado' => 0,
+                    'total_fallido' => 0,
+                    'total_abierto' => $isEmail ? 0 : null,
+                    'total_clickeado' => $isEmail ? 0 : null,
+                ];
+            })->values();
+
+            return response()->json([
+                'error' => false,
+                'data' => $emptyStats,
+            ]);
+        }
+
+        // Get all etapa IDs
+        $allEtapaIds = $etapasPorNodeId->flatten()->pluck('etapa_id')->toArray();
+
+        // Query aggregated stats from envios table
+        $stats = DB::table('envios')
+            ->select(
+                'flujo_ejecucion_etapa_id',
+                'canal',
+                'estado',
+                DB::raw('count(*) as total')
+            )
+            ->whereIn('flujo_ejecucion_etapa_id', $allEtapaIds)
+            ->groupBy('flujo_ejecucion_etapa_id', 'canal', 'estado')
+            ->get();
+
+        // Build node_id -> stats mapping
+        $statsByNodeId = [];
+
+        foreach ($etapasPorNodeId as $nodeId => $etapas) {
+            $etapaIds = $etapas->pluck('etapa_id')->toArray();
+            $nodeStats = $stats->whereIn('flujo_ejecucion_etapa_id', $etapaIds);
+
+            // Aggregate by estado
+            $enviado = $nodeStats->whereIn('estado', ['enviado', 'abierto', 'clickeado'])->sum('total');
+            $fallido = $nodeStats->where('estado', 'fallido')->sum('total');
+            $abierto = $nodeStats->whereIn('estado', ['abierto', 'clickeado'])->sum('total');
+            $clickeado = $nodeStats->where('estado', 'clickeado')->sum('total');
+            $pendiente = $nodeStats->where('estado', 'pendiente')->sum('total');
+
+            $nodeInfo = $nodesInfo[$nodeId] ?? ['tipo_mensaje' => 'email', 'label' => $nodeId];
+            $isEmail = in_array($nodeInfo['tipo_mensaje'], ['email', 'ambos']);
+
+            $statsByNodeId[$nodeId] = [
+                'node_id' => $nodeId,
+                'tipo_mensaje' => $nodeInfo['tipo_mensaje'],
+                'label' => $nodeInfo['label'],
+                'total_pendiente' => $pendiente,
+                'total_enviado' => $enviado,
+                'total_fallido' => $fallido,
+                // Only include email-specific stats if it's an email node
+                'total_abierto' => $isEmail ? $abierto : null,
+                'total_clickeado' => $isEmail ? $clickeado : null,
+            ];
+        }
+
+        // Include nodes without executions
+        foreach ($nodesInfo as $nodeId => $info) {
+            if (! isset($statsByNodeId[$nodeId]) && $info['type'] === 'stage') {
+                $isEmail = in_array($info['tipo_mensaje'], ['email', 'ambos']);
+                $statsByNodeId[$nodeId] = [
+                    'node_id' => $nodeId,
+                    'tipo_mensaje' => $info['tipo_mensaje'],
+                    'label' => $info['label'],
+                    'total_pendiente' => 0,
+                    'total_enviado' => 0,
+                    'total_fallido' => 0,
+                    'total_abierto' => $isEmail ? 0 : null,
+                    'total_clickeado' => $isEmail ? 0 : null,
+                ];
+            }
+        }
+
+        return response()->json([
+            'error' => false,
+            'data' => array_values($statsByNodeId),
+        ]);
+    }
+
+    /**
      * Get cost statistics for all flujos.
      */
     public function estadisticasCostos(): JsonResponse

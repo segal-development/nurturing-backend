@@ -90,6 +90,7 @@ Route::middleware(['auth:sanctum', 'throttle:api'])->group(function () {
     Route::get('/flujos/ejecuciones-batch', [FlujoEjecucionController::class, 'batchExecutionState']);
     Route::post('/flujos/crear-con-prospectos', [FlujoController::class, 'crearFlujoConProspectos']);
     Route::get('/flujos/{flujo}/progreso', [FlujoController::class, 'progreso']);
+    Route::get('/flujos/{flujo}/estadisticas-nodos', [FlujoController::class, 'estadisticasNodos']);
     Route::post('/flujos/{flujo}/agregar-prospectos', [FlujoController::class, 'agregarProspectos']);
     Route::apiResource('flujos', FlujoController::class);
 
