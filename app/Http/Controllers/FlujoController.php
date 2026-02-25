@@ -124,13 +124,25 @@ class FlujoController extends Controller
             },
         ]);
 
-        // Calcular estadísticas del flujo
+        // Calcular estadísticas del flujo con UNA SOLA query (optimizado)
+        // Antes: 5 queries separadas. Ahora: 1 query con conditional aggregation
+        $stats = DB::table('prospecto_en_flujo')
+            ->where('flujo_id', $flujo->id)
+            ->selectRaw("
+                COUNT(*) as total,
+                COUNT(CASE WHEN estado = 'pendiente' THEN 1 END) as pendientes,
+                COUNT(CASE WHEN estado = 'en_proceso' THEN 1 END) as en_proceso,
+                COUNT(CASE WHEN completado = true THEN 1 END) as completados,
+                COUNT(CASE WHEN cancelado = true THEN 1 END) as cancelados
+            ")
+            ->first();
+
         $estadisticas = [
-            'total_prospectos' => $flujo->prospectosEnFlujo()->count(),
-            'prospectos_pendientes' => $flujo->prospectosEnFlujo()->where('estado', 'pendiente')->count(),
-            'prospectos_en_proceso' => $flujo->prospectosEnFlujo()->where('estado', 'en_proceso')->count(),
-            'prospectos_completados' => $flujo->prospectosEnFlujo()->where('completado', true)->count(),
-            'prospectos_cancelados' => $flujo->prospectosEnFlujo()->where('cancelado', true)->count(),
+            'total_prospectos' => $stats->total ?? 0,
+            'prospectos_pendientes' => $stats->pendientes ?? 0,
+            'prospectos_en_proceso' => $stats->en_proceso ?? 0,
+            'prospectos_completados' => $stats->completados ?? 0,
+            'prospectos_cancelados' => $stats->cancelados ?? 0,
             'total_etapas' => $flujo->flujoEtapas->count(),
             'total_condiciones' => $flujo->flujoCondiciones->count(),
             'total_ramificaciones' => $flujo->flujoRamificaciones->count(),

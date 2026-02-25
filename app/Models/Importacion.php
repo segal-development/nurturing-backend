@@ -6,12 +6,22 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Facades\Cache;
 
 class Importacion extends Model
 {
     use HasFactory;
 
     protected $table = 'importaciones';
+
+    /**
+     * Invalidar caché de opciones de filtrado cuando se crea/actualiza/elimina una importación.
+     */
+    protected static function booted(): void
+    {
+        static::saved(fn () => Cache::forget('prospectos:opciones_filtrado'));
+        static::deleted(fn () => Cache::forget('prospectos:opciones_filtrado'));
+    }
 
     protected $fillable = [
         'lote_id',

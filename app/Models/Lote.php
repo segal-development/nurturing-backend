@@ -7,12 +7,22 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasManyThrough;
+use Illuminate\Support\Facades\Cache;
 
 class Lote extends Model
 {
     use HasFactory;
 
     protected $table = 'lotes';
+
+    /**
+     * Invalidar caché de opciones de filtrado cuando se crea/actualiza/elimina un lote.
+     */
+    protected static function booted(): void
+    {
+        static::saved(fn () => Cache::forget('prospectos:opciones_filtrado'));
+        static::deleted(fn () => Cache::forget('prospectos:opciones_filtrado'));
+    }
 
     protected $fillable = [
         'nombre',

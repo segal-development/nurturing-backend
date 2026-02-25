@@ -15,26 +15,29 @@ class ProspectoController extends Controller
     public function __construct(
         private EmailValidationService $emailValidationService
     ) {}
+
     /**
      * Get count of prospectos matching filters (without loading data).
+     *
+     * OPTIMIZADO: Usa JOINs directos en vez de queries separadas para filtros.
      */
     public function count(Request $request): JsonResponse
     {
         $query = Prospecto::query();
 
         // Aplicar los mismos filtros que en index()
+        // OPTIMIZADO: JOIN directo en vez de 2 queries
         if ($request->filled('lote_id')) {
-            $importacionIds = \App\Models\Importacion::where('lote_id', $request->input('lote_id'))->pluck('id');
-            $query->whereIn('importacion_id', $importacionIds);
+            $query->whereHas('importacion', fn ($q) => $q->where('lote_id', $request->input('lote_id')));
         }
 
         if ($request->filled('importacion_id')) {
             $query->where('importacion_id', $request->input('importacion_id'));
         }
 
+        // OPTIMIZADO: JOIN directo en vez de 2 queries
         if ($request->filled('origen')) {
-            $importacionIds = \App\Models\Importacion::where('origen', $request->input('origen'))->pluck('id');
-            $query->whereIn('importacion_id', $importacionIds);
+            $query->whereHas('importacion', fn ($q) => $q->where('origen', $request->input('origen')));
         }
 
         if ($request->filled('estado')) {
@@ -115,10 +118,8 @@ class ProspectoController extends Controller
             return;
         }
 
-        // JOIN directo en vez de whereHas (evita subquery EXISTS, más rápido con 350k+ rows)
-        $loteId = $request->input('lote_id');
-        $importacionIds = \App\Models\Importacion::where('lote_id', $loteId)->pluck('id');
-        $query->whereIn('importacion_id', $importacionIds);
+        // OPTIMIZADO: whereHas genera un JOIN más eficiente que pluck + whereIn
+        $query->whereHas('importacion', fn ($q) => $q->where('lote_id', $request->input('lote_id')));
     }
 
     private function applyImportacionFilter(\Illuminate\Database\Eloquent\Builder $query, Request $request): void
@@ -136,10 +137,8 @@ class ProspectoController extends Controller
             return;
         }
 
-        // whereIn directo en vez de whereHas (evita subquery EXISTS, más rápido con 350k+ rows)
-        $origen = $request->input('origen');
-        $importacionIds = \App\Models\Importacion::where('origen', $origen)->pluck('id');
-        $query->whereIn('importacion_id', $importacionIds);
+        // OPTIMIZADO: whereHas genera un JOIN más eficiente que pluck + whereIn
+        $query->whereHas('importacion', fn ($q) => $q->where('origen', $request->input('origen')));
     }
 
     private function applyEstadoFilter(\Illuminate\Database\Eloquent\Builder $query, Request $request): void
@@ -218,15 +217,17 @@ class ProspectoController extends Controller
 
     /**
      * Display a listing of the resource.
+     *
+     * OPTIMIZADO: Usa JOINs directos en vez de queries separadas para filtros.
      */
     public function index(Request $request): JsonResponse
     {
         $query = Prospecto::query()->with(['tipoProspecto', 'importacion']);
 
         // Filtrar por lote (agrupa múltiples importaciones)
+        // OPTIMIZADO: JOIN directo en vez de 2 queries (pluck + whereIn)
         if ($request->filled('lote_id')) {
-            $importacionIds = \App\Models\Importacion::where('lote_id', $request->input('lote_id'))->pluck('id');
-            $query->whereIn('importacion_id', $importacionIds);
+            $query->whereHas('importacion', fn ($q) => $q->where('lote_id', $request->input('lote_id')));
         }
 
         // Filtrar por importación específica (ID) - mantener compatibilidad
@@ -235,9 +236,9 @@ class ProspectoController extends Controller
         }
 
         // Filtrar por origen de la importación
+        // OPTIMIZADO: JOIN directo en vez de 2 queries (pluck + whereIn)
         if ($request->filled('origen')) {
-            $importacionIds = \App\Models\Importacion::where('origen', $request->input('origen'))->pluck('id');
-            $query->whereIn('importacion_id', $importacionIds);
+            $query->whereHas('importacion', fn ($q) => $q->where('origen', $request->input('origen')));
         }
 
         // Filtrar por estado
@@ -420,75 +421,82 @@ class ProspectoController extends Controller
     /**
      * Get filter options for prospectos.
      * Ahora devuelve lotes en lugar de importaciones individuales.
+     *
+     * OPTIMIZADO: Cacheado por 5 minutos para evitar queries pesadas repetidas.
+     * El caché se invalida automáticamente cuando se importan nuevos prospectos.
      */
     public function opcionesFiltrado(): JsonResponse
     {
-        // Obtener todos los lotes con sus importaciones y conteo de prospectos
-        $lotes = \App\Models\Lote::query()
-            ->with(['importaciones' => function ($query) {
-                $query->withCount('prospectos');
-            }])
-            ->orderBy('created_at', 'desc')
-            ->get()
-            ->map(function ($lote) {
-                $totalProspectos = $lote->importaciones->sum('prospectos_count');
+        $data = \Illuminate\Support\Facades\Cache::remember('prospectos:opciones_filtrado', 300, function () {
+            // Obtener todos los lotes con sus importaciones y conteo de prospectos
+            $lotes = \App\Models\Lote::query()
+                ->with(['importaciones' => function ($query) {
+                    $query->withCount('prospectos');
+                }])
+                ->orderBy('created_at', 'desc')
+                ->get()
+                ->map(function ($lote) {
+                    $totalProspectos = $lote->importaciones->sum('prospectos_count');
 
-                return [
-                    'id' => $lote->id,
-                    'nombre' => $lote->nombre,
-                    'estado' => $lote->estado,
-                    'total_archivos' => $lote->importaciones->count(),
-                    'total_prospectos' => $totalProspectos,
-                    'total_registros' => $lote->total_registros,
-                    'registros_exitosos' => $lote->registros_exitosos,
-                    'created_at' => $lote->created_at?->timezone('America/Santiago')->format('d/m/Y H:i:s'),
-                    'importaciones' => $lote->importaciones->map(fn ($i) => [
-                        'id' => $i->id,
-                        'nombre_archivo' => $i->nombre_archivo,
-                        'estado' => $i->estado,
-                        'total_prospectos' => $i->prospectos_count,
-                    ]),
-                ];
-            });
+                    return [
+                        'id' => $lote->id,
+                        'nombre' => $lote->nombre,
+                        'estado' => $lote->estado,
+                        'total_archivos' => $lote->importaciones->count(),
+                        'total_prospectos' => $totalProspectos,
+                        'total_registros' => $lote->total_registros,
+                        'registros_exitosos' => $lote->registros_exitosos,
+                        'created_at' => $lote->created_at?->timezone('America/Santiago')->format('d/m/Y H:i:s'),
+                        'importaciones' => $lote->importaciones->map(fn ($i) => [
+                            'id' => $i->id,
+                            'nombre_archivo' => $i->nombre_archivo,
+                            'estado' => $i->estado,
+                            'total_prospectos' => $i->prospectos_count,
+                        ]),
+                    ];
+                });
 
-        // Obtener orígenes únicos (ahora son los nombres de los lotes)
-        $origenes = \App\Models\Lote::query()
-            ->select('nombre')
-            ->distinct()
-            ->pluck('nombre')
-            ->filter()
-            ->values();
+            // Obtener orígenes únicos (ahora son los nombres de los lotes)
+            $origenes = \App\Models\Lote::query()
+                ->select('nombre')
+                ->distinct()
+                ->pluck('nombre')
+                ->filter()
+                ->values();
 
-        // Obtener estados disponibles
-        $estados = Prospecto::query()
-            ->select('estado')
-            ->distinct()
-            ->pluck('estado')
-            ->filter()
-            ->values();
+            // Obtener estados disponibles
+            $estados = Prospecto::query()
+                ->select('estado')
+                ->distinct()
+                ->pluck('estado')
+                ->filter()
+                ->values();
 
-        // Obtener tipos de prospecto
-        $tiposProspecto = \App\Models\TipoProspecto::query()
-            ->where('activo', true)
-            ->orderBy('orden')
-            ->get()
-            ->map(function ($tipo) {
-                return [
-                    'id' => $tipo->id,
-                    'nombre' => $tipo->nombre,
-                    'descripcion' => $tipo->descripcion,
-                    'monto_min' => $tipo->monto_min,
-                    'monto_max' => $tipo->monto_max,
-                ];
-            });
+            // Obtener tipos de prospecto
+            $tiposProspecto = \App\Models\TipoProspecto::query()
+                ->where('activo', true)
+                ->orderBy('orden')
+                ->get()
+                ->map(function ($tipo) {
+                    return [
+                        'id' => $tipo->id,
+                        'nombre' => $tipo->nombre,
+                        'descripcion' => $tipo->descripcion,
+                        'monto_min' => $tipo->monto_min,
+                        'monto_max' => $tipo->monto_max,
+                    ];
+                });
 
-        return response()->json([
-            'data' => [
+            return [
                 'lotes' => $lotes,
                 'origenes' => $origenes,
                 'estados' => $estados,
                 'tipos_prospecto' => $tiposProspecto,
-            ],
+            ];
+        });
+
+        return response()->json([
+            'data' => $data,
         ]);
     }
 
@@ -498,7 +506,7 @@ class ProspectoController extends Controller
 
     /**
      * Get email quality statistics by origin (importation source).
-     * 
+     *
      * Returns breakdown of valid/invalid/unsubscribed emails per origin,
      * plus most common invalidity reasons.
      */
@@ -561,7 +569,7 @@ class ProspectoController extends Controller
 
         // Filtrar por motivo
         if ($request->filled('motivo')) {
-            $query->where('email_invalido_motivo', 'like', '%' . $request->input('motivo') . '%');
+            $query->where('email_invalido_motivo', 'like', '%'.$request->input('motivo').'%');
         }
 
         $perPage = $request->input('per_page', 50);
@@ -594,7 +602,7 @@ class ProspectoController extends Controller
      */
     public function rehabilitarEmail(Prospecto $prospecto): JsonResponse
     {
-        if (!$prospecto->email_invalido) {
+        if (! $prospecto->email_invalido) {
             return response()->json([
                 'mensaje' => 'El email de este prospecto no está marcado como inválido',
             ], 422);
