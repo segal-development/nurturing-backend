@@ -918,10 +918,7 @@ class FlujoController extends Controller
                     'abiertos' => $totalAbiertos,
                     'clickeados' => $totalClickeados,
                     'conversiones' => $prospectosCompletados,
-                    // Rates between steps
-                    'tasa_envio' => $totalProspectos > 0
-                        ? round(($totalEnviados / $totalProspectos) * 100, 1)
-                        : 0,
+                    // Rates between steps (tasa_envio removed: can exceed 100% since 1 prospect = N messages)
                     'tasa_apertura' => $tasaApertura,
                     'tasa_click_sobre_abiertos' => $totalAbiertos > 0
                         ? round(($totalClickeados / $totalAbiertos) * 100, 1)
