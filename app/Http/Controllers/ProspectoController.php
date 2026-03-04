@@ -562,9 +562,9 @@ class ProspectoController extends Controller
             ->orderBy('email_invalido_at', 'desc');
 
         // Filtrar por origen
+        // OPTIMIZADO: whereHas con subquery en vez de pluck + whereIn (2 queries → 1 query)
         if ($request->filled('origen')) {
-            $importacionIds = \App\Models\Importacion::where('origen', $request->input('origen'))->pluck('id');
-            $query->whereIn('importacion_id', $importacionIds);
+            $query->whereHas('importacion', fn ($q) => $q->where('origen', $request->input('origen')));
         }
 
         // Filtrar por motivo

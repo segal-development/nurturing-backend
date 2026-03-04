@@ -396,31 +396,44 @@ class FlujoController extends Controller
 
     /**
      * Helper: Add prospects by IDs synchronously
+     *
+     * OPTIMIZADO: Usa bulk insert con INSERT IGNORE en vez de N queries exists() + create()
+     * Antes: 2N queries (exists + create por cada prospecto)
+     * Ahora: 2 queries (1 para obtener existentes, 1 bulk insert)
      */
     private function agregarProspectosPorIds(Flujo $flujo, array $prospectoIds, string $canalAsignado): JsonResponse
     {
         DB::beginTransaction();
         try {
-            $agregados = 0;
-            $yaExistentes = 0;
+            // 1. Obtener IDs que ya existen en una sola query
+            $existentes = ProspectoEnFlujo::where('flujo_id', $flujo->id)
+                ->whereIn('prospecto_id', $prospectoIds)
+                ->pluck('prospecto_id')
+                ->toArray();
 
-            foreach ($prospectoIds as $prospectoId) {
-                $existe = ProspectoEnFlujo::where('flujo_id', $flujo->id)
-                    ->where('prospecto_id', $prospectoId)
-                    ->exists();
+            $yaExistentes = count($existentes);
 
-                if (! $existe) {
-                    ProspectoEnFlujo::create([
-                        'flujo_id' => $flujo->id,
-                        'prospecto_id' => $prospectoId,
-                        'canal_asignado' => $canalAsignado,
-                        'estado' => 'pendiente',
-                        'etapa_actual_id' => null,
-                        'fecha_inicio' => now(),
-                    ]);
-                    $agregados++;
-                } else {
-                    $yaExistentes++;
+            // 2. Filtrar solo los nuevos
+            $nuevosIds = array_diff($prospectoIds, $existentes);
+            $agregados = count($nuevosIds);
+
+            // 3. Bulk insert de los nuevos (si hay)
+            if (! empty($nuevosIds)) {
+                $now = now();
+                $registros = array_map(fn ($id) => [
+                    'flujo_id' => $flujo->id,
+                    'prospecto_id' => $id,
+                    'canal_asignado' => $canalAsignado,
+                    'estado' => 'pendiente',
+                    'etapa_actual_id' => null,
+                    'fecha_inicio' => $now,
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ], $nuevosIds);
+
+                // Insertar en chunks para evitar límites de MySQL/PostgreSQL
+                foreach (array_chunk($registros, 1000) as $chunk) {
+                    ProspectoEnFlujo::insert($chunk);
                 }
             }
 
@@ -590,21 +603,20 @@ class FlujoController extends Controller
 
     public function opcionesFiltrado(): JsonResponse
     {
-        // Obtener todos los orígenes de importaciones con conteo de flujos
-        $origenes = \App\Models\Importacion::query()
-            ->select('origen')
-            ->distinct()
+        // OPTIMIZADO: Una sola query con subquery en vez de N+1
+        // Antes: 1 query para orígenes + N queries para contar flujos
+        // Ahora: 1 query con LEFT JOIN y GROUP BY
+        $origenes = DB::table('importaciones')
+            ->select('importaciones.origen')
+            ->selectRaw('COUNT(DISTINCT flujos.id) as total_flujos')
+            ->leftJoin('flujos', 'flujos.origen', '=', 'importaciones.origen')
+            ->groupBy('importaciones.origen')
             ->get()
-            ->map(function ($importacion) {
-                // Contar cuántos flujos tienen este origen
-                $totalFlujos = Flujo::where('origen', $importacion->origen)->count();
-
-                return [
-                    'id' => $importacion->origen,
-                    'nombre' => $importacion->origen,
-                    'total_flujos' => $totalFlujos,
-                ];
-            })
+            ->map(fn ($row) => [
+                'id' => $row->origen,
+                'nombre' => $row->origen,
+                'total_flujos' => (int) $row->total_flujos,
+            ])
             ->values();
 
         // Obtener tipos de deudor (tipos de prospecto)
@@ -953,10 +965,18 @@ class FlujoController extends Controller
 
     /**
      * Get cost statistics for all flujos.
+     *
+     * OPTIMIZADO: Solo selecciona columnas necesarias en vez de cargar
+     * todos los modelos completos en memoria.
      */
     public function estadisticasCostos(): JsonResponse
     {
-        $flujos = Flujo::all();
+        // Solo traer las columnas necesarias (id, nombre, metadata, created_at)
+        // Evita cargar toda la tabla flujos con campos grandes como config_visual
+        $flujos = Flujo::query()
+            ->select('id', 'nombre', 'metadata', 'created_at')
+            ->whereNotNull('metadata')
+            ->get();
 
         $totalGastado = 0;
         $totalEmails = 0;
@@ -968,20 +988,24 @@ class FlujoController extends Controller
             $costos = $flujo->metadata['costos_vigentes'] ?? null;
 
             if ($costos) {
-                $totalGastado += $costos['costo_total'];
-                $totalEmails += $costos['cantidad_emails'];
-                $totalSms += $costos['cantidad_sms'];
-                $totalProspectos += ($costos['cantidad_emails'] + $costos['cantidad_sms']);
+                $costoTotal = (float) ($costos['costo_total'] ?? 0);
+                $cantidadEmails = (int) ($costos['cantidad_emails'] ?? 0);
+                $cantidadSms = (int) ($costos['cantidad_sms'] ?? 0);
+
+                $totalGastado += $costoTotal;
+                $totalEmails += $cantidadEmails;
+                $totalSms += $cantidadSms;
+                $totalProspectos += ($cantidadEmails + $cantidadSms);
 
                 $costosPorFlujo[] = [
                     'flujo_id' => $flujo->id,
                     'nombre' => $flujo->nombre,
                     'fecha_creacion' => $flujo->created_at->toISOString(),
-                    'costo_total' => $costos['costo_total'],
-                    'email_unitario' => $costos['email_costo_unitario'],
-                    'sms_unitario' => $costos['sms_costo_unitario'],
-                    'cantidad_emails' => $costos['cantidad_emails'],
-                    'cantidad_sms' => $costos['cantidad_sms'],
+                    'costo_total' => $costoTotal,
+                    'email_unitario' => (float) ($costos['email_costo_unitario'] ?? 0),
+                    'sms_unitario' => (float) ($costos['sms_costo_unitario'] ?? 0),
+                    'cantidad_emails' => $cantidadEmails,
+                    'cantidad_sms' => $cantidadSms,
                 ];
             }
         }

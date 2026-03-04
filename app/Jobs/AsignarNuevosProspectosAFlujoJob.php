@@ -4,7 +4,6 @@ namespace App\Jobs;
 
 use App\Models\Flujo;
 use App\Models\Prospecto;
-use App\Models\ProspectoEnFlujo;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\DB;
@@ -105,19 +104,22 @@ class AsignarNuevosProspectosAFlujoJob implements ShouldQueue
 
     /**
      * Busca prospectos del mismo origen que aún no están en el flujo.
+     *
+     * OPTIMIZADO: Usa NOT EXISTS subquery en vez de pluck + whereNotIn.
+     * Antes: Cargaba todos los IDs de prospectos_en_flujo en memoria (300k+ IDs)
+     * Ahora: La DB maneja la exclusión internamente, sin cargar IDs en PHP
      */
     private function buscarProspectosNuevos(Flujo $flujo)
     {
-        // Obtener IDs de prospectos que ya están en este flujo
-        $prospectosEnFlujo = ProspectoEnFlujo::where('flujo_id', $flujo->id)
-            ->pluck('prospecto_id');
-
-        // Buscar prospectos del mismo origen que NO están en el flujo
+        // Usar NOT EXISTS subquery - más eficiente que whereNotIn con arrays grandes
+        // La DB puede optimizar esto con índices, sin cargar IDs en memoria PHP
         return Prospecto::query()
             ->whereHas('importacion', function ($q) use ($flujo) {
                 $q->where('origen', $flujo->origen);
             })
-            ->whereNotIn('id', $prospectosEnFlujo)
+            ->whereDoesntHave('prospectosEnFlujo', function ($q) use ($flujo) {
+                $q->where('flujo_id', $flujo->id);
+            })
             ->where('estado', 'activo')
             ->select('id', 'email', 'telefono')
             ->get();
