@@ -724,14 +724,23 @@ class FlujoController extends Controller
         $origen = $request->input('origen');
 
         // Get lotes that have importaciones with the specified origen
-        // and count prospects per lote
+        // Count REAL prospectos (not registros_exitosos which is a snapshot)
         $lotes = Lote::query()
             ->select('lotes.id', 'lotes.nombre', 'lotes.clasificacion_value', 'lotes.estado', 'lotes.created_at')
-            ->selectRaw('COALESCE(SUM(importaciones.registros_exitosos), 0) as total_prospectos')
-            ->join('importaciones', 'importaciones.lote_id', '=', 'lotes.id')
-            ->where('importaciones.origen', $origen)
-            ->where('importaciones.estado', 'completado')
-            ->groupBy('lotes.id', 'lotes.nombre', 'lotes.clasificacion_value', 'lotes.estado', 'lotes.created_at')
+            ->selectRaw('(
+                SELECT COUNT(*)
+                FROM prospectos p
+                INNER JOIN importaciones i ON p.importacion_id = i.id
+                WHERE i.lote_id = lotes.id
+                AND i.origen = ?
+            ) as total_prospectos', [$origen])
+            ->whereExists(function ($query) use ($origen) {
+                $query->select(DB::raw(1))
+                    ->from('importaciones')
+                    ->whereColumn('importaciones.lote_id', 'lotes.id')
+                    ->where('importaciones.origen', $origen)
+                    ->where('importaciones.estado', 'completado');
+            })
             ->orderBy('lotes.created_at', 'desc')
             ->get()
             ->map(fn ($lote) => [
