@@ -447,12 +447,22 @@ class ProspectoController extends Controller
             // Obtener todos los lotes con sus importaciones y conteo de prospectos
             $lotes = \App\Models\Lote::query()
                 ->with(['importaciones' => function ($query) {
-                    $query->withCount('prospectos');
+                    $query->withCount('prospectos')->orderBy('created_at', 'desc');
                 }])
                 ->orderBy('created_at', 'desc')
                 ->get()
                 ->map(function ($lote) {
                     $totalProspectos = $lote->importaciones->sum('prospectos_count');
+
+                    // Obtener "nuevos" de la última importación desde metadata
+                    $ultimaImportacion = $lote->importaciones->first();
+                    $nuevosUltimoSync = 0;
+                    if ($ultimaImportacion && $ultimaImportacion->metadata) {
+                        $metadata = is_array($ultimaImportacion->metadata)
+                            ? $ultimaImportacion->metadata
+                            : json_decode($ultimaImportacion->metadata, true);
+                        $nuevosUltimoSync = $metadata['nuevos'] ?? 0;
+                    }
 
                     return [
                         'id' => $lote->id,
@@ -462,6 +472,7 @@ class ProspectoController extends Controller
                         'total_prospectos' => $totalProspectos,
                         'total_registros' => $lote->total_registros,
                         'registros_exitosos' => $lote->registros_exitosos,
+                        'nuevos_ultimo_sync' => $nuevosUltimoSync,
                         'created_at' => $lote->created_at?->timezone('America/Santiago')->format('d/m/Y H:i:s'),
                         'importaciones' => $lote->importaciones->map(fn ($i) => [
                             'id' => $i->id,
