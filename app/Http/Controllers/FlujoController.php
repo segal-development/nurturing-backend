@@ -6,6 +6,7 @@ use App\Enums\CanalEnvio;
 use App\Models\Configuracion;
 use App\Models\Flujo;
 use App\Models\FlujoCondicion;
+use App\Models\Lote;
 use App\Models\Prospecto;
 use App\Models\ProspectoEnFlujo;
 use App\Models\TipoProspecto;
@@ -281,6 +282,8 @@ class FlujoController extends Controller
         $request->validate([
             'prospecto_ids' => 'nullable|array',
             'prospecto_ids.*' => 'integer',
+            'lote_ids' => 'nullable|array',
+            'lote_ids.*' => 'integer|exists:lotes,id',
             'origen' => 'nullable|string',
             'tipo_prospecto_id' => 'nullable|integer|exists:tipo_prospecto,id',
             'select_all_from_origin' => 'nullable|boolean',
@@ -292,6 +295,67 @@ class FlujoController extends Controller
             $selectAllFromOrigin = $request->boolean('select_all_from_origin', false);
             $origen = $request->input('origen', $flujo->origen);
             $tipoProspectoId = $request->input('tipo_prospecto_id', $flujo->tipo_prospecto_id);
+            $loteIds = $request->input('lote_ids', []);
+
+            // CASE 0: Select by specific lote_ids (NEW)
+            if (! empty($loteIds)) {
+                // Update flujo with origen if not set
+                if (! $flujo->origen && $origen) {
+                    $flujo->update(['origen' => $origen]);
+                }
+                if (! $flujo->tipo_prospecto_id && $tipoProspectoId) {
+                    $flujo->update(['tipo_prospecto_id' => $tipoProspectoId]);
+                }
+
+                // Build query for prospects in the selected lotes
+                $query = Prospecto::query()
+                    ->whereHas('importacion', fn ($q) => $q->whereIn('lote_id', $loteIds));
+
+                // Filter by tipo if specified (and not "Todos")
+                if ($tipoProspectoId) {
+                    $tipoProspecto = TipoProspecto::find($tipoProspectoId);
+                    if ($tipoProspecto && ! $tipoProspecto->esTipoTodos()) {
+                        $query->where('tipo_prospecto_id', $tipoProspectoId);
+                    }
+                }
+
+                $totalEstimado = $query->count();
+
+                if ($totalEstimado === 0) {
+                    return response()->json([
+                        'mensaje' => 'No se encontraron prospectos en los lotes seleccionados',
+                        'resumen' => ['total_encontrados' => 0, 'agregados' => 0],
+                    ]);
+                }
+
+                // Async for large volumes
+                if ($totalEstimado > 100) {
+                    $criterios = new \App\DTOs\CriteriosSeleccionProspectos(
+                        origen: $origen,
+                        tipoProspectoId: $tipoProspectoId,
+                        selectAllFromOrigin: false,
+                        prospectoIds: [],
+                        loteIds: $loteIds
+                    );
+
+                    \App\Jobs\AsignarProspectosAFlujoJob::dispatch($flujo, $criterios, $canalAsignado);
+                    $flujo->update(['estado_procesamiento' => 'procesando']);
+
+                    return response()->json([
+                        'mensaje' => 'Procesamiento de prospectos iniciado en segundo plano',
+                        'resumen' => [
+                            'total_estimado' => $totalEstimado,
+                            'lotes_seleccionados' => count($loteIds),
+                            'procesamiento_async' => true,
+                        ],
+                    ]);
+                }
+
+                // Sync for small volumes
+                $prospectoIds = $query->pluck('id')->toArray();
+
+                return $this->agregarProspectosPorIds($flujo, $prospectoIds, $canalAsignado);
+            }
 
             // CASE 1: Select all from origin (async processing for large volumes)
             if ($selectAllFromOrigin && $origen) {
@@ -636,6 +700,58 @@ class FlujoController extends Controller
             'data' => [
                 'origenes' => $origenes,
                 'tipos_deudor' => $tiposDeudor,
+            ],
+        ]);
+    }
+
+    /**
+     * Get lotes (batches) for a specific origen with prospect counts.
+     *
+     * GET /api/flujos/opciones-lotes?origen=Informes%20Comerciales
+     *
+     * Returns lotes grouped by origen, with:
+     * - id, nombre, clasificacion_value
+     * - total_prospectos (count of prospects in the lote)
+     * - estado (completado, abierto, etc.)
+     * - created_at
+     */
+    public function opcionesLotes(Request $request): JsonResponse
+    {
+        $request->validate([
+            'origen' => 'required|string',
+        ]);
+
+        $origen = $request->input('origen');
+
+        // Get lotes that have importaciones with the specified origen
+        // and count prospects per lote
+        $lotes = Lote::query()
+            ->select('lotes.id', 'lotes.nombre', 'lotes.clasificacion_value', 'lotes.estado', 'lotes.created_at')
+            ->selectRaw('COALESCE(SUM(importaciones.registros_exitosos), 0) as total_prospectos')
+            ->join('importaciones', 'importaciones.lote_id', '=', 'lotes.id')
+            ->where('importaciones.origen', $origen)
+            ->where('importaciones.estado', 'completado')
+            ->groupBy('lotes.id', 'lotes.nombre', 'lotes.clasificacion_value', 'lotes.estado', 'lotes.created_at')
+            ->orderBy('lotes.created_at', 'desc')
+            ->get()
+            ->map(fn ($lote) => [
+                'id' => $lote->id,
+                'nombre' => $lote->nombre,
+                'clasificacion_value' => $lote->clasificacion_value,
+                'total_prospectos' => (int) $lote->total_prospectos,
+                'estado' => $lote->estado,
+                'created_at' => $lote->created_at->toISOString(),
+            ]);
+
+        // Calculate total prospects across all lotes
+        $totalProspectos = $lotes->sum('total_prospectos');
+
+        return response()->json([
+            'data' => [
+                'origen' => $origen,
+                'lotes' => $lotes,
+                'total_lotes' => $lotes->count(),
+                'total_prospectos' => $totalProspectos,
             ],
         ]);
     }

@@ -25,9 +25,12 @@ class ProspectoController extends Controller
     {
         $query = Prospecto::query();
 
-        // Aplicar los mismos filtros que en index()
-        // OPTIMIZADO: JOIN directo en vez de 2 queries
-        if ($request->filled('lote_id')) {
+        // Support multiple lote_ids (array) - NEW
+        if ($request->filled('lote_ids') && is_array($request->input('lote_ids'))) {
+            $loteIds = $request->input('lote_ids');
+            $query->whereHas('importacion', fn ($q) => $q->whereIn('lote_id', $loteIds));
+        } elseif ($request->filled('lote_id')) {
+            // Fallback to single lote_id for backward compatibility
             $query->whereHas('importacion', fn ($q) => $q->where('lote_id', $request->input('lote_id')));
         }
 
@@ -114,6 +117,15 @@ class ProspectoController extends Controller
 
     private function applyLoteFilter(\Illuminate\Database\Eloquent\Builder $query, Request $request): void
     {
+        // Support multiple lote_ids (array)
+        if ($request->filled('lote_ids') && is_array($request->input('lote_ids'))) {
+            $loteIds = $request->input('lote_ids');
+            $query->whereHas('importacion', fn ($q) => $q->whereIn('lote_id', $loteIds));
+
+            return;
+        }
+
+        // Fallback to single lote_id for backward compatibility
         if (! $request->filled('lote_id')) {
             return;
         }
@@ -224,9 +236,13 @@ class ProspectoController extends Controller
     {
         $query = Prospecto::query()->with(['tipoProspecto', 'importacion']);
 
-        // Filtrar por lote (agrupa múltiples importaciones)
-        // OPTIMIZADO: JOIN directo en vez de 2 queries (pluck + whereIn)
-        if ($request->filled('lote_id')) {
+        // Filtrar por múltiples lotes (array) - NEW
+        if ($request->filled('lote_ids') && is_array($request->input('lote_ids'))) {
+            $loteIds = $request->input('lote_ids');
+            $query->whereHas('importacion', fn ($q) => $q->whereIn('lote_id', $loteIds));
+        } elseif ($request->filled('lote_id')) {
+            // Fallback to single lote_id for backward compatibility
+            // OPTIMIZADO: JOIN directo en vez de 2 queries (pluck + whereIn)
             $query->whereHas('importacion', fn ($q) => $q->where('lote_id', $request->input('lote_id')));
         }
 

@@ -22,7 +22,7 @@ use Illuminate\Support\Facades\Log;
  *
  * @see CriteriosSeleccionProspectos
  */
-class AsignarProspectosAFlujoJob implements ShouldQueue, ShouldBeUniqueUntilProcessing
+class AsignarProspectosAFlujoJob implements ShouldBeUniqueUntilProcessing, ShouldQueue
 {
     use Queueable;
 
@@ -76,22 +76,42 @@ class AsignarProspectosAFlujoJob implements ShouldQueue, ShouldBeUniqueUntilProc
         $criterios = $this->getCriterios();
 
         // Si hay IDs específicos, usarlos directamente
-        if (!$criterios->usarQueryPorCriterios()) {
+        if (! empty($criterios->prospectoIds)) {
             return Prospecto::query()->whereIn('id', $criterios->prospectoIds);
         }
 
-        // Construir query por criterios (sin cargar IDs en memoria)
-        $query = Prospecto::query()
-            ->whereHas('importacion', function ($q) use ($criterios) {
-                $q->where('origen', $criterios->origen);
-            });
+        // CASE: Filter by specific lotes (NEW)
+        if ($criterios->usarFiltroLotes()) {
+            $query = Prospecto::query()
+                ->whereHas('importacion', function ($q) use ($criterios) {
+                    $q->whereIn('lote_id', $criterios->loteIds);
+                });
 
-        // Filtrar por tipo solo si no es "Todos"
-        if ($criterios->tipoProspectoId !== null) {
-            $query->where('tipo_prospecto_id', $criterios->tipoProspectoId);
+            // Filtrar por tipo solo si no es "Todos"
+            if ($criterios->tipoProspectoId !== null) {
+                $query->where('tipo_prospecto_id', $criterios->tipoProspectoId);
+            }
+
+            return $query;
         }
 
-        return $query;
+        // CASE: Select all from origin
+        if ($criterios->usarQueryPorCriterios()) {
+            $query = Prospecto::query()
+                ->whereHas('importacion', function ($q) use ($criterios) {
+                    $q->where('origen', $criterios->origen);
+                });
+
+            // Filtrar por tipo solo si no es "Todos"
+            if ($criterios->tipoProspectoId !== null) {
+                $query->where('tipo_prospecto_id', $criterios->tipoProspectoId);
+            }
+
+            return $query;
+        }
+
+        // Fallback: empty query (shouldn't happen)
+        return Prospecto::query()->whereRaw('1 = 0');
     }
 
     /**
@@ -114,6 +134,7 @@ class AsignarProspectosAFlujoJob implements ShouldQueue, ShouldBeUniqueUntilProc
                 'criterios' => $this->criteriosArray,
             ]);
             $this->finalizarProcesamiento(0, $inicioTimestamp);
+
             return;
         }
 
@@ -195,7 +216,7 @@ class AsignarProspectosAFlujoJob implements ShouldQueue, ShouldBeUniqueUntilProc
         $intentos = 0;
         $exito = false;
 
-        while (!$exito && $intentos < self::MAX_CHUNK_RETRIES) {
+        while (! $exito && $intentos < self::MAX_CHUNK_RETRIES) {
             $intentos++;
 
             try {
@@ -205,7 +226,7 @@ class AsignarProspectosAFlujoJob implements ShouldQueue, ShouldBeUniqueUntilProc
                     sleep(1);
                 }
 
-                $data = array_map(fn($prospectoId) => [
+                $data = array_map(fn ($prospectoId) => [
                     'flujo_id' => $this->flujo->id,
                     'prospecto_id' => $prospectoId,
                     'canal_asignado' => $this->canalAsignado,
@@ -233,9 +254,9 @@ class AsignarProspectosAFlujoJob implements ShouldQueue, ShouldBeUniqueUntilProc
             }
         }
 
-        if (!$exito) {
+        if (! $exito) {
             throw new \RuntimeException(
-                "Chunk {$chunkActual} falló después de " . self::MAX_CHUNK_RETRIES . ' intentos'
+                "Chunk {$chunkActual} falló después de ".self::MAX_CHUNK_RETRIES.' intentos'
             );
         }
     }

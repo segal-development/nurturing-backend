@@ -3,7 +3,6 @@
 namespace App\DTOs;
 
 use App\Models\Flujo;
-use App\Models\TipoProspecto;
 
 /**
  * DTO que encapsula los criterios para seleccionar prospectos.
@@ -19,6 +18,7 @@ final readonly class CriteriosSeleccionProspectos
         public ?int $tipoProspectoId,
         public bool $selectAllFromOrigin,
         public array $prospectoIds = [],
+        public array $loteIds = [],
     ) {}
 
     /**
@@ -28,7 +28,7 @@ final readonly class CriteriosSeleccionProspectos
     {
         // Si el tipo es "Todos", no filtrar por tipo
         $tipoProspectoId = null;
-        if ($flujo->tipoProspecto && !$flujo->tipoProspecto->esTipoTodos()) {
+        if ($flujo->tipoProspecto && ! $flujo->tipoProspecto->esTipoTodos()) {
             $tipoProspectoId = $flujo->tipo_prospecto_id;
         }
 
@@ -62,6 +62,14 @@ final readonly class CriteriosSeleccionProspectos
     }
 
     /**
+     * Indica si se debe filtrar por lotes específicos.
+     */
+    public function usarFiltroLotes(): bool
+    {
+        return ! empty($this->loteIds);
+    }
+
+    /**
      * Convierte a array para serialización en el Job.
      */
     public function toArray(): array
@@ -71,6 +79,7 @@ final readonly class CriteriosSeleccionProspectos
             'tipo_prospecto_id' => $this->tipoProspectoId,
             'select_all_from_origin' => $this->selectAllFromOrigin,
             'prospecto_ids' => $this->prospectoIds,
+            'lote_ids' => $this->loteIds,
         ];
     }
 
@@ -84,6 +93,7 @@ final readonly class CriteriosSeleccionProspectos
             tipoProspectoId: $data['tipo_prospecto_id'] ?? null,
             selectAllFromOrigin: $data['select_all_from_origin'] ?? false,
             prospectoIds: $data['prospecto_ids'] ?? [],
+            loteIds: $data['lote_ids'] ?? [],
         );
     }
 }
