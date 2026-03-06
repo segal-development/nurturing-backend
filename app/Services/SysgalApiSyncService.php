@@ -308,15 +308,35 @@ class SysgalApiSyncService
     /**
      * Obtiene o crea un lote para Sysgal.
      *
-     * Si es lote unificado, usa solo el prefix (ej: "SYSGAL").
-     * Si no, incluye la clasificación (ej: "SG_NA_pendiente_de_contactar").
+     * Si `lote_global` está configurado en sync_filters, TODAS las fuentes de Sysgal
+     * comparten el mismo lote (ej: "SYSGAL"). Esto permite tener un único lote
+     * para después segmentar por nivel de deuda u otros criterios en metadata.
      */
     private function obtenerOCrearLote(ExternalApiSource $source, string $clasificacionValue, int $userId): Lote
     {
-        $prefix = $source->lote_prefix ?: 'SG';
-        $unificarLotes = $source->sync_filters['unificar_lotes'] ?? false;
+        $syncFilters = $source->sync_filters ?? [];
+        $unificarLotes = $syncFilters['unificar_lotes'] ?? false;
+        $loteGlobal = $syncFilters['lote_global'] ?? null;
 
-        // ✅ Si es lote unificado, nombre simple sin clasificación
+        // ✅ LOTE GLOBAL: Todas las fuentes de Sysgal comparten el mismo lote
+        if ($loteGlobal) {
+            return Lote::firstOrCreate(
+                [
+                    'nombre' => $loteGlobal,
+                    // No usamos external_api_source_id para que sea compartido
+                ],
+                [
+                    'external_api_source_id' => $source->id, // Solo para el primero que lo cree
+                    'clasificacion_value' => 'global',
+                    'user_id' => $userId,
+                    'estado' => 'abierto',
+                ]
+            );
+        }
+
+        $prefix = $source->lote_prefix ?: 'SG';
+
+        // Si es lote unificado por fuente, nombre simple sin clasificación
         if ($unificarLotes || $clasificacionValue === 'unificado') {
             $nombreLote = $prefix;
             $clasificacionParaBusqueda = 'unificado';
