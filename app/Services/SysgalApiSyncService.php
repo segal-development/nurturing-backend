@@ -536,8 +536,15 @@ class SysgalApiSyncService
             $rut = null;
         }
 
-        // Sysgal no trae monto de deuda, usar el mínimo
-        $tipoProspectoId = $tiposProspecto->first()?->id;
+        // ✅ Obtener monto de deuda desde la API (agregado 06/03/2026)
+        $montoDeudaRaw = $this->getFieldValue($row, $fieldMapping['monto_deuda'] ?? null);
+        $montoDeuda = $this->parsearMontoDeuda($montoDeudaRaw);
+
+        // Calcular nivel de deuda para clasificación
+        $nivelDeuda = $this->calcularNivelDeuda($montoDeuda);
+
+        // Determinar tipo de prospecto basado en el monto de deuda
+        $tipoProspectoId = $this->determinarTipoProspecto($tiposProspecto, $montoDeuda);
 
         if ($tipoProspectoId === null) {
             return null;
@@ -547,6 +554,7 @@ class SysgalApiSyncService
         $metadata = [
             'source' => 'sysgal',
             'synced_at' => now()->toISOString(),
+            'nivel_deuda' => $nivelDeuda, // ✅ NUEVO: baja, media, alta
         ];
 
         // Agregar campos extra según el mapping
@@ -570,12 +578,76 @@ class SysgalApiSyncService
             'url_informe' => null,
             'tipo_prospecto_id' => $tipoProspectoId,
             'estado' => 'activo',
-            'monto_deuda' => 0, // Sysgal no trae monto
+            'monto_deuda' => $montoDeuda, // ✅ Ahora con valor real de Sysgal
             'fila_excel' => null,
             'metadata' => json_encode($metadata),
             'created_at' => $now,
             'updated_at' => $now,
         ];
+    }
+
+    /**
+     * Parsea el monto de deuda desde el valor de la API.
+     * El valor puede venir como string "2500400" o como número.
+     */
+    private function parsearMontoDeuda(mixed $valor): int
+    {
+        if ($valor === null || $valor === '' || $valor === '0') {
+            return 0;
+        }
+
+        // Si es string, limpiar caracteres no numéricos (puntos, comas, espacios)
+        if (is_string($valor)) {
+            $valor = preg_replace('/[^0-9]/', '', $valor);
+        }
+
+        return (int) $valor;
+    }
+
+    /**
+     * Calcula el nivel de deuda basado en el monto.
+     *
+     * Rangos:
+     * - baja: < $700.000 CLP
+     * - media: $700.000 - $1.500.000 CLP
+     * - alta: > $1.500.000 CLP
+     */
+    private function calcularNivelDeuda(int $monto): string
+    {
+        if ($monto <= 0) {
+            return 'sin_informacion';
+        }
+
+        return match (true) {
+            $monto < 700000 => 'baja',
+            $monto < 1500000 => 'media',
+            default => 'alta',
+        };
+    }
+
+    /**
+     * Determina el tipo de prospecto basado en el monto de deuda.
+     * Busca el TipoProspecto cuyo rango contenga el monto.
+     */
+    private function determinarTipoProspecto(Collection $tiposProspecto, int $montoDeuda): ?int
+    {
+        // Si no hay monto, usar el primer tipo (default)
+        if ($montoDeuda <= 0) {
+            return $tiposProspecto->first()?->id;
+        }
+
+        // Buscar el tipo cuyo rango contenga el monto
+        foreach ($tiposProspecto as $tipo) {
+            $min = $tipo->monto_minimo ?? 0;
+            $max = $tipo->monto_maximo ?? PHP_INT_MAX;
+
+            if ($montoDeuda >= $min && $montoDeuda <= $max) {
+                return $tipo->id;
+            }
+        }
+
+        // Fallback al primer tipo si no hay match
+        return $tiposProspecto->first()?->id;
     }
 
     /**

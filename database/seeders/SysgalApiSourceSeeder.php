@@ -41,13 +41,13 @@ class SysgalApiSourceSeeder extends Seeder
                     'Accept' => 'application/json',
                 ],
                 // Mapeo de campos de la API a campos de Prospecto
-                // La API devuelve: { Nombre, Rut, Email, Telefono, Etapa }
+                // La API devuelve: { Nombre, Rut, Email, Telefono, Etapa, TotalDeuda }
                 'field_mapping' => [
                     'nombre' => 'Nombre',
                     'rut' => 'Rut',
                     'email' => 'Email',
                     'telefono' => 'Telefono',
-                    'monto_deuda' => null, // No viene en esta API
+                    'monto_deuda' => 'TotalDeuda', // ✅ Agregado 06/03/2026
                     'url_informe' => null,
                     // Campos extra para metadata
                     'etapa_sysgal' => 'Etapa',
@@ -93,13 +93,13 @@ class SysgalApiSourceSeeder extends Seeder
                     'Accept' => 'application/json',
                 ],
                 // Mapeo de campos de la API a campos de Prospecto
-                // La API devuelve: { Reunion: { Tiempo, Estado_Final, Comercial }, Cliente: { Nombre, Rut, Email, Telefono } }
+                // La API devuelve: { Reunion: {...}, Cliente: { Nombre, Rut, Email, Telefono, TotalDeuda } }
                 'field_mapping' => [
                     'nombre' => 'Cliente.Nombre',
                     'rut' => 'Cliente.Rut',
                     'email' => 'Cliente.Email',
                     'telefono' => 'Cliente.Telefono',
-                    'monto_deuda' => null,
+                    'monto_deuda' => 'Cliente.TotalDeuda', // ✅ Agregado 06/03/2026
                     'url_informe' => null,
                     // Campos extra para metadata
                     'fecha_reunion' => 'Reunion.Tiempo',
