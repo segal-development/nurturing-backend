@@ -5,30 +5,40 @@ namespace App\Console\Commands;
 use App\Models\Prospecto;
 use App\Services\SysgalApiSyncService;
 use Illuminate\Console\Command;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Comando para poblar nivel_deuda en prospectos existentes.
+ * Comando para poblar nivel_deuda en prospectos de SYSGAL existentes.
  *
- * Útil para migrar datos históricos que no tenían este campo.
+ * Solo procesa prospectos que vienen de lotes SYSGAL (tienen monto_deuda de la API).
  * Calcula nivel_deuda basado en monto_deuda existente.
  */
 class PoblarNivelDeudaProspectos extends Command
 {
     protected $signature = 'prospectos:poblar-nivel-deuda
                             {--dry-run : Solo mostrar qué se haría sin hacer cambios}
+                            {--all : Procesar TODOS los prospectos, no solo Sysgal}
                             {--chunk=1000 : Tamaño del chunk para procesamiento}';
 
-    protected $description = 'Calcula y guarda nivel_deuda en metadata de prospectos existentes basado en monto_deuda';
+    protected $description = 'Calcula y guarda nivel_deuda en metadata de prospectos de SYSGAL basado en monto_deuda';
 
     private const BATCH_SIZE = 500;
 
     public function handle(): int
     {
         $dryRun = $this->option('dry-run');
+        $processAll = $this->option('all');
         $chunkSize = (int) $this->option('chunk');
 
         $this->info('=== Poblar nivel_deuda en prospectos ===');
+        $this->newLine();
+
+        if ($processAll) {
+            $this->warn('⚠️  Modo --all: Procesando TODOS los prospectos (no solo Sysgal)');
+        } else {
+            $this->info('📌 Solo prospectos de SYSGAL (lotes con nombre SYSGAL%)');
+        }
         $this->newLine();
 
         if ($dryRun) {
@@ -37,8 +47,8 @@ class PoblarNivelDeudaProspectos extends Command
         }
 
         // Contar prospectos que necesitan actualización
-        $totalSinNivel = $this->contarProspectosSinNivelDeuda();
-        $totalConMonto = $this->contarProspectosConMontoDeuda();
+        $totalSinNivel = $this->contarProspectosSinNivelDeuda($processAll);
+        $totalConMonto = $this->contarProspectosConMontoDeuda($processAll);
 
         $this->info('📊 Estadísticas actuales:');
         $this->table(
@@ -74,9 +84,8 @@ class PoblarNivelDeudaProspectos extends Command
 
         $updateBatch = [];
 
-        // Query prospectos que no tienen nivel_deuda en metadata
-        Prospecto::query()
-            ->whereRaw("metadata->>'nivel_deuda' IS NULL OR metadata->>'nivel_deuda' = ''")
+        // Query prospectos de SYSGAL que no tienen nivel_deuda en metadata
+        $this->buildBaseQuery($processAll)
             ->orderBy('id')
             ->chunk($chunkSize, function ($prospectos) use (
                 &$processed,
@@ -159,18 +168,40 @@ class PoblarNivelDeudaProspectos extends Command
         return self::SUCCESS;
     }
 
-    private function contarProspectosSinNivelDeuda(): int
+    /**
+     * Construye la query base filtrando por SYSGAL si corresponde.
+     */
+    private function buildBaseQuery(bool $processAll): Builder
     {
-        return Prospecto::query()
-            ->whereRaw("metadata->>'nivel_deuda' IS NULL OR metadata->>'nivel_deuda' = ''")
-            ->count();
+        $query = Prospecto::query()
+            ->whereRaw("(metadata->>'nivel_deuda' IS NULL OR metadata->>'nivel_deuda' = '')");
+
+        if (! $processAll) {
+            // Solo prospectos de lotes SYSGAL
+            $query->whereHas('importacion.lote', function ($q) {
+                $q->where('nombre', 'like', 'SYSGAL%');
+            });
+        }
+
+        return $query;
     }
 
-    private function contarProspectosConMontoDeuda(): int
+    private function contarProspectosSinNivelDeuda(bool $processAll): int
     {
-        return Prospecto::query()
-            ->where('monto_deuda', '>', 0)
-            ->count();
+        return $this->buildBaseQuery($processAll)->count();
+    }
+
+    private function contarProspectosConMontoDeuda(bool $processAll): int
+    {
+        $query = Prospecto::query()->where('monto_deuda', '>', 0);
+
+        if (! $processAll) {
+            $query->whereHas('importacion.lote', function ($q) {
+                $q->where('nombre', 'like', 'SYSGAL%');
+            });
+        }
+
+        return $query->count();
     }
 
     private function flushBatch(array $batch): void
