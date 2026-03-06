@@ -638,8 +638,8 @@ class SysgalApiSyncService
 
         // Buscar el tipo cuyo rango contenga el monto
         foreach ($tiposProspecto as $tipo) {
-            $min = $tipo->monto_minimo ?? 0;
-            $max = $tipo->monto_maximo ?? PHP_INT_MAX;
+            $min = $tipo->monto_min ?? 0;
+            $max = $tipo->monto_max ?? PHP_INT_MAX;
 
             if ($montoDeuda >= $min && $montoDeuda <= $max) {
                 return $tipo->id;
