@@ -62,9 +62,12 @@ class SysgalApiSourceSeeder extends Seeder
                 'sync_filters' => [
                     // Rango de fechas se calcula dinámicamente en el servicio
                     'dias_atras' => 7, // Última semana por defecto
+                    // ✅ UNIFICAR: Todos los prospectos van a un solo lote
+                    // La clasificación (Etapa) se guarda en metadata del prospecto
+                    'unificar_lotes' => true,
                 ],
                 'sync_frequency' => 'weekly',
-                'lote_prefix' => 'SG_NA', // Sysgal No Agendados
+                'lote_prefix' => 'SYSGAL_NO_AGENDADOS', // Lote unificado
                 'is_active' => true,
             ]
         );
@@ -117,9 +120,12 @@ class SysgalApiSourceSeeder extends Seeder
                 ],
                 'sync_filters' => [
                     'dias_atras' => 7,
+                    // ✅ UNIFICAR: Todos los prospectos van a un solo lote
+                    // La clasificación (Estado_Final) se guarda en metadata del prospecto
+                    'unificar_lotes' => true,
                 ],
                 'sync_frequency' => 'weekly',
-                'lote_prefix' => 'SG_NC', // Sysgal No Cerrados
+                'lote_prefix' => 'SYSGAL_NO_CERRADOS', // Lote unificado
                 'is_active' => true,
             ]
         );

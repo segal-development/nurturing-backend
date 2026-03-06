@@ -182,9 +182,23 @@ class SysgalApiSyncService
 
     /**
      * Agrupa los datos por valor de clasificación.
+     *
+     * Si `unificar_lotes` está activo en sync_filters, todos los registros
+     * van a un solo grupo "unificado" (la clasificación se guarda en metadata).
      */
     private function agruparPorClasificacion(array $data, ExternalApiSource $source): array
     {
+        // ✅ NUEVO: Si unificar_lotes está activo, todo va a un solo grupo
+        $unificarLotes = $source->sync_filters['unificar_lotes'] ?? false;
+
+        if ($unificarLotes) {
+            Log::info('SysgalApiSyncService: Lotes unificados activo, todo va a un solo lote', [
+                'total_registros' => count($data),
+            ]);
+
+            return ['unificado' => $data];
+        }
+
         // Si no hay campo de clasificación, todo va a un grupo "default"
         if (! $source->tieneClasificacion()) {
             return ['default' => $data];
@@ -293,17 +307,28 @@ class SysgalApiSyncService
 
     /**
      * Obtiene o crea un lote para Sysgal.
+     *
+     * Si es lote unificado, usa solo el prefix (ej: "SYSGAL").
+     * Si no, incluye la clasificación (ej: "SG_NA_pendiente_de_contactar").
      */
     private function obtenerOCrearLote(ExternalApiSource $source, string $clasificacionValue, int $userId): Lote
     {
         $prefix = $source->lote_prefix ?: 'SG';
-        // NO incluir fecha - reutilizar el mismo lote para cada clasificación
-        $nombreLote = "{$prefix}_{$clasificacionValue}";
+        $unificarLotes = $source->sync_filters['unificar_lotes'] ?? false;
+
+        // ✅ Si es lote unificado, nombre simple sin clasificación
+        if ($unificarLotes || $clasificacionValue === 'unificado') {
+            $nombreLote = $prefix;
+            $clasificacionParaBusqueda = 'unificado';
+        } else {
+            $nombreLote = "{$prefix}_{$clasificacionValue}";
+            $clasificacionParaBusqueda = $clasificacionValue;
+        }
 
         return Lote::firstOrCreate(
             [
                 'external_api_source_id' => $source->id,
-                'clasificacion_value' => $clasificacionValue,
+                'clasificacion_value' => $clasificacionParaBusqueda,
             ],
             [
                 'nombre' => $nombreLote,
