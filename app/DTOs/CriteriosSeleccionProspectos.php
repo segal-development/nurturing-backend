@@ -32,6 +32,8 @@ final readonly class CriteriosSeleccionProspectos
 
     /**
      * Crea criterios desde un Flujo para seleccionar todos los prospectos del origen.
+     *
+     * @deprecated Use fromFlujoWithFilters() instead for better filter support
      */
     public static function fromFlujoSelectAll(Flujo $flujo): self
     {
@@ -46,6 +48,34 @@ final readonly class CriteriosSeleccionProspectos
             tipoProspectoId: $tipoProspectoId,
             selectAllFromOrigin: true,
             prospectoIds: [],
+        );
+    }
+
+    /**
+     * Crea criterios desde un Flujo con soporte completo de filtros.
+     *
+     * @param  Flujo  $flujo  El flujo al que se asignarán los prospectos
+     * @param  array  $loteIds  IDs de lotes específicos (vacío = todos del origen)
+     * @param  array  $metadataFilters  Filtros de metadata (ej: ['nivel_deuda' => ['alta', 'media']])
+     */
+    public static function fromFlujoWithFilters(
+        Flujo $flujo,
+        array $loteIds = [],
+        array $metadataFilters = []
+    ): self {
+        // Si el tipo es "Todos", no filtrar por tipo
+        $tipoProspectoId = null;
+        if ($flujo->tipoProspecto && ! $flujo->tipoProspecto->esTipoTodos()) {
+            $tipoProspectoId = $flujo->tipo_prospecto_id;
+        }
+
+        return new self(
+            origen: $flujo->origen,
+            tipoProspectoId: $tipoProspectoId,
+            selectAllFromOrigin: true,
+            prospectoIds: [],
+            loteIds: $loteIds,
+            metadataFilters: $metadataFilters,
         );
     }
 

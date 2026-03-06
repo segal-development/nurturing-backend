@@ -1190,7 +1190,9 @@ class FlujoController extends Controller
                 $flujo,
                 $request->input('prospectos.ids_seleccionados', []),
                 $canalEnvioInferido,
-                $request->boolean('prospectos.select_all_from_origin', false)
+                $request->boolean('prospectos.select_all_from_origin', false),
+                $request->input('lote_ids', []),
+                $request->input('metadata_filters', [])
             );
 
             $costos = $this->calcularYGuardarCostos($flujo, $conteoProspectos, $request);
@@ -1279,16 +1281,24 @@ class FlujoController extends Controller
      * despacha un Job en background usando criterios de query en lugar de IDs.
      * Esto permite procesar millones de prospectos sin problemas de memoria.
      *
+     * @param  array  $loteIds  IDs de lotes específicos (vacío = todos)
+     * @param  array  $metadataFilters  Filtros de metadata (ej: ['nivel_deuda' => ['alta']])
      * @return array{total: int, email: int, sms: int, is_async: bool}
      */
-    private function asignarProspectosAlFlujo(Flujo $flujo, array $prospectoIds, CanalEnvio $canalEnvio, bool $selectAllFromOrigin = false): array
-    {
+    private function asignarProspectosAlFlujo(
+        Flujo $flujo,
+        array $prospectoIds,
+        CanalEnvio $canalEnvio,
+        bool $selectAllFromOrigin = false,
+        array $loteIds = [],
+        array $metadataFilters = []
+    ): array {
         $conteo = ['total' => 0, 'email' => 0, 'sms' => 0, 'is_async' => false];
         $canalAsignado = $this->determinarCanalParaProspectos($canalEnvio);
 
         // CASO 1: Seleccionar todos del origen → Usar Job con criterios (NO cargar IDs)
         if ($selectAllFromOrigin) {
-            return $this->asignarProspectosAsync($flujo, $canalAsignado, $selectAllFromOrigin);
+            return $this->asignarProspectosAsync($flujo, $canalAsignado, $loteIds, $metadataFilters);
         }
 
         // CASO 2: IDs específicos seleccionados manualmente
@@ -1310,14 +1320,25 @@ class FlujoController extends Controller
     /**
      * Asigna prospectos de forma asíncrona usando criterios (sin cargar IDs en memoria).
      * Ideal para "seleccionar todos del origen" con cientos de miles de prospectos.
+     *
+     * @param  array  $loteIds  IDs de lotes específicos (vacío = todos)
+     * @param  array  $metadataFilters  Filtros de metadata (ej: ['nivel_deuda' => ['alta']])
      */
-    private function asignarProspectosAsync(Flujo $flujo, string $canalAsignado, bool $selectAllFromOrigin): array
-    {
-        // Crear criterios de selección (el Job construirá la query)
-        $criterios = \App\DTOs\CriteriosSeleccionProspectos::fromFlujoSelectAll($flujo);
+    private function asignarProspectosAsync(
+        Flujo $flujo,
+        string $canalAsignado,
+        array $loteIds = [],
+        array $metadataFilters = []
+    ): array {
+        // Crear criterios de selección CON filtros (el Job construirá la query)
+        $criterios = \App\DTOs\CriteriosSeleccionProspectos::fromFlujoWithFilters(
+            $flujo,
+            $loteIds,
+            $metadataFilters
+        );
 
         // Obtener conteo estimado SIN cargar IDs en memoria
-        $totalEstimado = $this->contarProspectosPorCriterios($flujo);
+        $totalEstimado = $this->contarProspectosPorCriterios($criterios);
 
         if ($totalEstimado === 0) {
             return ['total' => 0, 'email' => 0, 'sms' => 0, 'is_async' => false];
@@ -1386,19 +1407,42 @@ class FlujoController extends Controller
     }
 
     /**
-     * Cuenta prospectos según criterios del flujo SIN cargar IDs.
+     * Cuenta prospectos según criterios SIN cargar IDs.
+     * Soporta filtros de lotes y metadata.
      */
-    private function contarProspectosPorCriterios(Flujo $flujo): int
+    private function contarProspectosPorCriterios(\App\DTOs\CriteriosSeleccionProspectos $criterios): int
     {
-        $query = Prospecto::query()
-            ->whereHas('importacion', function ($q) use ($flujo) {
-                $q->where('origen', $flujo->origen);
-            });
+        $query = Prospecto::query();
 
-        // Solo filtrar por tipo si no es "Todos"
-        $tipoProspecto = $flujo->tipoProspecto;
-        if ($tipoProspecto && ! $tipoProspecto->esTipoTodos()) {
-            $query->where('tipo_prospecto_id', $flujo->tipo_prospecto_id);
+        // Filtrar por lotes específicos o por origen
+        if ($criterios->usarFiltroLotes()) {
+            $query->whereHas('importacion', function ($q) use ($criterios) {
+                $q->whereIn('lote_id', $criterios->loteIds);
+            });
+        } elseif (! empty($criterios->origen)) {
+            $query->whereHas('importacion', function ($q) use ($criterios) {
+                $q->where('origen', $criterios->origen);
+            });
+        }
+
+        // Filtrar por tipo de prospecto si no es "Todos"
+        if ($criterios->tipoProspectoId !== null) {
+            $query->where('tipo_prospecto_id', $criterios->tipoProspectoId);
+        }
+
+        // Aplicar filtros de metadata (ej: nivel_deuda)
+        if ($criterios->usarFiltroMetadata()) {
+            foreach ($criterios->metadataFilters as $campo => $valor) {
+                $campoSanitizado = preg_replace('/[^a-zA-Z0-9_]/', '', $campo);
+                $expresion = "metadata->>'{$campoSanitizado}'";
+
+                if (is_array($valor)) {
+                    $placeholders = implode(',', array_fill(0, count($valor), '?'));
+                    $query->whereRaw("{$expresion} IN ({$placeholders})", $valor);
+                } else {
+                    $query->whereRaw("{$expresion} = ?", [$valor]);
+                }
+            }
         }
 
         return $query->count();
