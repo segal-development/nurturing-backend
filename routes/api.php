@@ -61,6 +61,9 @@ Route::middleware(['auth:sanctum', 'throttle:api'])->group(function () {
     Route::get('/prospectos/emails-invalidos', [ProspectoController::class, 'emailsInvalidos']);
     Route::post('/prospectos/{prospecto}/rehabilitar-email', [ProspectoController::class, 'rehabilitarEmail']);
 
+    // Ruta para obtener valores únicos de metadata (para filtros dinámicos)
+    Route::get('/prospectos/metadata-values/{campo}', [ProspectoController::class, 'metadataValues']);
+
     Route::apiResource('prospectos', ProspectoController::class);
 
     // Rutas de Tipos de Prospecto (categorías por monto)

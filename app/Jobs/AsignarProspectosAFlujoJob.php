@@ -77,7 +77,9 @@ class AsignarProspectosAFlujoJob implements ShouldBeUniqueUntilProcessing, Shoul
 
         // Si hay IDs específicos, usarlos directamente
         if (! empty($criterios->prospectoIds)) {
-            return Prospecto::query()->whereIn('id', $criterios->prospectoIds);
+            $query = Prospecto::query()->whereIn('id', $criterios->prospectoIds);
+
+            return $this->aplicarFiltrosMetadata($query, $criterios);
         }
 
         // CASE: Filter by specific lotes (NEW)
@@ -92,7 +94,7 @@ class AsignarProspectosAFlujoJob implements ShouldBeUniqueUntilProcessing, Shoul
                 $query->where('tipo_prospecto_id', $criterios->tipoProspectoId);
             }
 
-            return $query;
+            return $this->aplicarFiltrosMetadata($query, $criterios);
         }
 
         // CASE: Select all from origin
@@ -107,11 +109,42 @@ class AsignarProspectosAFlujoJob implements ShouldBeUniqueUntilProcessing, Shoul
                 $query->where('tipo_prospecto_id', $criterios->tipoProspectoId);
             }
 
-            return $query;
+            return $this->aplicarFiltrosMetadata($query, $criterios);
         }
 
         // Fallback: empty query (shouldn't happen)
         return Prospecto::query()->whereRaw('1 = 0');
+    }
+
+    /**
+     * Aplica filtros sobre campos JSONB de metadata.
+     *
+     * Soporta:
+     * - Valor único: ['nivel_deuda' => 'alta']
+     * - Múltiples valores (OR): ['nivel_deuda' => ['alta', 'media']]
+     */
+    private function aplicarFiltrosMetadata(Builder $query, CriteriosSeleccionProspectos $criterios): Builder
+    {
+        if (! $criterios->usarFiltroMetadata()) {
+            return $query;
+        }
+
+        foreach ($criterios->metadataFilters as $campo => $valor) {
+            // Sanitizar nombre del campo para prevenir SQL injection
+            $campoSanitizado = preg_replace('/[^a-zA-Z0-9_]/', '', $campo);
+
+            if (is_array($valor)) {
+                // Múltiples valores: OR entre ellos
+                // PostgreSQL: metadata->>'nivel_deuda' IN ('alta', 'media')
+                $query->whereIn("metadata->>$campoSanitizado", $valor);
+            } else {
+                // Valor único
+                // PostgreSQL: metadata->>'nivel_deuda' = 'alta'
+                $query->where("metadata->>$campoSanitizado", $valor);
+            }
+        }
+
+        return $query;
     }
 
     /**

@@ -13,12 +13,21 @@ use App\Models\Flujo;
  */
 final readonly class CriteriosSeleccionProspectos
 {
+    /**
+     * @param  string  $origen  Origen de la importación (csv, api, etc.)
+     * @param  int|null  $tipoProspectoId  ID del tipo de prospecto (null = todos)
+     * @param  bool  $selectAllFromOrigin  Si debe seleccionar todos del origen
+     * @param  array  $prospectoIds  IDs específicos de prospectos (para selección manual)
+     * @param  array  $loteIds  IDs de lotes específicos
+     * @param  array  $metadataFilters  Filtros sobre campos de metadata (ej: ['nivel_deuda' => 'alta'])
+     */
     public function __construct(
         public string $origen,
         public ?int $tipoProspectoId,
         public bool $selectAllFromOrigin,
         public array $prospectoIds = [],
         public array $loteIds = [],
+        public array $metadataFilters = [],
     ) {}
 
     /**
@@ -70,6 +79,14 @@ final readonly class CriteriosSeleccionProspectos
     }
 
     /**
+     * Indica si se debe filtrar por campos de metadata.
+     */
+    public function usarFiltroMetadata(): bool
+    {
+        return ! empty($this->metadataFilters);
+    }
+
+    /**
      * Convierte a array para serialización en el Job.
      */
     public function toArray(): array
@@ -80,6 +97,7 @@ final readonly class CriteriosSeleccionProspectos
             'select_all_from_origin' => $this->selectAllFromOrigin,
             'prospecto_ids' => $this->prospectoIds,
             'lote_ids' => $this->loteIds,
+            'metadata_filters' => $this->metadataFilters,
         ];
     }
 
@@ -94,6 +112,7 @@ final readonly class CriteriosSeleccionProspectos
             selectAllFromOrigin: $data['select_all_from_origin'] ?? false,
             prospectoIds: $data['prospecto_ids'] ?? [],
             loteIds: $data['lote_ids'] ?? [],
+            metadataFilters: $data['metadata_filters'] ?? [],
         );
     }
 }

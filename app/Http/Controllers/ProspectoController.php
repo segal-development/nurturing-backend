@@ -68,6 +68,9 @@ class ProspectoController extends Controller
             });
         }
 
+        // Filtrar por campos de metadata (ej: metadata_nivel_deuda=alta)
+        $this->applyMetadataFilters($query, $request);
+
         $total = $query->count();
 
         return response()->json([
@@ -174,6 +177,45 @@ class ProspectoController extends Controller
                 ->orWhere('email', 'like', "%{$search}%")
                 ->orWhere('telefono', 'like', "%{$search}%");
         });
+    }
+
+    /**
+     * Apply metadata filters to query.
+     *
+     * Supports request parameters like:
+     * - metadata_nivel_deuda=alta (single value)
+     * - metadata_nivel_deuda[]=alta&metadata_nivel_deuda[]=media (multiple values, OR)
+     */
+    private function applyMetadataFilters(\Illuminate\Database\Eloquent\Builder $query, Request $request): void
+    {
+        $allInputs = $request->all();
+
+        foreach ($allInputs as $key => $value) {
+            // Solo procesar parámetros que empiecen con "metadata_"
+            if (! str_starts_with($key, 'metadata_')) {
+                continue;
+            }
+
+            // Extraer nombre del campo (ej: "metadata_nivel_deuda" -> "nivel_deuda")
+            $campo = substr($key, 9); // strlen('metadata_') = 9
+
+            // Validar nombre del campo
+            if (! preg_match('/^[a-zA-Z0-9_]+$/', $campo)) {
+                continue;
+            }
+
+            // PostgreSQL JSONB: metadata->>'campo' extrae como texto
+            $expresion = "metadata->>'{$campo}'";
+
+            if (is_array($value)) {
+                // Múltiples valores: OR usando whereIn con raw expression
+                $placeholders = implode(',', array_fill(0, count($value), '?'));
+                $query->whereRaw("{$expresion} IN ({$placeholders})", $value);
+            } elseif (! empty($value)) {
+                // Valor único
+                $query->whereRaw("{$expresion} = ?", [$value]);
+            }
+        }
     }
 
     /**
@@ -619,6 +661,60 @@ class ProspectoController extends Controller
                 'total' => $prospectos->total(),
                 'per_page' => $prospectos->perPage(),
                 'last_page' => $prospectos->lastPage(),
+            ],
+        ]);
+    }
+
+    /**
+     * Get unique values for a specific metadata field.
+     *
+     * Useful for building filter dropdowns in the frontend.
+     * Supports filtering by lote_ids to show only relevant options.
+     *
+     * Example: GET /api/prospectos/metadata-values/nivel_deuda?lote_ids[]=1&lote_ids[]=2
+     *
+     * @param  string  $campo  The metadata field name (e.g., 'nivel_deuda', 'etapa_sysgal')
+     */
+    public function metadataValues(Request $request, string $campo): JsonResponse
+    {
+        // Validar nombre del campo (solo alfanumérico y guiones bajos)
+        if (! preg_match('/^[a-zA-Z0-9_]+$/', $campo)) {
+            return response()->json([
+                'mensaje' => 'Nombre de campo inválido',
+            ], 422);
+        }
+
+        // Construir query base
+        $query = Prospecto::query()
+            ->whereNotNull('metadata')
+            ->whereRaw("metadata->>'{$campo}' IS NOT NULL")
+            ->whereRaw("metadata->>'{$campo}' != ''");
+
+        // Filtrar por lotes si se especifican
+        if ($request->filled('lote_ids') && is_array($request->input('lote_ids'))) {
+            $loteIds = $request->input('lote_ids');
+            $query->whereHas('importacion', fn ($q) => $q->whereIn('lote_id', $loteIds));
+        }
+
+        // Obtener valores únicos con conteo usando DB::raw para expresión consistente
+        // PostgreSQL: metadata->>'nivel_deuda' extrae el valor como texto
+        $expresion = "metadata->>'{$campo}'";
+
+        $valores = $query
+            ->selectRaw("{$expresion} as valor, COUNT(*) as total")
+            ->groupByRaw($expresion)
+            ->orderByRaw('total DESC')
+            ->get()
+            ->map(fn ($row) => [
+                'valor' => $row->valor,
+                'total' => (int) $row->total,
+            ])
+            ->values();
+
+        return response()->json([
+            'data' => [
+                'campo' => $campo,
+                'valores' => $valores,
             ],
         ]);
     }

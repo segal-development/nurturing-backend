@@ -18,6 +18,7 @@ class ImportacionFactory extends Factory
     {
         return [
             'user_id' => \App\Models\User::factory(),
+            'lote_id' => \App\Models\Lote::factory(),
             'nombre_archivo' => fake()->word().'.xlsx',
             'ruta_archivo' => 'importaciones/'.fake()->word().'.xlsx',
             'origen' => fake()->randomElement(['banco_x', 'campania_verano', 'base_general', 'referidos']),
