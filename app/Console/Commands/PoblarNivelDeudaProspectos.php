@@ -37,7 +37,7 @@ class PoblarNivelDeudaProspectos extends Command
         if ($processAll) {
             $this->warn('⚠️  Modo --all: Procesando TODOS los prospectos (no solo Sysgal)');
         } else {
-            $this->info('📌 Solo prospectos de SYSGAL (lotes con nombre SYSGAL%)');
+            $this->info('📌 Solo prospectos de SYSGAL (lotes SG_NA_* y SG_NC_*)');
         }
         $this->newLine();
 
@@ -177,9 +177,10 @@ class PoblarNivelDeudaProspectos extends Command
             ->whereRaw("(metadata->>'nivel_deuda' IS NULL OR metadata->>'nivel_deuda' = '')");
 
         if (! $processAll) {
-            // Solo prospectos de lotes SYSGAL
+            // Solo prospectos de lotes Sysgal (SG_NA_* y SG_NC_*)
             $query->whereHas('importacion.lote', function ($q) {
-                $q->where('nombre', 'like', 'SYSGAL%');
+                $q->where('nombre', 'like', 'SG_NA_%')
+                    ->orWhere('nombre', 'like', 'SG_NC_%');
             });
         }
 
@@ -197,7 +198,8 @@ class PoblarNivelDeudaProspectos extends Command
 
         if (! $processAll) {
             $query->whereHas('importacion.lote', function ($q) {
-                $q->where('nombre', 'like', 'SYSGAL%');
+                $q->where('nombre', 'like', 'SG_NA_%')
+                    ->orWhere('nombre', 'like', 'SG_NC_%');
             });
         }
 
