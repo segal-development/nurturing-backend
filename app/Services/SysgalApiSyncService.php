@@ -611,8 +611,10 @@ class SysgalApiSyncService
      * - baja: < $700.000 CLP
      * - media: $700.000 - $1.500.000 CLP
      * - alta: > $1.500.000 CLP
+     *
+     * Método público estático para poder reutilizarlo en comandos de migración.
      */
-    private function calcularNivelDeuda(int $monto): string
+    public static function calcularNivelDeuda(int|float $monto): string
     {
         if ($monto <= 0) {
             return 'sin_informacion';
@@ -820,6 +822,9 @@ class SysgalApiSyncService
 
     /**
      * Actualiza un batch de prospectos existentes.
+     *
+     * IMPORTANTE: Incluimos metadata y tipo_prospecto_id para que el sync
+     * actualice nivel_deuda y monto_deuda en prospectos existentes.
      */
     private function updateBatch(array $batch): void
     {
@@ -831,7 +836,16 @@ class SysgalApiSyncService
             DB::table('prospectos')->upsert(
                 $batch,
                 ['id'],
-                ['nombre', 'email', 'telefono', 'rut', 'updated_at']
+                [
+                    'nombre',
+                    'email',
+                    'telefono',
+                    'rut',
+                    'monto_deuda',
+                    'tipo_prospecto_id',
+                    'metadata',
+                    'updated_at',
+                ]
             );
         } catch (\Exception $e) {
             Log::warning('SysgalApiSyncService: Batch upsert falló, actualizando uno por uno', [
