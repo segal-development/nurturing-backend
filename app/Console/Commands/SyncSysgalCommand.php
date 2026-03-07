@@ -5,25 +5,26 @@ namespace App\Console\Commands;
 use App\Models\ExternalApiSource;
 use App\Services\SysgalApiSyncService;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Comando para sincronizar prospectos desde la API de Sysgal.
  *
  * Uso:
- *   php artisan sync:sysgal no_agendados           # Sync prospectos no agendados (última semana)
- *   php artisan sync:sysgal no_cerrados            # Sync agendas no cerradas (última semana)
- *   php artisan sync:sysgal all                    # Sync ambas fuentes
- *   php artisan sync:sysgal no_agendados --dias=14 # Últimos 14 días
+ *   php artisan sync:sysgal                        # Sync todos los endpoints
+ *   php artisan sync:sysgal no_agendados           # Sync solo prospectos no agendados
+ *   php artisan sync:sysgal no_cerrados            # Sync solo agendas no cerradas
+ *   php artisan sync:sysgal --dias=14              # Últimos 14 días
  *   php artisan sync:sysgal --test                 # Test de conexión
  *   php artisan sync:sysgal --stats                # Ver estadísticas
  */
 class SyncSysgalCommand extends Command
 {
     protected $signature = 'sync:sysgal
-                            {source? : Fuente a sincronizar (no_agendados, no_cerrados, all)}
+                            {endpoint? : Endpoint específico a sincronizar (no_agendados, no_cerrados)}
                             {--dias=7 : Días hacia atrás a sincronizar}
                             {--test : Solo probar conexión sin sincronizar}
-                            {--stats : Mostrar estadísticas de las fuentes}';
+                            {--stats : Mostrar estadísticas de la fuente}';
 
     protected $description = 'Sincroniza prospectos desde la API de Sysgal (Defensoría)';
 
@@ -42,69 +43,29 @@ class SyncSysgalCommand extends Command
         }
 
         if ($this->option('test')) {
-            return $this->testConnections();
+            return $this->testConnection();
         }
 
-        $source = $this->argument('source');
-
-        if (empty($source)) {
-            $this->error('Debe especificar una fuente: no_agendados, no_cerrados o all');
-            $this->line('');
-            $this->line('Uso:');
-            $this->line('  php artisan sync:sysgal no_agendados    # Prospectos que no agendaron');
-            $this->line('  php artisan sync:sysgal no_cerrados     # Agendas que no cerraron');
-            $this->line('  php artisan sync:sysgal all             # Ambas fuentes');
-            $this->line('  php artisan sync:sysgal --test          # Probar conexión');
-            $this->line('  php artisan sync:sysgal --stats         # Ver estadísticas');
-
-            return Command::FAILURE;
-        }
-
-        $dias = (int) $this->option('dias');
-
-        if ($source === 'all') {
-            return $this->syncAll($dias);
-        }
-
-        $sourceName = $this->resolveSourceName($source);
-
-        if ($sourceName === null) {
-            $this->error("Fuente '{$source}' no reconocida. Use: no_agendados, no_cerrados o all");
-
-            return Command::FAILURE;
-        }
-
-        return $this->syncSource($sourceName, $dias);
+        return $this->syncSource();
     }
 
     /**
-     * Resuelve el nombre corto a nombre completo de la fuente.
+     * Sincroniza la fuente Sysgal.
      */
-    private function resolveSourceName(string $source): ?string
+    private function syncSource(): int
     {
-        return match ($source) {
-            'no_agendados' => 'sysgal_no_agendados',
-            'no_cerrados' => 'sysgal_no_cerrados',
-            default => null,
-        };
-    }
-
-    /**
-     * Sincroniza una fuente específica.
-     */
-    private function syncSource(string $sourceName, int $dias): int
-    {
-        $source = ExternalApiSource::where('name', $sourceName)->first();
+        $source = $this->getSysgalSource();
 
         if (! $source) {
-            $this->error("Fuente '{$sourceName}' no encontrada en la base de datos.");
-            $this->line('Ejecute: php artisan db:seed --class=SysgalApiSourceSeeder');
-
             return Command::FAILURE;
         }
 
-        if (! $source->is_active) {
-            $this->warn("Fuente '{$source->display_name}' está desactivada.");
+        $endpointName = $this->argument('endpoint');
+        $dias = (int) $this->option('dias');
+
+        // Validar endpoint si se especificó
+        if ($endpointName !== null && ! in_array($endpointName, ['no_agendados', 'no_cerrados'])) {
+            $this->error("Endpoint '{$endpointName}' no reconocido. Use: no_agendados o no_cerrados");
 
             return Command::FAILURE;
         }
@@ -118,14 +79,21 @@ class SyncSysgalCommand extends Command
         }
 
         $this->info("=== Sincronizando: {$source->display_name} ===");
-        $this->line("Endpoint: {$source->endpoint_url}");
+
+        if ($endpointName) {
+            $this->line("Endpoint: {$endpointName}");
+        } else {
+            $endpoints = $source->sync_filters['endpoints'] ?? [];
+            $this->line('Endpoints: '.count($endpoints).' configurados');
+        }
+
         $this->line("Días: {$dias}");
         $this->newLine();
 
         $startTime = now();
 
         try {
-            $resultado = $this->syncService->sync($source, 1);
+            $resultado = $this->syncService->sync($source, 1, $endpointName);
 
             $duration = now()->diffInSeconds($startTime);
 
@@ -134,7 +102,7 @@ class SyncSysgalCommand extends Command
             $this->table(
                 ['Métrica', 'Valor'],
                 [
-                    ['Lotes creados', count($resultado['lotes'])],
+                    ['Lotes procesados', count($resultado['lotes'])],
                     ['Total procesados', $resultado['total_prospectos']],
                     ['Nuevos', $resultado['nuevos']],
                     ['Actualizados', $resultado['actualizados']],
@@ -145,7 +113,7 @@ class SyncSysgalCommand extends Command
 
             if (count($resultado['lotes']) > 0) {
                 $this->newLine();
-                $this->info('Lotes creados:');
+                $this->info('Lotes actualizados:');
                 foreach ($resultado['lotes'] as $lote) {
                     $this->line("  - {$lote->nombre}: {$lote->total_registros} prospectos");
                 }
@@ -161,119 +129,152 @@ class SyncSysgalCommand extends Command
     }
 
     /**
-     * Sincroniza todas las fuentes de Sysgal.
-     */
-    private function syncAll(int $dias): int
-    {
-        $this->info('=== Sincronizando todas las fuentes de Sysgal ===');
-        $this->newLine();
-
-        $sources = ['sysgal_no_agendados', 'sysgal_no_cerrados'];
-        $results = [];
-
-        foreach ($sources as $index => $sourceName) {
-            $this->line(">>> Sincronizando {$sourceName} (".($index + 1).'/'.count($sources).')');
-
-            $exitCode = $this->syncSource($sourceName, $dias);
-            $results[$sourceName] = $exitCode === Command::SUCCESS ? 'OK' : 'ERROR';
-
-            // Pausa entre fuentes
-            if ($index < count($sources) - 1) {
-                $this->line('Pausa de 10 segundos...');
-                sleep(10);
-            }
-        }
-
-        $this->newLine();
-        $this->info('=== RESUMEN FINAL ===');
-        $this->table(
-            ['Fuente', 'Resultado'],
-            collect($results)->map(fn ($r, $s) => [$s, $r])->values()->toArray()
-        );
-
-        return Command::SUCCESS;
-    }
-
-    /**
-     * Muestra estadísticas de las fuentes Sysgal.
+     * Muestra estadísticas de la fuente Sysgal.
      */
     private function showStats(): int
     {
-        $this->info('=== Estadísticas de fuentes Sysgal ===');
+        $this->info('=== Estadísticas de Sysgal ===');
         $this->newLine();
 
-        $sources = ExternalApiSource::where('name', 'like', 'sysgal_%')->get();
+        $source = $this->getSysgalSource();
 
-        if ($sources->isEmpty()) {
-            $this->warn('No hay fuentes Sysgal configuradas.');
-            $this->line('Ejecute: php artisan db:seed --class=SysgalApiSourceSeeder');
-
+        if (! $source) {
             return Command::FAILURE;
         }
 
-        foreach ($sources as $source) {
-            $this->info("--- {$source->display_name} ---");
-            $this->table(
-                ['Campo', 'Valor'],
-                [
-                    ['ID', $source->id],
-                    ['Nombre', $source->name],
-                    ['Endpoint', $source->endpoint_url],
-                    ['Activo', $source->is_active ? 'Sí' : 'No'],
-                    ['Último sync', $source->last_synced_at?->format('Y-m-d H:i:s') ?? 'Nunca'],
-                    ['Registros último sync', $source->last_sync_count],
-                    ['Error último sync', $source->last_sync_error ?? 'Ninguno'],
-                    ['Días hacia atrás', $source->sync_filters['dias_atras'] ?? 7],
-                ]
-            );
+        $this->info("--- {$source->display_name} ---");
+        $this->table(
+            ['Campo', 'Valor'],
+            [
+                ['ID', $source->id],
+                ['Nombre', $source->name],
+                ['Activo', $source->is_active ? 'Sí' : 'No'],
+                ['Último sync', $source->last_synced_at?->format('Y-m-d H:i:s') ?? 'Nunca'],
+                ['Registros último sync', $source->last_sync_count],
+                ['Error último sync', $source->last_sync_error ?? 'Ninguno'],
+                ['Días hacia atrás', $source->sync_filters['dias_atras'] ?? 7],
+            ]
+        );
 
-            // Contar lotes y prospectos
-            $lotes = $source->lotes()->count();
-            $prospectos = \DB::table('prospectos')
-                ->join('importaciones', 'prospectos.importacion_id', '=', 'importaciones.id')
-                ->where('importaciones.external_api_source_id', $source->id)
-                ->count();
-
-            $this->line("  Lotes: {$lotes}");
-            $this->line("  Prospectos: {$prospectos}");
+        // Mostrar endpoints configurados
+        $endpoints = $source->sync_filters['endpoints'] ?? [];
+        if (! empty($endpoints)) {
             $this->newLine();
+            $this->info('Endpoints configurados:');
+            foreach ($endpoints as $endpoint) {
+                $this->line("  - {$endpoint['name']}: {$endpoint['display_name']}");
+                $this->line("    URL: {$endpoint['url']}");
+            }
+        }
+
+        // Contar lotes y prospectos
+        $lotes = $source->lotes()->count();
+        $prospectos = DB::table('prospectos')
+            ->join('importaciones', 'prospectos.importacion_id', '=', 'importaciones.id')
+            ->where('importaciones.external_api_source_id', $source->id)
+            ->count();
+
+        $this->newLine();
+        $this->line("Lotes: {$lotes}");
+        $this->line("Prospectos totales: {$prospectos}");
+
+        // Estadísticas por nivel de deuda
+        $this->newLine();
+        $this->info('Prospectos por nivel de deuda:');
+        $niveles = DB::table('prospectos')
+            ->join('importaciones', 'prospectos.importacion_id', '=', 'importaciones.id')
+            ->where('importaciones.external_api_source_id', $source->id)
+            ->selectRaw("metadata->>'nivel_deuda' as nivel, COUNT(*) as count")
+            ->groupByRaw("metadata->>'nivel_deuda'")
+            ->pluck('count', 'nivel')
+            ->toArray();
+
+        foreach ($niveles as $nivel => $count) {
+            $this->line("  - {$nivel}: {$count}");
         }
 
         return Command::SUCCESS;
     }
 
     /**
-     * Prueba la conexión a las fuentes Sysgal.
+     * Prueba la conexión a Sysgal.
      */
-    private function testConnections(): int
+    private function testConnection(): int
     {
         $this->info('=== Test de conexión a Sysgal ===');
         $this->newLine();
 
-        $sources = ExternalApiSource::where('name', 'like', 'sysgal_%')->get();
+        $source = $this->getSysgalSource();
 
-        if ($sources->isEmpty()) {
-            $this->warn('No hay fuentes Sysgal configuradas.');
-            $this->line('Ejecute: php artisan db:seed --class=SysgalApiSourceSeeder');
-
+        if (! $source) {
             return Command::FAILURE;
         }
 
-        foreach ($sources as $source) {
-            $this->line("Probando {$source->display_name}...");
+        $this->line("Probando {$source->display_name}...");
+        $this->newLine();
 
-            $result = $this->syncService->testConnection($source);
+        $result = $this->syncService->testConnection($source);
 
-            if ($result['success']) {
-                $this->info("  OK - {$result['message']}");
-                $this->line("  Registros encontrados: {$result['sample_count']} (Total: {$result['total']})");
-            } else {
-                $this->error("  ERROR - {$result['message']}");
+        if ($result['success']) {
+            $this->info("✓ {$result['message']}");
+
+            if (isset($result['endpoints'])) {
+                $this->newLine();
+                foreach ($result['endpoints'] as $name => $endpointResult) {
+                    if ($endpointResult['success']) {
+                        $this->info("  ✓ {$name}: {$endpointResult['sample_count']} registros (Total: {$endpointResult['total']})");
+                    } else {
+                        $this->error("  ✗ {$name}: {$endpointResult['message']}");
+                    }
+                }
             }
 
-            $this->newLine();
+            if (isset($result['total_records'])) {
+                $this->newLine();
+                $this->line("Total registros encontrados: {$result['total_records']}");
+            }
+        } else {
+            $this->error("✗ {$result['message']}");
+
+            if (isset($result['endpoints'])) {
+                $this->newLine();
+                foreach ($result['endpoints'] as $name => $endpointResult) {
+                    $status = $endpointResult['success'] ? '✓' : '✗';
+                    $this->line("  {$status} {$name}: {$endpointResult['message']}");
+                }
+            }
         }
 
-        return Command::SUCCESS;
+        return $result['success'] ? Command::SUCCESS : Command::FAILURE;
+    }
+
+    /**
+     * Obtiene la fuente Sysgal (unificada o legacy).
+     */
+    private function getSysgalSource(): ?ExternalApiSource
+    {
+        // Primero buscar la fuente unificada
+        $source = ExternalApiSource::where('name', 'sysgal')
+            ->where('is_active', true)
+            ->first();
+
+        if ($source) {
+            return $source;
+        }
+
+        // Fallback: buscar fuentes legacy
+        $source = ExternalApiSource::where('name', 'like', 'sysgal_%')
+            ->where('is_active', true)
+            ->first();
+
+        if (! $source) {
+            $this->error('No se encontró fuente Sysgal activa.');
+            $this->line('Ejecute: php artisan db:seed --class=SysgalApiSourceSeeder');
+            $this->line('O ejecute la migración: php artisan migrate');
+
+            return null;
+        }
+
+        return $source;
     }
 }

@@ -17,15 +17,15 @@ use Illuminate\Support\Facades\Log;
 /**
  * Servicio para sincronizar prospectos desde la API de Sysgal (Defensoría).
  *
- * Endpoints soportados:
+ * Soporta múltiples endpoints en una sola fuente:
  * - /ProspectosNoAgendados: Prospectos que entraron pero no agendaron cita
  * - /AgendadosNoCerrados: Prospectos que agendaron pero no contrataron
  *
- * Diferencias con ExternalApiSyncService:
- * - Usa POST en lugar de GET
- * - Envía fechas en el body (desde/hasta)
- * - Estructura de respuesta diferente (Estado, Total, Prospectos/Agendas)
+ * Características:
+ * - Usa POST con fechas en el body
  * - Auth por IP (no requiere token)
+ * - Todos los prospectos van a un único lote "SYSGAL"
+ * - Se clasifica por nivel de deuda (baja/media/alta) en metadata
  *
  * @example
  * $service = new SysgalApiSyncService();
@@ -48,15 +48,19 @@ class SysgalApiSyncService
     /**
      * Sincroniza prospectos desde una fuente Sysgal.
      *
+     * Si la fuente tiene múltiples endpoints configurados en sync_filters['endpoints'],
+     * itera sobre cada uno y combina los resultados.
+     *
      * @param  ExternalApiSource  $source  La fuente a sincronizar
      * @param  int|null  $userId  ID del usuario que ejecuta (null = sistema)
+     * @param  string|null  $endpointName  Opcional: sincronizar solo un endpoint específico
      * @return array{lotes: array<Lote>, total_prospectos: int, nuevos: int, actualizados: int, omitidos_en_flujo: int}
      */
-    public function sync(ExternalApiSource $source, ?int $userId = null): array
+    public function sync(ExternalApiSource $source, ?int $userId = null, ?string $endpointName = null): array
     {
         Log::info('SysgalApiSyncService: Iniciando sincronización', [
             'source' => $source->name,
-            'endpoint' => $source->endpoint_url,
+            'endpoint_filter' => $endpointName,
         ]);
 
         try {
@@ -66,7 +70,18 @@ class SysgalApiSyncService
             // 2. Cargar IDs de prospectos ya en flujos activos
             $this->loadProspectosEnFlujoActivo();
 
-            // 3. Calcular rango de fechas
+            // 3. Obtener endpoints a sincronizar
+            $endpoints = $this->getEndpoints($source, $endpointName);
+
+            if (empty($endpoints)) {
+                Log::warning('SysgalApiSyncService: No hay endpoints configurados', [
+                    'source' => $source->name,
+                ]);
+
+                return $this->emptyResult();
+            }
+
+            // 4. Calcular rango de fechas
             $diasAtras = $source->sync_filters['dias_atras'] ?? 7;
             $hasta = now();
             $desde = now()->subDays($diasAtras);
@@ -74,28 +89,24 @@ class SysgalApiSyncService
             Log::info('SysgalApiSyncService: Rango de fechas', [
                 'desde' => $desde->format('Y-m-d'),
                 'hasta' => $hasta->format('Y-m-d'),
+                'endpoints' => count($endpoints),
             ]);
 
-            // 4. Fetch de la API
-            $data = $this->fetchFromSysgal($source, $desde, $hasta);
-
-            if (empty($data)) {
-                Log::info('SysgalApiSyncService: No hay registros nuevos');
-
-                return [
-                    'lotes' => [],
-                    'total_prospectos' => 0,
-                    'nuevos' => 0,
-                    'actualizados' => 0,
-                    'omitidos_en_flujo' => 0,
-                ];
+            // 5. Sincronizar cada endpoint y combinar resultados
+            $allData = [];
+            foreach ($endpoints as $endpoint) {
+                $data = $this->fetchFromEndpoint($endpoint, $desde, $hasta);
+                $allData = array_merge($allData, $data);
             }
 
-            // 5. Agrupar por clasificación si corresponde
-            $grupos = $this->agruparPorClasificacion($data, $source);
+            if (empty($allData)) {
+                Log::info('SysgalApiSyncService: No hay registros nuevos');
 
-            // 6. Procesar cada grupo
-            $resultado = $this->procesarGrupos($grupos, $source, $userId ?? 1);
+                return $this->emptyResult();
+            }
+
+            // 6. Procesar todos los datos en un único lote
+            $resultado = $this->procesarDatos($allData, $source, $userId ?? 1);
 
             // 7. Marcar la fuente como sincronizada
             $source->markAsSynced($resultado['total_prospectos']);
@@ -125,19 +136,51 @@ class SysgalApiSyncService
     }
 
     /**
-     * Llama a la API de Sysgal con POST y rango de fechas.
+     * Obtiene los endpoints a sincronizar.
+     *
+     * Si la fuente tiene múltiples endpoints en sync_filters['endpoints'], los usa.
+     * Si no, crea un endpoint virtual usando endpoint_url y field_mapping.
+     *
+     * @return array<array{name: string, url: string, field_mapping: array, date_format: string}>
      */
-    private function fetchFromSysgal(ExternalApiSource $source, \Carbon\Carbon $desde, \Carbon\Carbon $hasta): array
+    private function getEndpoints(ExternalApiSource $source, ?string $endpointName = null): array
     {
-        $url = $source->endpoint_url;
-        $headers = $source->headers ?? [];
+        $syncFilters = $source->sync_filters ?? [];
+        $endpoints = $syncFilters['endpoints'] ?? [];
 
-        // Determinar formato de fechas según endpoint
-        $isAgendadosNoCerrados = str_contains($url, 'AgendadosNoCerrados');
+        // Si hay endpoints configurados, usarlos
+        if (! empty($endpoints)) {
+            if ($endpointName !== null) {
+                // Filtrar por nombre específico
+                return array_filter($endpoints, fn ($e) => $e['name'] === $endpointName);
+            }
 
-        // AgendadosNoCerrados usa formato "YYYY-MM-DD HH:MM:SS"
-        // ProspectosNoAgendados usa formato "YYYY-MM-DD"
-        $body = $isAgendadosNoCerrados
+            return $endpoints;
+        }
+
+        // Fallback: crear endpoint virtual desde la configuración legacy
+        $isAgendadosNoCerrados = str_contains($source->endpoint_url, 'AgendadosNoCerrados');
+
+        return [[
+            'name' => $isAgendadosNoCerrados ? 'no_cerrados' : 'no_agendados',
+            'url' => $source->endpoint_url,
+            'display_name' => $source->display_name,
+            'field_mapping' => $source->field_mapping ?? [],
+            'date_format' => $isAgendadosNoCerrados ? 'Y-m-d H:i:s' : 'Y-m-d',
+        ]];
+    }
+
+    /**
+     * Llama a un endpoint específico de Sysgal.
+     */
+    private function fetchFromEndpoint(array $endpoint, \Carbon\Carbon $desde, \Carbon\Carbon $hasta): array
+    {
+        $url = $endpoint['url'];
+        $dateFormat = $endpoint['date_format'] ?? 'Y-m-d';
+        $endpointName = $endpoint['name'] ?? 'unknown';
+
+        // Formatear fechas según el endpoint
+        $body = $dateFormat === 'Y-m-d H:i:s'
             ? [
                 'desde' => $desde->format('Y-m-d 00:00:00'),
                 'hasta' => $hasta->format('Y-m-d 23:59:59'),
@@ -147,17 +190,21 @@ class SysgalApiSyncService
                 'hasta' => $hasta->format('Y-m-d'),
             ];
 
-        Log::info('SysgalApiSyncService: Llamando a API', [
+        Log::info('SysgalApiSyncService: Llamando a endpoint', [
+            'name' => $endpointName,
             'url' => $url,
             'body' => $body,
         ]);
 
-        $response = Http::withHeaders($headers)
+        $response = Http::withHeaders([
+            'Content-Type' => 'application/json',
+            'Accept' => 'application/json',
+        ])
             ->timeout(120)
             ->post($url, $body);
 
         if (! $response->successful()) {
-            throw new \Exception("Error HTTP {$response->status()}: {$response->body()}");
+            throw new \Exception("Error HTTP {$response->status()} en {$endpointName}: {$response->body()}");
         }
 
         $json = $response->json();
@@ -165,7 +212,7 @@ class SysgalApiSyncService
         // Verificar respuesta de Sysgal
         if (($json['Estado'] ?? 0) !== 1) {
             $mensaje = $json['Mensaje'] ?? 'Error desconocido';
-            throw new \Exception("Sysgal respondió con error: {$mensaje}");
+            throw new \Exception("Sysgal respondió con error en {$endpointName}: {$mensaje}");
         }
 
         // El array de datos puede estar en "Prospectos" o "Agendas" según el endpoint
@@ -173,185 +220,70 @@ class SysgalApiSyncService
         $total = $json['Total'] ?? count($data);
 
         Log::info('SysgalApiSyncService: Respuesta recibida', [
+            'endpoint' => $endpointName,
             'total' => $total,
             'registros' => count($data),
         ]);
+
+        // Agregar metadata del endpoint a cada registro
+        foreach ($data as &$row) {
+            $row['_endpoint'] = $endpointName;
+            $row['_field_mapping'] = $endpoint['field_mapping'] ?? [];
+        }
 
         return $data;
     }
 
     /**
-     * Agrupa los datos por valor de clasificación.
-     *
-     * Si `unificar_lotes` está activo en sync_filters, todos los registros
-     * van a un solo grupo "unificado" (la clasificación se guarda en metadata).
+     * Procesa todos los datos en un único lote SYSGAL.
      */
-    private function agruparPorClasificacion(array $data, ExternalApiSource $source): array
+    private function procesarDatos(array $data, ExternalApiSource $source, int $userId): array
     {
-        // ✅ NUEVO: Si unificar_lotes está activo, todo va a un solo grupo
-        $unificarLotes = $source->sync_filters['unificar_lotes'] ?? false;
+        $syncFilters = $source->sync_filters ?? [];
+        $loteNombre = $syncFilters['lote_global'] ?? 'SYSGAL';
 
-        if ($unificarLotes) {
-            Log::info('SysgalApiSyncService: Lotes unificados activo, todo va a un solo lote', [
-                'total_registros' => count($data),
-            ]);
+        // Obtener o crear el lote único
+        $lote = $this->obtenerOCrearLoteGlobal($source, $loteNombre, $userId);
 
-            return ['unificado' => $data];
-        }
+        // Crear importación
+        $importacion = $this->createImportacion($source, $lote, $userId, count($data));
 
-        // Si no hay campo de clasificación, todo va a un grupo "default"
-        if (! $source->tieneClasificacion()) {
-            return ['default' => $data];
-        }
-
-        $grupos = [];
-        $field = $source->clasificacion_field;
-
-        foreach ($data as $row) {
-            $valor = $this->getFieldValue($row, $field) ?? 'sin_clasificar';
-            $valor = trim((string) $valor);
-
-            // Normalizar valores de clasificación (quitar espacios extra)
-            $valor = preg_replace('/\s+/', ' ', $valor);
-
-            if (! isset($grupos[$valor])) {
-                $grupos[$valor] = [];
-            }
-
-            $grupos[$valor][] = $row;
-        }
-
-        Log::info('SysgalApiSyncService: Datos agrupados por clasificación', [
-            'field' => $field,
-            'grupos' => array_map('count', $grupos),
-        ]);
-
-        return $grupos;
-    }
-
-    /**
-     * Procesa cada grupo creando un lote y sus prospectos.
-     */
-    private function procesarGrupos(array $grupos, ExternalApiSource $source, int $userId): array
-    {
-        $lotes = [];
-        $totalProspectos = 0;
-        $totalNuevos = 0;
-        $totalActualizados = 0;
-        $totalOmitidosEnFlujo = 0;
-
-        $fieldMapping = $source->getFieldMappingWithDefaults();
+        // Cargar tipos de prospecto
         $tiposProspecto = $this->loadTiposProspecto();
 
-        foreach ($grupos as $clasificacionValue => $registros) {
-            // Sanitizar el nombre de clasificación para el lote
-            $clasificacionSanitizada = $this->sanitizarClasificacion($clasificacionValue);
+        // Procesar prospectos
+        $resultado = $this->processProspectos(
+            $importacion,
+            $data,
+            $tiposProspecto,
+            $source
+        );
 
-            // Crear o reutilizar lote para este valor de clasificación
-            $lote = $this->obtenerOCrearLote($source, $clasificacionSanitizada, $userId);
+        // Finalizar importación
+        $this->finalizeImportacion($importacion, $resultado);
 
-            // Crear importación dentro del lote
-            $importacion = $this->createImportacion($source, $lote, $userId, count($registros), $clasificacionValue);
-
-            // Procesar prospectos
-            $resultado = $this->processProspectos(
-                $importacion,
-                $registros,
-                $fieldMapping,
-                $tiposProspecto,
-                $source
-            );
-
-            // Actualizar importación
-            $this->finalizeImportacion($importacion, $resultado);
-
-            // Actualizar totales del lote y cerrar
-            $lote->recalcularTotales();
-            $lote->update(['estado' => 'completado']);
-
-            $lotes[] = $lote;
-            $totalProspectos += $resultado['exitosos'];
-            $totalNuevos += $resultado['nuevos'];
-            $totalActualizados += $resultado['actualizados'];
-            $totalOmitidosEnFlujo += $resultado['omitidos_en_flujo'];
-        }
+        // Actualizar totales del lote
+        $lote->recalcularTotales();
 
         return [
-            'lotes' => $lotes,
-            'total_prospectos' => $totalProspectos,
-            'nuevos' => $totalNuevos,
-            'actualizados' => $totalActualizados,
-            'omitidos_en_flujo' => $totalOmitidosEnFlujo,
+            'lotes' => [$lote],
+            'total_prospectos' => $resultado['exitosos'],
+            'nuevos' => $resultado['nuevos'],
+            'actualizados' => $resultado['actualizados'],
+            'omitidos_en_flujo' => $resultado['omitidos_en_flujo'],
         ];
     }
 
     /**
-     * Sanitiza el valor de clasificación para usarlo como nombre de lote.
+     * Obtiene o crea el lote global para Sysgal.
      */
-    private function sanitizarClasificacion(string $valor): string
+    private function obtenerOCrearLoteGlobal(ExternalApiSource $source, string $nombre, int $userId): Lote
     {
-        // Convertir a minúsculas y reemplazar espacios/caracteres especiales
-        $sanitizado = strtolower($valor);
-        $sanitizado = str_replace(['/', '-', ' '], '_', $sanitizado);
-        $sanitizado = preg_replace('/[^a-z0-9_]/', '', $sanitizado);
-        $sanitizado = preg_replace('/_+/', '_', $sanitizado);
-        $sanitizado = trim($sanitizado, '_');
-
-        // Limitar longitud
-        if (strlen($sanitizado) > 50) {
-            $sanitizado = substr($sanitizado, 0, 50);
-        }
-
-        return $sanitizado ?: 'otros';
-    }
-
-    /**
-     * Obtiene o crea un lote para Sysgal.
-     *
-     * Si `lote_global` está configurado en sync_filters, TODAS las fuentes de Sysgal
-     * comparten el mismo lote (ej: "SYSGAL"). Esto permite tener un único lote
-     * para después segmentar por nivel de deuda u otros criterios en metadata.
-     */
-    private function obtenerOCrearLote(ExternalApiSource $source, string $clasificacionValue, int $userId): Lote
-    {
-        $syncFilters = $source->sync_filters ?? [];
-        $unificarLotes = $syncFilters['unificar_lotes'] ?? false;
-        $loteGlobal = $syncFilters['lote_global'] ?? null;
-
-        // ✅ LOTE GLOBAL: Todas las fuentes de Sysgal comparten el mismo lote
-        if ($loteGlobal) {
-            return Lote::firstOrCreate(
-                [
-                    'nombre' => $loteGlobal,
-                    // No usamos external_api_source_id para que sea compartido
-                ],
-                [
-                    'external_api_source_id' => $source->id, // Solo para el primero que lo cree
-                    'clasificacion_value' => 'global',
-                    'user_id' => $userId,
-                    'estado' => 'abierto',
-                ]
-            );
-        }
-
-        $prefix = $source->lote_prefix ?: 'SG';
-
-        // Si es lote unificado por fuente, nombre simple sin clasificación
-        if ($unificarLotes || $clasificacionValue === 'unificado') {
-            $nombreLote = $prefix;
-            $clasificacionParaBusqueda = 'unificado';
-        } else {
-            $nombreLote = "{$prefix}_{$clasificacionValue}";
-            $clasificacionParaBusqueda = $clasificacionValue;
-        }
-
         return Lote::firstOrCreate(
+            ['nombre' => $nombre],
             [
                 'external_api_source_id' => $source->id,
-                'clasificacion_value' => $clasificacionParaBusqueda,
-            ],
-            [
-                'nombre' => $nombreLote,
+                'clasificacion_value' => 'global',
                 'user_id' => $userId,
                 'estado' => 'abierto',
             ]
@@ -365,8 +297,7 @@ class SysgalApiSyncService
         ExternalApiSource $source,
         Lote $lote,
         int $userId,
-        int $totalRegistros,
-        string $clasificacionOriginal
+        int $totalRegistros
     ): Importacion {
         return Importacion::create([
             'lote_id' => $lote->id,
@@ -382,9 +313,6 @@ class SysgalApiSyncService
             'fecha_importacion' => now(),
             'metadata' => [
                 'source_name' => $source->name,
-                'endpoint_url' => $source->endpoint_url,
-                'lote_id' => $lote->id,
-                'clasificacion_value' => $clasificacionOriginal,
                 'synced_at' => now()->toISOString(),
             ],
         ]);
@@ -396,7 +324,6 @@ class SysgalApiSyncService
     private function processProspectos(
         Importacion $importacion,
         array $data,
-        array $fieldMapping,
         Collection $tiposProspecto,
         ExternalApiSource $source
     ): array {
@@ -412,7 +339,17 @@ class SysgalApiSyncService
 
         foreach ($data as $index => $row) {
             try {
-                $prospectoData = $this->mapRowToProspecto($row, $fieldMapping, $importacion->id, $tiposProspecto, $source);
+                // Obtener field_mapping específico del endpoint o el default
+                $fieldMapping = $row['_field_mapping'] ?? $source->getFieldMappingWithDefaults();
+                $endpointName = $row['_endpoint'] ?? 'unknown';
+
+                $prospectoData = $this->mapRowToProspecto(
+                    $row,
+                    $fieldMapping,
+                    $importacion->id,
+                    $tiposProspecto,
+                    $endpointName
+                );
 
                 if ($prospectoData === null) {
                     $fallidos++;
@@ -493,7 +430,7 @@ class SysgalApiSyncService
         array $fieldMapping,
         int $importacionId,
         Collection $tiposProspecto,
-        ExternalApiSource $source
+        string $endpointName
     ): ?array {
         // Obtener valores según el mapping
         $nombre = $this->getFieldValue($row, $fieldMapping['nombre'] ?? 'Nombre');
@@ -536,12 +473,12 @@ class SysgalApiSyncService
             $rut = null;
         }
 
-        // ✅ Obtener monto de deuda desde la API (agregado 06/03/2026)
+        // Obtener monto de deuda desde la API
         $montoDeudaRaw = $this->getFieldValue($row, $fieldMapping['monto_deuda'] ?? null);
         $montoDeuda = $this->parsearMontoDeuda($montoDeudaRaw);
 
         // Calcular nivel de deuda para clasificación
-        $nivelDeuda = $this->calcularNivelDeuda($montoDeuda);
+        $nivelDeuda = self::calcularNivelDeuda($montoDeuda);
 
         // Determinar tipo de prospecto basado en el monto de deuda
         $tipoProspectoId = $this->determinarTipoProspecto($tiposProspecto, $montoDeuda);
@@ -553,8 +490,9 @@ class SysgalApiSyncService
         // Construir metadata con campos extra de Sysgal
         $metadata = [
             'source' => 'sysgal',
+            'endpoint' => $endpointName,
             'synced_at' => now()->toISOString(),
-            'nivel_deuda' => $nivelDeuda, // ✅ NUEVO: baja, media, alta
+            'nivel_deuda' => $nivelDeuda,
         ];
 
         // Agregar campos extra según el mapping
@@ -578,7 +516,7 @@ class SysgalApiSyncService
             'url_informe' => null,
             'tipo_prospecto_id' => $tipoProspectoId,
             'estado' => 'activo',
-            'monto_deuda' => $montoDeuda, // ✅ Ahora con valor real de Sysgal
+            'monto_deuda' => $montoDeuda,
             'fila_excel' => null,
             'metadata' => json_encode($metadata),
             'created_at' => $now,
@@ -889,17 +827,69 @@ class SysgalApiSyncService
     }
 
     /**
+     * Retorna un resultado vacío.
+     */
+    private function emptyResult(): array
+    {
+        return [
+            'lotes' => [],
+            'total_prospectos' => 0,
+            'nuevos' => 0,
+            'actualizados' => 0,
+            'omitidos_en_flujo' => 0,
+        ];
+    }
+
+    /**
      * Prueba la conexión a una fuente Sysgal.
+     *
+     * Si tiene múltiples endpoints, prueba cada uno.
      */
     public function testConnection(ExternalApiSource $source): array
+    {
+        $endpoints = $this->getEndpoints($source);
+
+        if (empty($endpoints)) {
+            return [
+                'success' => false,
+                'message' => 'No hay endpoints configurados',
+            ];
+        }
+
+        $results = [];
+        $allSuccess = true;
+        $totalRecords = 0;
+
+        foreach ($endpoints as $endpoint) {
+            $result = $this->testSingleEndpoint($endpoint);
+            $results[$endpoint['name']] = $result;
+
+            if (! $result['success']) {
+                $allSuccess = false;
+            } else {
+                $totalRecords += $result['sample_count'] ?? 0;
+            }
+        }
+
+        return [
+            'success' => $allSuccess,
+            'message' => $allSuccess ? 'Todos los endpoints conectados' : 'Algunos endpoints fallaron',
+            'endpoints' => $results,
+            'total_records' => $totalRecords,
+        ];
+    }
+
+    /**
+     * Prueba un endpoint individual.
+     */
+    private function testSingleEndpoint(array $endpoint): array
     {
         try {
             $hasta = now();
             $desde = now()->subDays(1); // Solo 1 día para test
+            $dateFormat = $endpoint['date_format'] ?? 'Y-m-d';
 
-            $isAgendadosNoCerrados = str_contains($source->endpoint_url, 'AgendadosNoCerrados');
-
-            $body = $isAgendadosNoCerrados
+            $body = $dateFormat === 'Y-m-d H:i:s'
                 ? [
                     'desde' => $desde->format('Y-m-d 00:00:00'),
                     'hasta' => $hasta->format('Y-m-d 23:59:59'),
@@ -909,9 +899,12 @@ class SysgalApiSyncService
                     'hasta' => $hasta->format('Y-m-d'),
                 ];
 
-            $response = Http::withHeaders($source->headers ?? [])
+            $response = Http::withHeaders([
+                'Content-Type' => 'application/json',
+                'Accept' => 'application/json',
+            ])
                 ->timeout(30)
-                ->post($source->endpoint_url, $body);
+                ->post($endpoint['url'], $body);
 
             if (! $response->successful()) {
                 return [

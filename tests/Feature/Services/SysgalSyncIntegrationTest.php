@@ -16,6 +16,7 @@ use Tests\TestCase;
  * Tests de integración para el sync de Sysgal.
  *
  * Verifica que:
+ * - La fuente unificada con múltiples endpoints funciona correctamente
  * - El monto de deuda se parsea correctamente desde TotalDeuda
  * - El nivel de deuda se calcula y guarda en metadata
  * - Los prospectos se crean correctamente con todos los campos
@@ -52,11 +53,11 @@ class SysgalSyncIntegrationTest extends TestCase
             'monto_max' => 999999999,
         ]);
 
-        // Crear source de Sysgal
+        // Crear source unificada de Sysgal con múltiples endpoints
         $this->source = ExternalApiSource::factory()->create([
-            'name' => 'sysgal_no_agendados',
-            'display_name' => 'Sysgal - No Agendados',
-            'endpoint_url' => 'https://sysgal.segal.cl/defensoria/Servicio/ProspectosNoAgendados',
+            'name' => 'sysgal',
+            'display_name' => 'Sysgal (Defensoría)',
+            'endpoint_url' => 'https://sysgal.segal.cl/defensoria/Servicio',
             'auth_type' => 'none',
             'field_mapping' => [
                 'nombre' => 'Nombre',
@@ -64,12 +65,40 @@ class SysgalSyncIntegrationTest extends TestCase
                 'email' => 'Email',
                 'telefono' => 'Telefono',
                 'monto_deuda' => 'TotalDeuda',
-                'etapa_sysgal' => 'Etapa',
             ],
             'sync_filters' => [
                 'dias_atras' => 7,
                 'unificar_lotes' => true,
                 'lote_global' => 'SYSGAL',
+                'endpoints' => [
+                    [
+                        'name' => 'no_agendados',
+                        'url' => 'https://sysgal.segal.cl/defensoria/Servicio/ProspectosNoAgendados',
+                        'display_name' => 'Prospectos No Agendados',
+                        'field_mapping' => [
+                            'nombre' => 'Nombre',
+                            'rut' => 'Rut',
+                            'email' => 'Email',
+                            'telefono' => 'Telefono',
+                            'monto_deuda' => 'TotalDeuda',
+                            'etapa_sysgal' => 'Etapa',
+                        ],
+                        'date_format' => 'Y-m-d',
+                    ],
+                    [
+                        'name' => 'no_cerrados',
+                        'url' => 'https://sysgal.segal.cl/defensoria/Servicio/AgendadosNoCerrados',
+                        'display_name' => 'Agendas No Cerradas',
+                        'field_mapping' => [
+                            'nombre' => 'Cliente.Nombre',
+                            'rut' => 'Cliente.Rut',
+                            'email' => 'Cliente.Email',
+                            'telefono' => 'Cliente.Telefono',
+                            'monto_deuda' => 'Cliente.TotalDeuda',
+                        ],
+                        'date_format' => 'Y-m-d H:i:s',
+                    ],
+                ],
             ],
             'lote_prefix' => 'SYSGAL',
             'is_active' => true,
@@ -78,9 +107,9 @@ class SysgalSyncIntegrationTest extends TestCase
 
     public function test_sync_crea_prospectos_con_monto_deuda(): void
     {
-        // Mock de la respuesta de Sysgal
+        // Mock de la respuesta de Sysgal para ambos endpoints
         Http::fake([
-            'sysgal.segal.cl/*' => Http::response([
+            '*ProspectosNoAgendados*' => Http::response([
                 'Estado' => 1,
                 'Total' => 2,
                 'Prospectos' => [
@@ -102,6 +131,11 @@ class SysgalSyncIntegrationTest extends TestCase
                     ],
                 ],
             ], 200),
+            '*AgendadosNoCerrados*' => Http::response([
+                'Estado' => 1,
+                'Total' => 0,
+                'Agendas' => [],
+            ], 200),
         ]);
 
         $service = new SysgalApiSyncService;
@@ -115,7 +149,7 @@ class SysgalSyncIntegrationTest extends TestCase
         $this->assertNotNull($juan);
         $this->assertEquals(2500400, $juan->monto_deuda);
         $this->assertEquals('alta', $juan->metadata['nivel_deuda']);
-        $this->assertEquals('Pendiente de Contactar', $juan->metadata['etapa_sysgal']);
+        $this->assertEquals('no_agendados', $juan->metadata['endpoint']);
 
         // Verificar prospecto con deuda baja
         $maria = Prospecto::where('email', 'maria@email.com')->first();
@@ -124,10 +158,69 @@ class SysgalSyncIntegrationTest extends TestCase
         $this->assertEquals('baja', $maria->metadata['nivel_deuda']);
     }
 
+    public function test_sync_procesa_multiples_endpoints(): void
+    {
+        // Mock con datos de ambos endpoints
+        Http::fake([
+            '*ProspectosNoAgendados*' => Http::response([
+                'Estado' => 1,
+                'Total' => 1,
+                'Prospectos' => [
+                    [
+                        'Nombre' => 'Prospecto No Agendado',
+                        'Rut' => '11.111.111-1',
+                        'Email' => 'noagendado@test.com',
+                        'Telefono' => '911111111',
+                        'Etapa' => 'Pendiente',
+                        'TotalDeuda' => '800000',
+                    ],
+                ],
+            ], 200),
+            '*AgendadosNoCerrados*' => Http::response([
+                'Estado' => 1,
+                'Total' => 1,
+                'Agendas' => [
+                    [
+                        'Cliente' => [
+                            'Nombre' => 'Prospecto No Cerrado',
+                            'Rut' => '22.222.222-2',
+                            'Email' => 'nocerrado@test.com',
+                            'Telefono' => '922222222',
+                            'TotalDeuda' => '1600000',
+                        ],
+                        'Reunion' => [
+                            'Tiempo' => '2026-03-01 10:00:00',
+                            'Estado_Final' => 'NO CONTRATA',
+                            'Comercial' => 'Test User',
+                        ],
+                    ],
+                ],
+            ], 200),
+        ]);
+
+        $service = new SysgalApiSyncService;
+        $result = $service->sync($this->source, 1);
+
+        // Verificar que se procesaron ambos endpoints
+        $this->assertEquals(2, $result['nuevos']);
+
+        // Verificar prospecto de no_agendados
+        $noAgendado = Prospecto::where('email', 'noagendado@test.com')->first();
+        $this->assertNotNull($noAgendado);
+        $this->assertEquals('no_agendados', $noAgendado->metadata['endpoint']);
+        $this->assertEquals('media', $noAgendado->metadata['nivel_deuda']);
+
+        // Verificar prospecto de no_cerrados
+        $noCerrado = Prospecto::where('email', 'nocerrado@test.com')->first();
+        $this->assertNotNull($noCerrado);
+        $this->assertEquals('no_cerrados', $noCerrado->metadata['endpoint']);
+        $this->assertEquals('alta', $noCerrado->metadata['nivel_deuda']);
+    }
+
     public function test_sync_crea_lote_global_sysgal(): void
     {
         Http::fake([
-            'sysgal.segal.cl/*' => Http::response([
+            '*ProspectosNoAgendados*' => Http::response([
                 'Estado' => 1,
                 'Total' => 1,
                 'Prospectos' => [
@@ -140,6 +233,11 @@ class SysgalSyncIntegrationTest extends TestCase
                         'TotalDeuda' => '1000000',
                     ],
                 ],
+            ], 200),
+            '*AgendadosNoCerrados*' => Http::response([
+                'Estado' => 1,
+                'Total' => 0,
+                'Agendas' => [],
             ], 200),
         ]);
 
@@ -154,7 +252,7 @@ class SysgalSyncIntegrationTest extends TestCase
     public function test_sync_clasifica_nivel_deuda_correctamente(): void
     {
         Http::fake([
-            'sysgal.segal.cl/*' => Http::response([
+            '*ProspectosNoAgendados*' => Http::response([
                 'Estado' => 1,
                 'Total' => 4,
                 'Prospectos' => [
@@ -192,6 +290,11 @@ class SysgalSyncIntegrationTest extends TestCase
                     ],
                 ],
             ], 200),
+            '*AgendadosNoCerrados*' => Http::response([
+                'Estado' => 1,
+                'Total' => 0,
+                'Agendas' => [],
+            ], 200),
         ]);
 
         $service = new SysgalApiSyncService;
@@ -207,7 +310,7 @@ class SysgalSyncIntegrationTest extends TestCase
     public function test_sync_maneja_monto_deuda_con_formato_string(): void
     {
         Http::fake([
-            'sysgal.segal.cl/*' => Http::response([
+            '*ProspectosNoAgendados*' => Http::response([
                 'Estado' => 1,
                 'Total' => 1,
                 'Prospectos' => [
@@ -220,6 +323,11 @@ class SysgalSyncIntegrationTest extends TestCase
                         'TotalDeuda' => '2.500.400', // Con puntos de miles
                     ],
                 ],
+            ], 200),
+            '*AgendadosNoCerrados*' => Http::response([
+                'Estado' => 1,
+                'Total' => 0,
+                'Agendas' => [],
             ], 200),
         ]);
 
@@ -234,10 +342,15 @@ class SysgalSyncIntegrationTest extends TestCase
     public function test_sync_con_respuesta_vacia(): void
     {
         Http::fake([
-            'sysgal.segal.cl/*' => Http::response([
+            '*ProspectosNoAgendados*' => Http::response([
                 'Estado' => 1,
                 'Total' => 0,
                 'Prospectos' => [],
+            ], 200),
+            '*AgendadosNoCerrados*' => Http::response([
+                'Estado' => 1,
+                'Total' => 0,
+                'Agendas' => [],
             ], 200),
         ]);
 
@@ -246,5 +359,77 @@ class SysgalSyncIntegrationTest extends TestCase
 
         $this->assertEquals(0, $result['total_prospectos']);
         $this->assertEquals(0, $result['nuevos']);
+    }
+
+    public function test_sync_endpoint_especifico(): void
+    {
+        // Mock ambos endpoints pero solo sincronizaremos uno
+        Http::fake([
+            '*ProspectosNoAgendados*' => Http::response([
+                'Estado' => 1,
+                'Total' => 1,
+                'Prospectos' => [
+                    [
+                        'Nombre' => 'Solo No Agendado',
+                        'Rut' => '11.111.111-1',
+                        'Email' => 'solo@test.com',
+                        'Telefono' => '911111111',
+                        'Etapa' => 'Test',
+                        'TotalDeuda' => '500000',
+                    ],
+                ],
+            ], 200),
+            '*AgendadosNoCerrados*' => Http::response([
+                'Estado' => 1,
+                'Total' => 1,
+                'Agendas' => [
+                    [
+                        'Cliente' => [
+                            'Nombre' => 'No Debería Aparecer',
+                            'Rut' => '22.222.222-2',
+                            'Email' => 'nodeberia@test.com',
+                            'Telefono' => '922222222',
+                            'TotalDeuda' => '1000000',
+                        ],
+                        'Reunion' => [],
+                    ],
+                ],
+            ], 200),
+        ]);
+
+        $service = new SysgalApiSyncService;
+        // Sincronizar solo no_agendados
+        $result = $service->sync($this->source, 1, 'no_agendados');
+
+        // Solo debería haber 1 prospecto
+        $this->assertEquals(1, $result['nuevos']);
+        $this->assertNotNull(Prospecto::where('email', 'solo@test.com')->first());
+        $this->assertNull(Prospecto::where('email', 'nodeberia@test.com')->first());
+    }
+
+    public function test_test_connection_verifica_todos_los_endpoints(): void
+    {
+        Http::fake([
+            '*ProspectosNoAgendados*' => Http::response([
+                'Estado' => 1,
+                'Total' => 5,
+                'Prospectos' => [],
+            ], 200),
+            '*AgendadosNoCerrados*' => Http::response([
+                'Estado' => 1,
+                'Total' => 3,
+                'Agendas' => [],
+            ], 200),
+        ]);
+
+        $service = new SysgalApiSyncService;
+        $result = $service->testConnection($this->source);
+
+        $this->assertTrue($result['success']);
+        $this->assertArrayHasKey('endpoints', $result);
+        $this->assertArrayHasKey('no_agendados', $result['endpoints']);
+        $this->assertArrayHasKey('no_cerrados', $result['endpoints']);
+        $this->assertTrue($result['endpoints']['no_agendados']['success']);
+        $this->assertTrue($result['endpoints']['no_cerrados']['success']);
     }
 }

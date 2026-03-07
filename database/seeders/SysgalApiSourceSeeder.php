@@ -6,132 +6,99 @@ use App\Models\ExternalApiSource;
 use Illuminate\Database\Seeder;
 
 /**
- * Seeder para configurar las APIs de Sysgal (Defensoría).
+ * Seeder para configurar la API unificada de Sysgal (Defensoría).
  *
  * Ejecutar con: php artisan db:seed --class=SysgalApiSourceSeeder
  *
- * Endpoints disponibles:
+ * Esta fuente unificada sincroniza de múltiples endpoints:
  * - /ProspectosNoAgendados: Prospectos que entraron pero no agendaron cita
  * - /AgendadosNoCerrados: Prospectos que agendaron pero no contrataron
+ *
+ * Todos los prospectos van a un único lote "SYSGAL" y se clasifican
+ * por nivel de deuda (baja/media/alta) en metadata.
  */
 class SysgalApiSourceSeeder extends Seeder
 {
     public function run(): void
     {
-        $this->createNoAgendadosSource();
-        $this->createNoCerradosSource();
+        $this->createUnifiedSysgalSource();
 
-        $this->command->info('APIs de Sysgal configuradas correctamente.');
+        $this->command->info('API de Sysgal (unificada) configurada correctamente.');
     }
 
     /**
-     * Fuente para prospectos que no agendaron cita.
+     * Fuente unificada para todos los prospectos de Sysgal.
      */
-    private function createNoAgendadosSource(): void
+    private function createUnifiedSysgalSource(): void
     {
         ExternalApiSource::updateOrCreate(
-            ['name' => 'sysgal_no_agendados'],
+            ['name' => 'sysgal'],
             [
-                'display_name' => 'Sysgal - No Agendados',
-                'endpoint_url' => 'https://sysgal.segal.cl/defensoria/Servicio/ProspectosNoAgendados',
+                'display_name' => 'Sysgal (Defensoría)',
+                // URL base de referencia
+                'endpoint_url' => 'https://sysgal.segal.cl/defensoria/Servicio',
                 'auth_type' => 'none', // Auth por IP
                 'auth_token' => null,
                 'headers' => [
                     'Content-Type' => 'application/json',
                     'Accept' => 'application/json',
                 ],
-                // Mapeo de campos de la API a campos de Prospecto
-                // La API devuelve: { Nombre, Rut, Email, Telefono, Etapa, TotalDeuda }
+                // Field mapping base (cada endpoint puede tener el suyo)
                 'field_mapping' => [
                     'nombre' => 'Nombre',
                     'rut' => 'Rut',
                     'email' => 'Email',
                     'telefono' => 'Telefono',
-                    'monto_deuda' => 'TotalDeuda', // ✅ Agregado 06/03/2026
+                    'monto_deuda' => 'TotalDeuda',
                     'url_informe' => null,
-                    // Campos extra para metadata
-                    'etapa_sysgal' => 'Etapa',
                 ],
-                // Campo para clasificar prospectos en lotes separados
-                'clasificacion_field' => 'Etapa',
-                // Valores conocidos de clasificación (etapas del CRM Sysgal)
-                'clasificacion_values' => [
-                    'Pendiente de Contactar',
-                    'Solo Consulta',
-                ],
-                'sync_filters' => [
-                    // Rango de fechas se calcula dinámicamente en el servicio
-                    'dias_atras' => 7, // Última semana por defecto
-                    // ✅ LOTE GLOBAL: Todas las fuentes de Sysgal van al mismo lote "SYSGAL"
-                    // La clasificación (Etapa) se guarda en metadata del prospecto
-                    'unificar_lotes' => true,
-                    'lote_global' => 'SYSGAL',
-                ],
-                'sync_frequency' => 'weekly',
-                'lote_prefix' => 'SYSGAL', // Solo se usa si lote_global no está definido
-                'is_active' => true,
-            ]
-        );
-
-        $this->command->info('  - sysgal_no_agendados configurada');
-    }
-
-    /**
-     * Fuente para agendas que no cerraron (no contrataron).
-     */
-    private function createNoCerradosSource(): void
-    {
-        ExternalApiSource::updateOrCreate(
-            ['name' => 'sysgal_no_cerrados'],
-            [
-                'display_name' => 'Sysgal - No Cerrados',
-                'endpoint_url' => 'https://sysgal.segal.cl/defensoria/Servicio/AgendadosNoCerrados',
-                'auth_type' => 'none', // Auth por IP
-                'auth_token' => null,
-                'headers' => [
-                    'Content-Type' => 'application/json',
-                    'Accept' => 'application/json',
-                ],
-                // Mapeo de campos de la API a campos de Prospecto
-                // La API devuelve: { Reunion: {...}, Cliente: { Nombre, Rut, Email, Telefono, TotalDeuda } }
-                'field_mapping' => [
-                    'nombre' => 'Cliente.Nombre',
-                    'rut' => 'Cliente.Rut',
-                    'email' => 'Cliente.Email',
-                    'telefono' => 'Cliente.Telefono',
-                    'monto_deuda' => 'Cliente.TotalDeuda', // ✅ Agregado 06/03/2026
-                    'url_informe' => null,
-                    // Campos extra para metadata
-                    'fecha_reunion' => 'Reunion.Tiempo',
-                    'estado_reunion' => 'Reunion.Estado_Final',
-                    'comercial' => 'Reunion.Comercial',
-                ],
-                // Campo para clasificar prospectos en lotes separados
-                'clasificacion_field' => 'Reunion.Estado_Final',
-                // Valores conocidos de clasificación (estados de reunión)
-                'clasificacion_values' => [
-                    'NO CONTRATA - NO LE INTERESA',
-                    'NO CONTRATA - CESANTE / SIN DINERO',
-                    'NO CONTRATA - SOLO CONSULTA Y ANDA COTIZANDO',
-                    'NO CALIFICA - TIENE ABOGADO',
-                    'NO CALIFICA - NO EXISTE SERVICIO QUE OFRECER',
-                    'NO CALIFICA - SOLO QUIERE DICOM',
-                    'NO QUIERE ASESORIA',
-                    'SIN GESTIONAR',
-                ],
+                // No usamos clasificación por lotes separados
+                'clasificacion_field' => null,
+                'clasificacion_values' => [],
                 'sync_filters' => [
                     'dias_atras' => 7,
-                    // ✅ LOTE GLOBAL: Todas las fuentes de Sysgal van al mismo lote "SYSGAL"
-                    // La clasificación (Estado_Final) se guarda en metadata del prospecto
                     'unificar_lotes' => true,
                     'lote_global' => 'SYSGAL',
+                    // Múltiples endpoints en una sola fuente
+                    'endpoints' => [
+                        [
+                            'name' => 'no_agendados',
+                            'url' => 'https://sysgal.segal.cl/defensoria/Servicio/ProspectosNoAgendados',
+                            'display_name' => 'Prospectos No Agendados',
+                            'field_mapping' => [
+                                'nombre' => 'Nombre',
+                                'rut' => 'Rut',
+                                'email' => 'Email',
+                                'telefono' => 'Telefono',
+                                'monto_deuda' => 'TotalDeuda',
+                                'etapa_sysgal' => 'Etapa',
+                            ],
+                            'date_format' => 'Y-m-d',
+                        ],
+                        [
+                            'name' => 'no_cerrados',
+                            'url' => 'https://sysgal.segal.cl/defensoria/Servicio/AgendadosNoCerrados',
+                            'display_name' => 'Agendas No Cerradas',
+                            'field_mapping' => [
+                                'nombre' => 'Cliente.Nombre',
+                                'rut' => 'Cliente.Rut',
+                                'email' => 'Cliente.Email',
+                                'telefono' => 'Cliente.Telefono',
+                                'monto_deuda' => 'Cliente.TotalDeuda',
+                                'fecha_reunion' => 'Reunion.Tiempo',
+                                'estado_reunion' => 'Reunion.Estado_Final',
+                                'comercial' => 'Reunion.Comercial',
+                            ],
+                            'date_format' => 'Y-m-d H:i:s',
+                        ],
+                    ],
                 ],
                 'sync_frequency' => 'weekly',
-                'lote_prefix' => 'SYSGAL', // Solo se usa si lote_global no está definido
+                'lote_prefix' => 'SYSGAL',
                 'is_active' => true,
             ]
         );
 
-        $this->command->info('  - sysgal_no_cerrados configurada');
+        $this->command->info('  - sysgal (fuente unificada) configurada');
     }
 }
