@@ -184,12 +184,13 @@ class SyncSysgalCommand extends Command
         $niveles = DB::table('prospectos')
             ->join('importaciones', 'prospectos.importacion_id', '=', 'importaciones.id')
             ->where('importaciones.external_api_source_id', $source->id)
-            ->selectRaw("metadata->>'nivel_deuda' as nivel, COUNT(*) as count")
-            ->groupByRaw("metadata->>'nivel_deuda'")
+            ->selectRaw("prospectos.metadata->>'nivel_deuda' as nivel, COUNT(*) as count")
+            ->groupByRaw("prospectos.metadata->>'nivel_deuda'")
             ->pluck('count', 'nivel')
             ->toArray();
 
         foreach ($niveles as $nivel => $count) {
+            $nivel = $nivel ?: 'sin_informacion';
             $this->line("  - {$nivel}: {$count}");
         }
 
