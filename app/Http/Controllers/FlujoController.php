@@ -80,14 +80,19 @@ class FlujoController extends Controller
         $request->validate([
             'tipo_prospecto_id' => 'required|exists:tipo_prospecto,id',
             'origen' => 'required|string|max:255',
+            'origen_id' => 'nullable|string|max:255',
             'nombre' => 'required|string|max:255',
             'descripcion' => 'nullable|string',
             'canal_envio' => 'required|in:email,sms,ambos',
         ]);
 
+        // Si no viene origen_id, usar el valor de origen como origen_id
+        $origenId = $request->input('origen_id') ?? $request->input('origen');
+
         $flujo = Flujo::create([
             'tipo_prospecto_id' => $request->input('tipo_prospecto_id'),
             'origen' => $request->input('origen'),
+            'origen_id' => $origenId,
             'nombre' => $request->input('nombre'),
             'descripcion' => $request->input('descripcion'),
             'canal_envio' => $request->input('canal_envio'),
