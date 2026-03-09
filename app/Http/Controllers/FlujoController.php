@@ -288,6 +288,8 @@ class FlujoController extends Controller
             'tipo_prospecto_id' => 'nullable|integer|exists:tipo_prospecto,id',
             'select_all_from_origin' => 'nullable|boolean',
             'canal_asignado' => 'nullable|in:email,sms',
+            'metadata_filters' => 'nullable|array',
+            'metadata_filters.*' => 'nullable|array',
         ]);
 
         try {
@@ -296,6 +298,7 @@ class FlujoController extends Controller
             $origen = $request->input('origen', $flujo->origen);
             $tipoProspectoId = $request->input('tipo_prospecto_id', $flujo->tipo_prospecto_id);
             $loteIds = $request->input('lote_ids', []);
+            $metadataFilters = $request->input('metadata_filters', []);
 
             // CASE 0: Select by specific lote_ids (NEW)
             if (! empty($loteIds)) {
@@ -319,6 +322,9 @@ class FlujoController extends Controller
                     }
                 }
 
+                // Apply metadata filters (e.g., nivel_deuda)
+                $this->applyMetadataFiltersToQuery($query, $metadataFilters);
+
                 $totalEstimado = $query->count();
 
                 if ($totalEstimado === 0) {
@@ -335,7 +341,8 @@ class FlujoController extends Controller
                         tipoProspectoId: $tipoProspectoId,
                         selectAllFromOrigin: false,
                         prospectoIds: [],
-                        loteIds: $loteIds
+                        loteIds: $loteIds,
+                        metadataFilters: $metadataFilters
                     );
 
                     \App\Jobs\AsignarProspectosAFlujoJob::dispatch($flujo, $criterios, $canalAsignado);
@@ -379,6 +386,9 @@ class FlujoController extends Controller
                     }
                 }
 
+                // Apply metadata filters (e.g., nivel_deuda)
+                $this->applyMetadataFiltersToQuery($query, $metadataFilters);
+
                 $totalEstimado = $query->count();
 
                 if ($totalEstimado === 0) {
@@ -394,7 +404,9 @@ class FlujoController extends Controller
                         origen: $origen,
                         tipoProspectoId: $tipoProspectoId,
                         selectAllFromOrigin: true,
-                        prospectoIds: []
+                        prospectoIds: [],
+                        loteIds: [],
+                        metadataFilters: $metadataFilters
                     );
 
                     \App\Jobs\AsignarProspectosAFlujoJob::dispatch($flujo, $criterios, $canalAsignado);
@@ -515,6 +527,34 @@ class FlujoController extends Controller
         } catch (\Exception $e) {
             DB::rollBack();
             throw $e;
+        }
+    }
+
+    /**
+     * Apply metadata filters to a query.
+     *
+     * Filters are in format: ['campo' => ['valor1', 'valor2']] or ['campo' => 'valor']
+     * Uses PostgreSQL JSONB operators for efficient filtering.
+     */
+    private function applyMetadataFiltersToQuery(\Illuminate\Database\Eloquent\Builder $query, array $metadataFilters): void
+    {
+        if (empty($metadataFilters)) {
+            return;
+        }
+
+        foreach ($metadataFilters as $campo => $valores) {
+            if (empty($valores)) {
+                continue;
+            }
+
+            // Normalize to array
+            $valores = is_array($valores) ? $valores : [$valores];
+
+            // PostgreSQL JSONB: metadata->>'campo' IN ('valor1', 'valor2')
+            $query->whereRaw(
+                'metadata->>? IN ('.implode(',', array_fill(0, count($valores), '?')).')',
+                array_merge([$campo], $valores)
+            );
         }
     }
 
