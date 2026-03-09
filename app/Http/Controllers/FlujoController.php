@@ -708,9 +708,11 @@ class FlujoController extends Controller
     public function opcionesFiltrado(): JsonResponse
     {
         // Obtener display_names de fuentes INACTIVAS (deprecated) para filtrarlas
+        // Removemos el prefijo [DEPRECATED] para hacer match con los nombres en importaciones
         $deprecatedOrigins = DB::table('external_api_sources')
             ->where('is_active', false)
             ->pluck('display_name')
+            ->map(fn ($name) => str_replace('[DEPRECATED] ', '', $name))
             ->toArray();
 
         // OPTIMIZADO: Una sola query con subquery en vez de N+1
