@@ -398,8 +398,8 @@ class FlujoController extends Controller
                     ]);
                 }
 
-                // Use async processing for large volumes
-                if ($totalEstimado > 100) {
+                // Use async processing for very large volumes only (workers have timeout issues)
+                if ($totalEstimado > 100000) {
                     $criterios = new \App\DTOs\CriteriosSeleccionProspectos(
                         origen: $origen,
                         tipoProspectoId: $tipoProspectoId,
