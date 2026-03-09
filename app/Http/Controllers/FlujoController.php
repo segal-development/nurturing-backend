@@ -667,13 +667,23 @@ class FlujoController extends Controller
 
     public function opcionesFiltrado(): JsonResponse
     {
+        // Obtener display_names de fuentes INACTIVAS (deprecated) para filtrarlas
+        $deprecatedOrigins = DB::table('external_api_sources')
+            ->where('is_active', false)
+            ->pluck('display_name')
+            ->toArray();
+
         // OPTIMIZADO: Una sola query con subquery en vez de N+1
         // Antes: 1 query para orígenes + N queries para contar flujos
         // Ahora: 1 query con LEFT JOIN y GROUP BY
+        // Filtramos orígenes que vienen de fuentes deprecated/inactivas
         $origenes = DB::table('importaciones')
             ->select('importaciones.origen')
             ->selectRaw('COUNT(DISTINCT flujos.id) as total_flujos')
             ->leftJoin('flujos', 'flujos.origen', '=', 'importaciones.origen')
+            ->when(count($deprecatedOrigins) > 0, function ($query) use ($deprecatedOrigins) {
+                $query->whereNotIn('importaciones.origen', $deprecatedOrigins);
+            })
             ->groupBy('importaciones.origen')
             ->get()
             ->map(fn ($row) => [
