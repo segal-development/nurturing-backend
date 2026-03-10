@@ -15,7 +15,7 @@ return [
     |
     */
 
-    'default' => 'file', // Forzado a file por problema con Redis
+    'default' => env('CACHE_STORE', 'redis'),
 
     /*
     |--------------------------------------------------------------------------
