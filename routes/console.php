@@ -242,18 +242,20 @@ Schedule::job(new \App\Jobs\SyncExternalApiJob(null, 1)) // null = todas las act
     });
 
 // ============================================================================
-// AUTO-ASIGNACIÓN DE NUEVOS PROSPECTOS A FLUJOS
+// AUTO-ASIGNACIÓN DE NUEVOS PROSPECTOS DE SYSGAL A FLUJOS POR NIVEL DE DEUDA
 // Todos los viernes a las 7:00 AM (después del sync de APIs externas).
-// Busca flujos con auto_asignar_nuevos=true y asigna prospectos nuevos
-// del mismo origen que aún no están en el flujo (empezando desde etapa 1).
+// Clasifica prospectos por nivel_deuda y los agrega a EJECUCIONES EXISTENTES:
+// - baja, sin_informacion, null → SEGMENTO 1 (id: 39)
+// - media                       → SEGMENTO 2 (id: 40)
+// - alta                        → SEGMENTO 3 (id: 41)
 // ============================================================================
-Schedule::job(new \App\Jobs\AsignarNuevosProspectosAFlujoJob)
+Schedule::job(new \App\Jobs\AsignarProspectosSysgalJob)
     ->weeklyOn(5, '07:00') // Viernes a las 7:00 AM
-    ->name('flujos:auto-asignar-nuevos')
+    ->name('sysgal:auto-asignar-por-nivel-deuda')
     ->withoutOverlapping()
     ->onSuccess(function () {
-        Log::info('Scheduler: Auto-asignación de nuevos prospectos completada');
+        Log::info('Scheduler: Auto-asignación de prospectos Sysgal por nivel de deuda completada');
     })
     ->onFailure(function () {
-        Log::error('Scheduler: Falló la auto-asignación de nuevos prospectos');
+        Log::error('Scheduler: Falló la auto-asignación de prospectos Sysgal');
     });
