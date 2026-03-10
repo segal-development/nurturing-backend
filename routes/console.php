@@ -192,6 +192,23 @@ Schedule::job(new \App\Jobs\SincronizarDesuscripcionesAthenaJob(7))
 //   });
 
 // ============================================================================
+// EJECUCIÓN DE NODOS PROGRAMADOS EN FLUJOS
+// Cada minuto verifica si hay etapas de flujo listas para ejecutar
+// (fecha_programada <= now) y las despacha para envío de emails/SMS.
+// También verifica etapas en 'executing' para completarlas cuando terminan.
+// ============================================================================
+Schedule::job(new \App\Jobs\EjecutarNodosProgramados)
+    ->everyMinute()
+    ->name('flujos:ejecutar-nodos-programados')
+    ->withoutOverlapping()
+    ->onSuccess(function () {
+        Log::info('Scheduler: Ejecución de nodos programados completada');
+    })
+    ->onFailure(function () {
+        Log::error('Scheduler: Falló la ejecución de nodos programados');
+    });
+
+// ============================================================================
 // RECUPERACIÓN DE ETAPAS ESTANCADAS
 // Cada 10 minutos detecta etapas de flujo que quedaron estancadas
 // (executing sin actividad) y las marca como completadas.
