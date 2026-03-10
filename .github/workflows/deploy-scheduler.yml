@@ -12,7 +12,11 @@ on:
       - main
     paths:
       - 'app/Jobs/**'
+      - 'app/Console/**'
+      - 'routes/console.php'
       - 'bootstrap/app.php'
+      - 'config/queue.php'
+      - 'config/cache.php'
       - 'Dockerfile.scheduler'
       - '.github/workflows/deploy-scheduler.yml'
   workflow_dispatch:
