@@ -190,12 +190,27 @@ class BatchCompletedCallback
 
     private function programarSiguienteEtapa(FlujoEjecucion $ejecucion, array $targetNode, string $targetNodeId, array $prospectoIds): void
     {
-        $tiempoEspera = $targetNode['tiempo_espera'] ?? 0;
-        $fechaProgramada = now()->addDays($tiempoEspera);
-
         $siguienteEtapaEjecucion = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $this->callbackData['flujo_ejecucion_id'])
             ->where('node_id', $targetNodeId)
             ->first();
+
+        // ✅ FIX: Usar fecha_programada existente si la etapa ya fue creada al inicio del flujo
+        // Solo calcular desde now() si la etapa no existe (caso edge de flujos dinámicos)
+        if ($siguienteEtapaEjecucion && $siguienteEtapaEjecucion->fecha_programada) {
+            $fechaProgramada = $siguienteEtapaEjecucion->fecha_programada;
+            Log::info('BatchCompletedCallback: Usando fecha_programada existente', [
+                'node_id' => $targetNodeId,
+                'fecha_programada' => $fechaProgramada,
+            ]);
+        } else {
+            $tiempoEspera = $targetNode['tiempo_espera'] ?? 0;
+            $fechaProgramada = now()->addDays($tiempoEspera);
+            Log::info('BatchCompletedCallback: Calculando nueva fecha_programada', [
+                'node_id' => $targetNodeId,
+                'tiempo_espera' => $tiempoEspera,
+                'fecha_programada' => $fechaProgramada,
+            ]);
+        }
 
         if (!$siguienteEtapaEjecucion) {
             FlujoEjecucionEtapa::create([
@@ -207,9 +222,9 @@ class BatchCompletedCallback
                 'estado' => 'pending',
             ]);
         } else {
+            // Solo actualizar prospectos_ids, NO sobreescribir fecha_programada
             $siguienteEtapaEjecucion->update([
                 'prospectos_ids' => $prospectoIds,
-                'fecha_programada' => $fechaProgramada,
             ]);
         }
 

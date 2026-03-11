@@ -862,26 +862,41 @@ class EjecutarNodosProgramados implements ShouldQueue
         
         $tipoNodo = $siguienteNodo['type'] ?? (str_starts_with($siguienteNodoId, 'condition') ? 'condition' : 'stage');
         
-        // Calcular fecha programada
-        if ($tipoNodo === 'condition') {
-            $tiempoVerificacion = 24; // horas por defecto
-            $fechaProgramada = now()->addHours($tiempoVerificacion);
-        } else {
-            $tiempoEspera = $siguienteNodo['tiempo_espera'] ?? 0;
-            $fechaProgramada = now()->addDays($tiempoEspera);
-        }
-        
         // Obtener prospectos_ids de la etapa actual
         $prospectoIds = $etapa->prospectos_ids ?? $ejecucion->prospectos_ids ?? [];
 
-        // Buscar o crear la etapa siguiente
+        // Buscar la etapa siguiente (puede ya existir desde la creación del flujo)
         $siguienteEtapa = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
             ->where('node_id', $siguienteNodoId)
             ->first();
 
+        // ✅ FIX: Usar fecha_programada existente si la etapa ya fue creada al inicio del flujo
+        // Solo calcular desde now() si la etapa no existe (caso edge de flujos dinámicos)
+        if ($siguienteEtapa && $siguienteEtapa->fecha_programada) {
+            $fechaProgramada = $siguienteEtapa->fecha_programada;
+            Log::info('EjecutarNodosProgramados: Usando fecha_programada existente', [
+                'node_id' => $siguienteNodoId,
+                'fecha_programada' => $fechaProgramada,
+            ]);
+        } else {
+            // Calcular fecha programada solo si no existe
+            if ($tipoNodo === 'condition') {
+                $tiempoVerificacion = 24; // horas por defecto
+                $fechaProgramada = now()->addHours($tiempoVerificacion);
+            } else {
+                $tiempoEspera = $siguienteNodo['tiempo_espera'] ?? 0;
+                $fechaProgramada = now()->addDays($tiempoEspera);
+            }
+            Log::info('EjecutarNodosProgramados: Calculando nueva fecha_programada', [
+                'node_id' => $siguienteNodoId,
+                'tipo_nodo' => $tipoNodo,
+                'fecha_programada' => $fechaProgramada,
+            ]);
+        }
+
+        // Preparar datos para la etapa
         $etapaData = [
             'prospectos_ids' => $prospectoIds,
-            'fecha_programada' => $fechaProgramada,
             'estado' => 'pending',
         ];
         
@@ -896,13 +911,17 @@ class EjecutarNodosProgramados implements ShouldQueue
         }
 
         if ($siguienteEtapa) {
+            // Solo actualizar prospectos_ids y estado, NO sobreescribir fecha_programada
             $siguienteEtapa->update($etapaData);
             Log::info('EjecutarNodosProgramados: Etapa siguiente actualizada', [
                 'etapa_id' => $siguienteEtapa->id,
                 'node_id' => $siguienteNodoId,
                 'prospectos_count' => count($prospectoIds),
+                'fecha_programada_preservada' => $siguienteEtapa->fecha_programada,
             ]);
         } else {
+            // Crear etapa nueva con fecha_programada calculada
+            $etapaData['fecha_programada'] = $fechaProgramada;
             $siguienteEtapa = FlujoEjecucionEtapa::create(array_merge($etapaData, [
                 'flujo_ejecucion_id' => $ejecucion->id,
                 'etapa_id' => null,
@@ -912,6 +931,7 @@ class EjecutarNodosProgramados implements ShouldQueue
                 'etapa_id' => $siguienteEtapa->id,
                 'node_id' => $siguienteNodoId,
                 'prospectos_count' => count($prospectoIds),
+                'fecha_programada' => $fechaProgramada,
             ]);
         }
 

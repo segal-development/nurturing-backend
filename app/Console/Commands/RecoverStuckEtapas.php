@@ -273,25 +273,37 @@ class RecoverStuckEtapas extends Command
 
         $tipoNodo = $targetNode['type'] ?? 'stage';
 
-        // Calcular fecha programada
-        if ($tipoNodo === 'condition') {
-            // Las condiciones se verifican después del tiempo de verificación
-            $tiempoVerificacion = $this->getStageData($etapa, $stages)['tiempo_verificacion_condicion'] ?? 24;
-            $fechaProgramada = now()->addHours($tiempoVerificacion);
-        } else {
-            // Las etapas tienen tiempo de espera
-            $tiempoEspera = $targetNode['tiempo_espera'] ?? 0;
-            $fechaProgramada = now()->addDays($tiempoEspera);
-        }
-
-        // Crear o actualizar la etapa siguiente
+        // Buscar si la etapa ya existe (puede haber sido creada al inicio del flujo)
         $siguienteEtapa = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
             ->where('node_id', $targetNodeId)
             ->first();
 
+        // ✅ FIX: Usar fecha_programada existente si la etapa ya fue creada al inicio del flujo
+        if ($siguienteEtapa && $siguienteEtapa->fecha_programada) {
+            $fechaProgramada = $siguienteEtapa->fecha_programada;
+            Log::info("RecoverStuckEtapas: Usando fecha_programada existente", [
+                'node_id' => $targetNodeId,
+                'fecha_programada' => $fechaProgramada,
+            ]);
+        } else {
+            // Calcular fecha programada solo si no existe
+            if ($tipoNodo === 'condition') {
+                $tiempoVerificacion = $this->getStageData($etapa, $stages)['tiempo_verificacion_condicion'] ?? 24;
+                $fechaProgramada = now()->addHours($tiempoVerificacion);
+            } else {
+                $tiempoEspera = $targetNode['tiempo_espera'] ?? 0;
+                $fechaProgramada = now()->addDays($tiempoEspera);
+            }
+            Log::info("RecoverStuckEtapas: Calculando nueva fecha_programada", [
+                'node_id' => $targetNodeId,
+                'tipo_nodo' => $tipoNodo,
+                'fecha_programada' => $fechaProgramada,
+            ]);
+        }
+
+        // Preparar datos para la etapa
         $etapaData = [
             'prospectos_ids' => $etapa->prospectos_ids,
-            'fecha_programada' => $fechaProgramada,
             'estado' => 'pending',
         ];
 
@@ -306,8 +318,11 @@ class RecoverStuckEtapas extends Command
         }
 
         if ($siguienteEtapa) {
+            // Solo actualizar prospectos_ids y estado, NO sobreescribir fecha_programada
             $siguienteEtapa->update($etapaData);
         } else {
+            // Crear etapa nueva con fecha_programada calculada
+            $etapaData['fecha_programada'] = $fechaProgramada;
             FlujoEjecucionEtapa::create(array_merge($etapaData, [
                 'flujo_ejecucion_id' => $ejecucion->id,
                 'etapa_id' => null,

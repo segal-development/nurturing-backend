@@ -331,26 +331,57 @@ class VerificarCondicionJob implements ShouldQueue
             return;
         }
 
-        // Calcular fecha de ejecución
-        $tiempoEspera = $siguienteStage['tiempo_espera'] ?? 0;
-        $fechaProgramada = now()->addDays($tiempoEspera);
+        // Buscar si la etapa ya existe (puede haber sido creada al inicio del flujo)
+        $etapaExistente = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
+            ->where('node_id', $siguienteNodeId)
+            ->first();
 
-        // Crear etapa con prospectos filtrados
-        $nuevaEtapa = FlujoEjecucionEtapa::create([
-            'flujo_ejecucion_id' => $ejecucion->id,
-            'etapa_id' => null,
-            'node_id' => $siguienteNodeId,
-            'prospectos_ids' => $prospectoIds, // ✅ Solo estos prospectos
-            'fecha_programada' => $fechaProgramada,
-            'estado' => 'pending',
-        ]);
+        // ✅ FIX: Usar fecha_programada existente si la etapa ya fue creada al inicio del flujo
+        if ($etapaExistente && $etapaExistente->fecha_programada) {
+            $fechaProgramada = $etapaExistente->fecha_programada;
+            Log::info("VerificarCondicionJob: Usando fecha_programada existente para rama {$rama}", [
+                'node_id' => $siguienteNodeId,
+                'fecha_programada' => $fechaProgramada,
+            ]);
+        } else {
+            $tiempoEspera = $siguienteStage['tiempo_espera'] ?? 0;
+            $fechaProgramada = now()->addDays($tiempoEspera);
+            Log::info("VerificarCondicionJob: Calculando nueva fecha_programada para rama {$rama}", [
+                'node_id' => $siguienteNodeId,
+                'tiempo_espera' => $tiempoEspera,
+                'fecha_programada' => $fechaProgramada,
+            ]);
+        }
 
-        Log::info("VerificarCondicionJob: Etapa programada para rama {$rama}", [
-            'etapa_id' => $nuevaEtapa->id,
-            'node_id' => $siguienteNodeId,
-            'prospectos_count' => count($prospectoIds),
-            'fecha_programada' => $fechaProgramada,
-        ]);
+        // Crear o actualizar etapa con prospectos filtrados
+        if ($etapaExistente) {
+            $etapaExistente->update([
+                'prospectos_ids' => $prospectoIds,
+                'estado' => 'pending',
+            ]);
+            $nuevaEtapa = $etapaExistente;
+            Log::info("VerificarCondicionJob: Etapa existente actualizada para rama {$rama}", [
+                'etapa_id' => $nuevaEtapa->id,
+                'node_id' => $siguienteNodeId,
+                'prospectos_count' => count($prospectoIds),
+                'fecha_programada_preservada' => $fechaProgramada,
+            ]);
+        } else {
+            $nuevaEtapa = FlujoEjecucionEtapa::create([
+                'flujo_ejecucion_id' => $ejecucion->id,
+                'etapa_id' => null,
+                'node_id' => $siguienteNodeId,
+                'prospectos_ids' => $prospectoIds,
+                'fecha_programada' => $fechaProgramada,
+                'estado' => 'pending',
+            ]);
+            Log::info("VerificarCondicionJob: Etapa creada para rama {$rama}", [
+                'etapa_id' => $nuevaEtapa->id,
+                'node_id' => $siguienteNodeId,
+                'prospectos_count' => count($prospectoIds),
+                'fecha_programada' => $fechaProgramada,
+            ]);
+        }
 
         // Despachar job con prospectos filtrados
         EnviarEtapaJob::dispatch(
