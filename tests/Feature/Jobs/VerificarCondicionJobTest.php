@@ -20,7 +20,7 @@ use Tests\TestCase;
 
 /**
  * Tests para VerificarCondicionJob con filtrado por prospecto individual.
- * 
+ *
  * El nuevo sistema evalúa CADA prospecto individualmente y los separa en ramas Sí/No.
  */
 class VerificarCondicionJobTest extends TestCase
@@ -28,10 +28,15 @@ class VerificarCondicionJobTest extends TestCase
     use RefreshDatabase;
 
     private Flujo $flujo;
+
     private FlujoEjecucion $ejecucion;
+
     private FlujoEjecucionEtapa $etapaEjecucion;
+
     private FlujoCondicion $condicion;
+
     private array $prospectos = [];
+
     private array $prospectosEnFlujo = [];
 
     protected function setUp(): void
@@ -70,7 +75,7 @@ class VerificarCondicionJobTest extends TestCase
                 'email' => "prospecto{$i}@test.com",
             ]);
             $this->prospectos[] = $prospecto;
-            
+
             // Create ProspectoEnFlujo for each prospect
             $this->prospectosEnFlujo[] = ProspectoEnFlujo::create([
                 'prospecto_id' => $prospecto->id,
@@ -81,7 +86,7 @@ class VerificarCondicionJobTest extends TestCase
             ]);
         }
 
-        $prospectoIds = array_map(fn($p) => $p->id, $this->prospectos);
+        $prospectoIds = array_map(fn ($p) => $p->id, $this->prospectos);
 
         $this->ejecucion = FlujoEjecucion::factory()->create([
             'flujo_id' => $this->flujo->id,
@@ -386,7 +391,7 @@ class VerificarCondicionJobTest extends TestCase
         $etapaYes = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $this->ejecucion->id)
             ->where('node_id', 'stage-yes')
             ->first();
-        
+
         $this->assertNotNull($etapaYes);
         $this->assertCount(2, $etapaYes->prospectos_ids);
 
@@ -394,7 +399,7 @@ class VerificarCondicionJobTest extends TestCase
         $etapaNo = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $this->ejecucion->id)
             ->where('node_id', 'stage-no')
             ->first();
-        
+
         $this->assertNotNull($etapaNo);
         $this->assertCount(3, $etapaNo->prospectos_ids);
     }
@@ -426,7 +431,7 @@ class VerificarCondicionJobTest extends TestCase
     ): Envio {
         // Find the ProspectoEnFlujo for this prospect
         $prospectoEnFlujo = collect($this->prospectosEnFlujo)->first(
-            fn($pef) => $pef->prospecto_id === $prospectoId
+            fn ($pef) => $pef->prospecto_id === $prospectoId
         );
 
         return Envio::create([

@@ -90,10 +90,10 @@ class EnvioMensual extends Model
         return $query->where(function ($q) use ($anioInicio, $mesInicio, $anioFin, $mesFin) {
             $q->where(function ($q2) use ($anioInicio, $mesInicio) {
                 $q2->where('anio', '>', $anioInicio)
-                   ->orWhere(fn($q3) => $q3->where('anio', $anioInicio)->where('mes', '>=', $mesInicio));
+                    ->orWhere(fn ($q3) => $q3->where('anio', $anioInicio)->where('mes', '>=', $mesInicio));
             })->where(function ($q2) use ($anioFin, $mesFin) {
                 $q2->where('anio', '<', $anioFin)
-                   ->orWhere(fn($q3) => $q3->where('anio', $anioFin)->where('mes', '<=', $mesFin));
+                    ->orWhere(fn ($q3) => $q3->where('anio', $anioFin)->where('mes', '<=', $mesFin));
             });
         });
     }
@@ -166,7 +166,7 @@ class EnvioMensual extends Model
             }
         }
 
-        if (!empty($updates)) {
+        if (! empty($updates)) {
             $updates['agregado_en'] = now();
             $this->update($updates);
         }
@@ -218,12 +218,12 @@ class EnvioMensual extends Model
         return self::totalesGlobales()
             ->where(function ($q) use ($fechaInicio) {
                 $q->where('anio', '>', $fechaInicio->year)
-                  ->orWhere(fn($q2) => $q2->where('anio', $fechaInicio->year)->where('mes', '>=', $fechaInicio->month));
+                    ->orWhere(fn ($q2) => $q2->where('anio', $fechaInicio->year)->where('mes', '>=', $fechaInicio->month));
             })
             ->orderBy('anio')
             ->orderBy('mes')
             ->get()
-            ->map(fn($item) => [
+            ->map(fn ($item) => [
                 'periodo' => sprintf('%d-%02d', $item->anio, $item->mes),
                 'total_envios' => $item->total_envios,
                 'total_emails' => $item->total_emails,

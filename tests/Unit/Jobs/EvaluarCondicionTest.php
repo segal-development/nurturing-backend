@@ -3,7 +3,6 @@
 namespace Tests\Unit\Jobs;
 
 use PHPUnit\Framework\TestCase;
-use ReflectionClass;
 
 /**
  * Test unitario puro para la lógica de evaluación de condiciones.
@@ -21,11 +20,12 @@ class EvaluarCondicionTest extends TestCase
         parent::setUp();
 
         // Crear una clase anónima que replica la lógica de evaluación
-        $this->evaluator = new class {
+        $this->evaluator = new class
+        {
             public function evaluarCondicion(int $actualValue, string $operator, mixed $expectedValue): bool
             {
                 $expectedArray = $this->parseExpectedValueAsArray($expectedValue);
-                
+
                 return match ($operator) {
                     '>' => $actualValue > (int) $expectedValue,
                     '>=' => $actualValue >= (int) $expectedValue,
@@ -34,7 +34,7 @@ class EvaluarCondicionTest extends TestCase
                     '<' => $actualValue < (int) $expectedValue,
                     '<=' => $actualValue <= (int) $expectedValue,
                     'in' => in_array($actualValue, $expectedArray, false),
-                    'not_in' => !in_array($actualValue, $expectedArray, false),
+                    'not_in' => ! in_array($actualValue, $expectedArray, false),
                     default => false,
                 };
             }
@@ -44,11 +44,11 @@ class EvaluarCondicionTest extends TestCase
                 if (is_array($expectedValue)) {
                     return array_map('intval', $expectedValue);
                 }
-                
+
                 if (is_string($expectedValue) && str_contains($expectedValue, ',')) {
                     return array_map('intval', array_map('trim', explode(',', $expectedValue)));
                 }
-                
+
                 return [(int) $expectedValue];
             }
         };

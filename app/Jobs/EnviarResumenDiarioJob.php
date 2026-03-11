@@ -12,7 +12,7 @@ use Illuminate\Support\Facades\Log;
 
 /**
  * Job para enviar el resumen diario de métricas de envíos.
- * 
+ *
  * Se ejecuta automáticamente todos los días a la hora configurada.
  */
 class EnviarResumenDiarioJob implements ShouldQueue
@@ -20,6 +20,7 @@ class EnviarResumenDiarioJob implements ShouldQueue
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public int $tries = 3;
+
     public int $backoff = 60;
 
     public function handle(AlertasService $alertasService): void

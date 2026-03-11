@@ -18,7 +18,6 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Log;
-use Throwable;
 
 /**
  * Job orquestador para enviar mensajes de una etapa de flujo.
@@ -31,7 +30,9 @@ class EnviarEtapaJob implements ShouldQueue
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public $timeout = 120;
+
     public $tries = 3;
+
     public $backoff = [60, 300, 900];
 
     private const CHUNK_SIZE = 100;
@@ -49,7 +50,7 @@ class EnviarEtapaJob implements ShouldQueue
     public function handle(): void
     {
         $totalProspectos = count($this->prospectoIds);
-        
+
         Log::info('EnviarEtapaJob: Iniciando', [
             'flujo_ejecucion_id' => $this->flujoEjecucionId,
             'etapa_ejecucion_id' => $this->etapaEjecucionId,
@@ -72,13 +73,14 @@ class EnviarEtapaJob implements ShouldQueue
         }
 
         $this->updateInitialStates($ejecucion, $etapaEjecucion);
-        
+
         // Para volúmenes grandes (>5000), usar estrategia de sub-jobs
         if ($totalProspectos > 5000) {
             $this->handleLargeVolume($ejecucion, $etapaEjecucion);
+
             return;
         }
-        
+
         // Volumen normal: procesar todo de una
         $prospectosEnFlujo = $this->obtenerProspectosEnFlujo($ejecucion);
         $contenidoData = $this->obtenerContenidoMensaje();
@@ -86,15 +88,16 @@ class EnviarEtapaJob implements ShouldQueue
 
         if (empty($jobs)) {
             $this->handleNoProspectos($etapaEjecucion, $ejecucion);
+
             return;
         }
 
         $this->dispatchBatch($jobs, $ejecucion, $etapaEjecucion, $contenidoData);
     }
-    
+
     /**
      * Maneja volúmenes grandes (>5000 prospectos) SIN cargar todo en memoria.
-     * 
+     *
      * Despacha sub-jobs (EnviarEtapaChunkJob) que procesan chunks de 1000 prospectos.
      * Cada sub-job obtiene sus prospectos de la BD usando offset/limit.
      */
@@ -103,7 +106,7 @@ class EnviarEtapaJob implements ShouldQueue
         $totalProspectos = count($this->prospectoIds);
         $chunkSize = 1000;
         $totalChunks = (int) ceil($totalProspectos / $chunkSize);
-        
+
         Log::info('EnviarEtapaJob: Modo volumen grande - despachando sub-jobs', [
             'total_prospectos' => $totalProspectos,
             'chunk_size' => $chunkSize,
@@ -125,7 +128,7 @@ class EnviarEtapaJob implements ShouldQueue
         // Despachar sub-jobs para cada chunk SIN cargar los IDs en memoria
         for ($chunkIndex = 0; $chunkIndex < $totalChunks; $chunkIndex++) {
             $offset = $chunkIndex * $chunkSize;
-            
+
             EnviarEtapaChunkJob::dispatch(
                 flujoEjecucionId: $this->flujoEjecucionId,
                 etapaEjecucionId: $this->etapaEjecucionId,
@@ -138,7 +141,7 @@ class EnviarEtapaJob implements ShouldQueue
                 branches: $this->branches
             )->onConnection('database')->onQueue('envios');
         }
-        
+
         // Actualizar contador
         $etapaEjecucion->update([
             'response_athenacampaign' => [
@@ -188,8 +191,10 @@ class EnviarEtapaJob implements ShouldQueue
             Log::warning('EnviarEtapaJob: Etapa ya completada', [
                 'etapa_id' => $this->etapaEjecucionId,
             ]);
+
             return true;
         }
+
         return false;
     }
 
@@ -220,14 +225,14 @@ class EnviarEtapaJob implements ShouldQueue
             'branches' => $this->branches,
             'total_jobs' => 0,
         ];
-        
+
         // Crear un batch vacío mock para el callback
         $callback = new BatchCompletedCallback($callbackData);
         // Llamar directamente a procesarSiguientePaso via reflection o simplificar
         // Por ahora, actualizar la ejecución para que el cron maneje el siguiente paso
         $this->programarSiguientePasoSimple($ejecucion);
     }
-    
+
     /**
      * Versión simplificada para cuando no hay prospectos.
      * El cron se encargará de ejecutar el siguiente nodo.
@@ -236,28 +241,30 @@ class EnviarEtapaJob implements ShouldQueue
     {
         $branches = $this->branches;
         $stageId = $this->stage['id'];
-        
+
         $conexion = collect($branches)->firstWhere('source_node_id', $stageId);
-        
-        if (!$conexion) {
+
+        if (! $conexion) {
             // No hay siguiente nodo, finalizar
             $ejecucion->update([
                 'estado' => 'completed',
                 'fecha_fin' => now(),
             ]);
+
             return;
         }
-        
+
         $targetNodeId = $conexion['target_node_id'];
-        
+
         if (str_starts_with($targetNodeId, 'end-')) {
             $ejecucion->update([
                 'estado' => 'completed',
                 'fecha_fin' => now(),
             ]);
+
             return;
         }
-        
+
         // Programar siguiente nodo para que el cron lo ejecute
         $ejecucion->update([
             'proximo_nodo' => $targetNodeId,
@@ -388,6 +395,7 @@ class EnviarEtapaJob implements ShouldQueue
                     'stage_id' => $stageId,
                     'plantilla_id' => $flujoEtapa->plantilla_id,
                 ]);
+
                 return $flujoEtapa->obtenerContenidoParaEnvio($tipoMensaje);
             }
         }
@@ -419,7 +427,7 @@ class EnviarEtapaJob implements ShouldQueue
     {
         $tipoMensaje = $this->stage['tipo_mensaje'] ?? 'email';
         $flujoId = $ejecucion->flujo_id;
-        
+
         // Obtener IDs existentes
         $existingIds = ProspectoEnFlujo::where('flujo_id', $flujoId)
             ->whereIn('prospecto_id', $this->prospectoIds)
@@ -429,10 +437,10 @@ class EnviarEtapaJob implements ShouldQueue
         $idsToCreate = array_diff($this->prospectoIds, $existingIds);
 
         // Crear los nuevos en batch
-        if (!empty($idsToCreate)) {
+        if (! empty($idsToCreate)) {
             $now = now();
             $chunks = array_chunk($idsToCreate, 1000);
-            
+
             foreach ($chunks as $chunk) {
                 $insertData = array_map(function ($prospectoId) use ($flujoId, $tipoMensaje, $now) {
                     return [

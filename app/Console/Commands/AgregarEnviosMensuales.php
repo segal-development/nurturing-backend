@@ -67,8 +67,9 @@ class AgregarEnviosMensuales extends Command
         // Obtener fecha del primer envío
         $primerEnvio = \App\Models\Envio::orderBy('created_at')->first();
 
-        if (!$primerEnvio) {
+        if (! $primerEnvio) {
             $this->warn('No hay envíos en la base de datos.');
+
             return Command::SUCCESS;
         }
 

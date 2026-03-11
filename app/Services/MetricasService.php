@@ -3,19 +3,15 @@
 namespace App\Services;
 
 use App\Models\Desuscripcion;
-use App\Models\EmailApertura;
-use App\Models\EmailClick;
-use App\Models\Envio;
 use App\Models\Flujo;
 use App\Models\Prospecto;
-use Carbon\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 /**
  * Servicio centralizado de métricas para el dashboard.
- * 
+ *
  * Proporciona métricas de:
  * - Aperturas de email (por flujo, día, tasa)
  * - Clicks (por link, flujo, CTR)
@@ -360,7 +356,7 @@ class MetricasService
     public function getMetricasDesuscripciones(int $dias = 30): array
     {
         // Si la tabla no existe todavía, retornar datos vacíos
-        if (!Schema::hasTable('desuscripciones')) {
+        if (! Schema::hasTable('desuscripciones')) {
             return $this->getDesuscripcionesVacias($dias);
         }
 
@@ -528,28 +524,28 @@ class MetricasService
         // 1 query para envíos (actual + anterior)
         $envios = DB::table('envios')
             ->where('created_at', '>=', $desdeAnterior)
-            ->selectRaw("
+            ->selectRaw('
                 COUNT(CASE WHEN created_at >= ? THEN 1 END) as actual,
                 COUNT(CASE WHEN created_at >= ? AND created_at < ? THEN 1 END) as anterior
-            ", [$desdeActual, $desdeAnterior, $hastaAnterior])
+            ', [$desdeActual, $desdeAnterior, $hastaAnterior])
             ->first();
 
         // 1 query para aperturas (actual + anterior)
         $aperturas = DB::table('email_aperturas')
             ->where('created_at', '>=', $desdeAnterior)
-            ->selectRaw("
+            ->selectRaw('
                 COUNT(CASE WHEN created_at >= ? THEN 1 END) as actual,
                 COUNT(CASE WHEN created_at >= ? AND created_at < ? THEN 1 END) as anterior
-            ", [$desdeActual, $desdeAnterior, $hastaAnterior])
+            ', [$desdeActual, $desdeAnterior, $hastaAnterior])
             ->first();
 
         // 1 query para clicks (actual + anterior)
         $clicks = DB::table('email_clicks')
             ->where('created_at', '>=', $desdeAnterior)
-            ->selectRaw("
+            ->selectRaw('
                 COUNT(CASE WHEN created_at >= ? THEN 1 END) as actual,
                 COUNT(CASE WHEN created_at >= ? AND created_at < ? THEN 1 END) as anterior
-            ", [$desdeActual, $desdeAnterior, $hastaAnterior])
+            ', [$desdeActual, $desdeAnterior, $hastaAnterior])
             ->first();
 
         // 1 query para desuscripciones (actual + anterior)
@@ -558,10 +554,10 @@ class MetricasService
         if (Schema::hasTable('desuscripciones')) {
             $desus = DB::table('desuscripciones')
                 ->where('created_at', '>=', $desdeAnterior)
-                ->selectRaw("
+                ->selectRaw('
                     COUNT(CASE WHEN created_at >= ? THEN 1 END) as actual,
                     COUNT(CASE WHEN created_at >= ? AND created_at < ? THEN 1 END) as anterior
-                ", [$desdeActual, $desdeAnterior, $hastaAnterior])
+                ', [$desdeActual, $desdeAnterior, $hastaAnterior])
                 ->first();
             $desuscripcionesActual = (int) ($desus->actual ?? 0);
             $desuscripcionesAnterior = (int) ($desus->anterior ?? 0);

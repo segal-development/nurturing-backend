@@ -20,7 +20,7 @@ class TrackingController extends Controller
 
     /**
      * Registra la apertura de un email y devuelve un pixel transparente
-     * 
+     *
      * GET /track/open/{token}
      */
     public function open(Request $request, string $token)
@@ -29,10 +29,11 @@ class TrackingController extends Controller
             // Buscar el envío por token
             $envio = Envio::where('tracking_token', $token)->first();
 
-            if (!$envio) {
+            if (! $envio) {
                 Log::warning('TrackingController: Token de tracking no encontrado', [
                     'token' => $token,
                 ]);
+
                 return $this->pixelResponse();
             }
 
@@ -57,7 +58,7 @@ class TrackingController extends Controller
             $envio->increment('total_aperturas');
 
             // Si es la primera apertura, actualizar estado y fecha
-            if ($envio->estado === 'enviado' && !$envio->fecha_abierto) {
+            if ($envio->estado === 'enviado' && ! $envio->fecha_abierto) {
                 $envio->update([
                     'estado' => 'abierto',
                     'fecha_abierto' => now(),
@@ -85,9 +86,9 @@ class TrackingController extends Controller
 
     /**
      * Registra el click en un enlace y redirecciona a la URL original
-     * 
+     *
      * GET /track/click/{token}
-     * 
+     *
      * El token contiene: envio_id + url_id encriptados
      * Query param 'url' contiene la URL original codificada en base64
      */
@@ -99,11 +100,12 @@ class TrackingController extends Controller
         try {
             // Decodificar el token (formato: envioId_urlId)
             $tokenData = $this->decodeClickToken($token);
-            
-            if (!$tokenData) {
+
+            if (! $tokenData) {
                 Log::warning('TrackingController: Token de click inválido', [
                     'token' => $token,
                 ]);
+
                 return redirect($fallbackUrl);
             }
 
@@ -112,29 +114,32 @@ class TrackingController extends Controller
 
             // Obtener URL original del query param
             $urlEncoded = $request->query('url');
-            if (!$urlEncoded) {
+            if (! $urlEncoded) {
                 Log::warning('TrackingController: URL no proporcionada en click', [
                     'token' => $token,
                 ]);
+
                 return redirect($fallbackUrl);
             }
 
             $urlOriginal = base64_decode($urlEncoded);
-            if (!$urlOriginal || !filter_var($urlOriginal, FILTER_VALIDATE_URL)) {
+            if (! $urlOriginal || ! filter_var($urlOriginal, FILTER_VALIDATE_URL)) {
                 Log::warning('TrackingController: URL inválida en click', [
                     'token' => $token,
                     'url_encoded' => $urlEncoded,
                 ]);
+
                 return redirect($fallbackUrl);
             }
 
             // Buscar el envío
             $envio = Envio::find($envioId);
 
-            if (!$envio) {
+            if (! $envio) {
                 Log::warning('TrackingController: Envío no encontrado para click', [
                     'envio_id' => $envioId,
                 ]);
+
                 return redirect($urlOriginal);
             }
 
@@ -161,7 +166,7 @@ class TrackingController extends Controller
             $envio->increment('total_clicks');
 
             // Si es el primer click, actualizar estado y fecha
-            if (in_array($envio->estado, ['enviado', 'abierto']) && !$envio->fecha_clickeado) {
+            if (in_array($envio->estado, ['enviado', 'abierto']) && ! $envio->fecha_clickeado) {
                 $envio->update([
                     'estado' => 'clickeado',
                     'fecha_clickeado' => now(),
@@ -207,7 +212,7 @@ class TrackingController extends Controller
     {
         try {
             $decoded = base64_decode($token);
-            if (!$decoded) {
+            if (! $decoded) {
                 return null;
             }
 
@@ -227,10 +232,10 @@ class TrackingController extends Controller
 
     /**
      * Genera una URL de tracking para un enlace
-     * 
-     * @param int $envioId ID del envío
-     * @param string $urlOriginal URL original del enlace
-     * @param string|null $urlId ID opcional del enlace
+     *
+     * @param  int  $envioId  ID del envío
+     * @param  string  $urlOriginal  URL original del enlace
+     * @param  string|null  $urlId  ID opcional del enlace
      * @return string URL de tracking
      */
     public static function generarUrlTracking(int $envioId, string $urlOriginal, ?string $urlId = null): string
@@ -238,9 +243,9 @@ class TrackingController extends Controller
         $urlId = $urlId ?? substr(md5($urlOriginal), 0, 8);
         $token = base64_encode("{$envioId}_{$urlId}");
         $urlEncoded = base64_encode($urlOriginal);
-        
+
         $baseUrl = config('app.url', 'http://localhost');
-        
+
         return "{$baseUrl}/track/click/{$token}?url={$urlEncoded}";
     }
 
@@ -260,13 +265,13 @@ class TrackingController extends Controller
 
     /**
      * Obtiene estadísticas de aperturas para un envío específico
-     * 
+     *
      * GET /api/envios/{envioId}/aperturas
      */
     public function estadisticasEnvio(int $envioId)
     {
         $envio = Envio::with('prospecto')->findOrFail($envioId);
-        
+
         $aperturas = EmailApertura::where('envio_id', $envioId)
             ->orderBy('fecha_apertura', 'desc')
             ->get();
@@ -293,16 +298,16 @@ class TrackingController extends Controller
 
     /**
      * Obtiene estadísticas generales de aperturas para un flujo
-     * 
+     *
      * GET /api/flujos/{flujoId}/estadisticas-aperturas
      */
     /**
      * Obtiene estadísticas generales de aperturas para un flujo
-     * 
+     *
      * Uses DB aggregation instead of loading all envios into memory.
      * Before: O(n) memory for ALL envios (300k+ rows = OOM crash)
      * After: O(1) memory, all counting done in PostgreSQL
-     * 
+     *
      * GET /api/flujos/{flujoId}/estadisticas-aperturas
      */
     public function estadisticasFlujo(int $flujoId)
@@ -370,13 +375,13 @@ class TrackingController extends Controller
 
     /**
      * Obtiene estadísticas de clicks para un envío específico
-     * 
+     *
      * GET /api/envios/{envioId}/clicks
      */
     public function estadisticasClicksEnvio(int $envioId)
     {
         $envio = Envio::with('prospecto')->findOrFail($envioId);
-        
+
         $clicks = EmailClick::where('envio_id', $envioId)
             ->orderBy('fecha_click', 'desc')
             ->get();
@@ -414,16 +419,16 @@ class TrackingController extends Controller
 
     /**
      * Obtiene estadísticas generales de clicks para un flujo
-     * 
+     *
      * GET /api/flujos/{flujoId}/estadisticas-clicks
      */
     /**
      * Obtiene estadísticas generales de clicks para un flujo
-     * 
+     *
      * Uses DB aggregation instead of loading all envios into memory.
      * Before: O(n) memory for ALL envios (300k+ rows = OOM crash)
      * After: O(1) memory, all counting done in PostgreSQL
-     * 
+     *
      * GET /api/flujos/{flujoId}/estadisticas-clicks
      */
     public function estadisticasClicksFlujo(int $flujoId)

@@ -21,7 +21,7 @@ use Maatwebsite\Excel\Facades\Excel;
 
 /**
  * Controller para gestión de importaciones de prospectos.
- * 
+ *
  * Soporta dos modos de procesamiento:
  * - Directo: archivos pequeños (<5MB) se procesan inmediatamente
  * - Background: archivos grandes se suben a Cloud Storage y procesan via Job
@@ -58,7 +58,7 @@ class ImportacionController extends Controller
 
     /**
      * Importa prospectos desde archivo Excel.
-     * 
+     *
      * Soporta lotes: Si se envía lote_id, agrega el archivo a ese lote.
      * Si no, crea un nuevo lote con el nombre de origen.
      */
@@ -68,7 +68,7 @@ class ImportacionController extends Controller
             $archivo = $request->file('archivo');
             $nombreArchivo = $archivo->getClientOriginalName();
             $lote = $this->obtenerOCrearLote($request);
-            
+
             $procesarEnBackground = $this->debeProceserEnBackground($archivo);
 
             return $procesarEnBackground
@@ -85,7 +85,7 @@ class ImportacionController extends Controller
      */
     public function show(Importacion $importacion): JsonResponse
     {
-        $importacion->load(['user', 'prospectos' => fn($q) => $q->latest()->limit(100)]);
+        $importacion->load(['user', 'prospectos' => fn ($q) => $q->latest()->limit(100)]);
 
         return response()->json([
             'data' => new ImportacionResource($importacion),
@@ -148,7 +148,7 @@ class ImportacionController extends Controller
         return response()->json([
             'status' => $hasStuck ? 'warning' : 'healthy',
             'data' => $stats,
-            'message' => $hasStuck 
+            'message' => $hasStuck
                 ? "Hay {$stats['stuck_count']} importación(es) stuck que requieren atención"
                 : 'Sistema de importaciones funcionando correctamente',
         ]);
@@ -187,7 +187,7 @@ class ImportacionController extends Controller
 
         foreach ($importaciones as $importacion) {
             $resultado = $this->evaluarParaForceComplete($importacion);
-            
+
             if ($resultado['puede_completar']) {
                 $this->forzarCompletado($importacion);
                 $completed[] = $resultado['info'];
@@ -197,8 +197,8 @@ class ImportacionController extends Controller
         }
 
         return response()->json([
-            'mensaje' => count($completed) > 0 
-                ? 'Se forzó la finalización de ' . count($completed) . ' importación(es)'
+            'mensaje' => count($completed) > 0
+                ? 'Se forzó la finalización de '.count($completed).' importación(es)'
                 : 'No se encontraron importaciones que cumplan los criterios',
             'completadas' => $completed,
             'omitidas' => $skipped,
@@ -211,8 +211,8 @@ class ImportacionController extends Controller
     public function retry(Importacion $importacion): JsonResponse
     {
         $validacion = $this->validarParaRetry($importacion);
-        
-        if (!$validacion['valido']) {
+
+        if (! $validacion['valido']) {
             return response()->json(['mensaje' => $validacion['mensaje']], $validacion['codigo']);
         }
 
@@ -300,11 +300,11 @@ class ImportacionController extends Controller
     private function obtenerLoteExistente(int $loteId): Lote
     {
         $lote = Lote::findOrFail($loteId);
-        
+
         if ($lote->estado === 'completado') {
             throw new \Exception('No se pueden agregar archivos a un lote completado');
         }
-        
+
         return $lote;
     }
 
@@ -375,7 +375,7 @@ class ImportacionController extends Controller
         $import = new ProspectosImport($importacion->id);
         Excel::import($import, $archivo);
         $import->actualizarImportacion();
-        
+
         return $import;
     }
 
@@ -391,7 +391,8 @@ class ImportacionController extends Controller
     private function generarRutaArchivo(UploadedFile $archivo): string
     {
         $extension = $archivo->getClientOriginalExtension();
-        return 'imports/' . now()->format('Y/m/d') . '/' . uniqid() . '_' . time() . '.' . $extension;
+
+        return 'imports/'.now()->format('Y/m/d').'/'.uniqid().'_'.time().'.'.$extension;
     }
 
     private function encolarJob(Importacion $importacion, string $rutaArchivo, string $disk): void
@@ -401,7 +402,7 @@ class ImportacionController extends Controller
 
     private function eliminarArchivoSiExiste(Importacion $importacion): void
     {
-        if (!$importacion->ruta_archivo) {
+        if (! $importacion->ruta_archivo) {
             return;
         }
 
@@ -439,7 +440,7 @@ class ImportacionController extends Controller
         }
 
         $porcentaje = (int) round(($procesados / $totalEstimado) * 100);
-        
+
         return min($porcentaje, 99); // Máximo 99% mientras procesa
     }
 
@@ -455,7 +456,7 @@ class ImportacionController extends Controller
         $porcentaje = $this->calcularPorcentajeProcesado($importacion);
         $archivoExiste = $this->verificarArchivoExiste($importacion);
 
-        $puedeCompletar = $porcentaje >= self::FORCE_COMPLETE_THRESHOLD && !$archivoExiste;
+        $puedeCompletar = $porcentaje >= self::FORCE_COMPLETE_THRESHOLD && ! $archivoExiste;
 
         $info = [
             'id' => $importacion->id,
@@ -463,11 +464,11 @@ class ImportacionController extends Controller
             'porcentaje_procesado' => round($porcentaje * 100, 2),
         ];
 
-        if (!$puedeCompletar) {
+        if (! $puedeCompletar) {
             $info['archivo_existe'] = $archivoExiste;
-            $info['razon'] = $archivoExiste 
+            $info['razon'] = $archivoExiste
                 ? 'El archivo aún existe (puede estar procesando)'
-                : 'Porcentaje procesado menor al threshold (' . round(self::FORCE_COMPLETE_THRESHOLD * 100) . '%)';
+                : 'Porcentaje procesado menor al threshold ('.round(self::FORCE_COMPLETE_THRESHOLD * 100).'%)';
         }
 
         return [
@@ -494,6 +495,7 @@ class ImportacionController extends Controller
 
         try {
             $disk = $importacion->metadata['disk'] ?? 'gcs';
+
             return Storage::disk($disk)->exists($importacion->ruta_archivo);
         } catch (\Exception $e) {
             return false;
@@ -517,13 +519,13 @@ class ImportacionController extends Controller
     private function updateLoteAfterForceComplete(Importacion $importacion): void
     {
         $importacion->refresh();
-        
-        if (!$importacion->lote_id) {
+
+        if (! $importacion->lote_id) {
             return;
         }
 
         $lote = Lote::find($importacion->lote_id);
-        if (!$lote) {
+        if (! $lote) {
             return;
         }
 
@@ -533,12 +535,12 @@ class ImportacionController extends Controller
     private function recalcularEstadoLote(Lote $lote): void
     {
         $importaciones = $lote->importaciones()->get();
-        
+
         $todasCompletadas = $importaciones->every(
-            fn($imp) => in_array($imp->estado, ['completado', 'fallido'])
+            fn ($imp) => in_array($imp->estado, ['completado', 'fallido'])
         );
-        $algunaFallida = $importaciones->contains(fn($imp) => $imp->estado === 'fallido');
-        
+        $algunaFallida = $importaciones->contains(fn ($imp) => $imp->estado === 'fallido');
+
         $lote->update([
             'total_registros' => $importaciones->sum('total_registros'),
             'registros_exitosos' => $importaciones->sum('registros_exitosos'),
@@ -550,7 +552,7 @@ class ImportacionController extends Controller
 
     private function determinarEstadoLote(bool $todasCompletadas, bool $algunaFallida): string
     {
-        if (!$todasCompletadas) {
+        if (! $todasCompletadas) {
             return 'procesando';
         }
 
@@ -579,7 +581,7 @@ class ImportacionController extends Controller
         }
 
         $validacionArchivo = $this->validarArchivoParaRetry($importacion);
-        if (!$validacionArchivo['valido']) {
+        if (! $validacionArchivo['valido']) {
             return $validacionArchivo;
         }
 
@@ -600,9 +602,9 @@ class ImportacionController extends Controller
     private function validarArchivoParaRetry(Importacion $importacion): array
     {
         $disk = $importacion->metadata['disk'] ?? 'gcs';
-        
+
         try {
-            if (!Storage::disk($disk)->exists($importacion->ruta_archivo)) {
+            if (! Storage::disk($disk)->exists($importacion->ruta_archivo)) {
                 return $this->validacionFallida(
                     'El archivo de la importación ya no existe en storage',
                     422
@@ -610,7 +612,7 @@ class ImportacionController extends Controller
             }
         } catch (\Exception $e) {
             return $this->validacionFallida(
-                'Error verificando el archivo: ' . $e->getMessage(),
+                'Error verificando el archivo: '.$e->getMessage(),
                 500
             );
         }
@@ -622,7 +624,7 @@ class ImportacionController extends Controller
     {
         return DB::table('jobs')
             ->where('payload', 'like', '%ProcesarImportacionJob%')
-            ->where('payload', 'like', '%"importacionId";i:' . $importacion->id . ';%')
+            ->where('payload', 'like', '%"importacionId";i:'.$importacion->id.';%')
             ->exists();
     }
 
@@ -728,7 +730,7 @@ class ImportacionController extends Controller
             'data' => new ImportacionResource($importacion),
             'lote' => new LoteResource($lote->fresh(['importaciones'])),
             'procesamiento' => 'background',
-            'instrucciones' => 'Consulte el estado del lote usando GET /api/lotes/' . $lote->id,
+            'instrucciones' => 'Consulte el estado del lote usando GET /api/lotes/'.$lote->id,
         ], 202);
     }
 
@@ -746,6 +748,6 @@ class ImportacionController extends Controller
 
     private function getRecoveryService(): ImportacionRecoveryService
     {
-        return new ImportacionRecoveryService();
+        return new ImportacionRecoveryService;
     }
 }

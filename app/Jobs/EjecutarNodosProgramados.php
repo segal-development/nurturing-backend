@@ -91,7 +91,7 @@ class EjecutarNodosProgramados implements ShouldQueue
 
     /**
      * Verifica etapas en 'executing' que pueden haber terminado de procesar.
-     * 
+     *
      * CRÍTICO para volúmenes grandes (large_volume_chunked) que no tienen
      * callback global - el cron debe detectar cuando terminaron.
      */
@@ -136,7 +136,7 @@ class EjecutarNodosProgramados implements ShouldQueue
 
     /**
      * Ejecuta el próximo nodo de una ejecución
-     * 
+     *
      * IMPORTANTE: NO usamos transacciones largas aquí.
      * Cada operación es atómica para evitar locks si Cloud Run mata la instancia.
      */
@@ -152,14 +152,14 @@ class EjecutarNodosProgramados implements ShouldQueue
         if ($etapasEnEjecucion) {
             // Verificar si la etapa lleva mucho tiempo en 'executing' (posible stuck)
             $tiempoEnEjecucion = now()->diffInMinutes($etapasEnEjecucion->fecha_ejecucion ?? $etapasEnEjecucion->created_at);
-            
+
             // ✅ Para volúmenes grandes, verificar más frecuentemente si ya terminó
             $batchInfo = $etapasEnEjecucion->response_athenacampaign ?? [];
             $esVolumenGrande = isset($batchInfo['modo']) && $batchInfo['modo'] === 'large_volume_chunked';
-            
+
             // Tiempo mínimo antes de verificar: 10 min para volumen grande, 30 min para normal
             $tiempoMinimoStuck = $esVolumenGrande ? 10 : 30;
-            
+
             if ($tiempoEnEjecucion > $tiempoMinimoStuck) {
                 // Etapa posiblemente stuck - intentar recuperar
                 Log::warning('EjecutarNodosProgramados: Etapa anterior posiblemente stuck, verificando', [
@@ -169,11 +169,12 @@ class EjecutarNodosProgramados implements ShouldQueue
                     'minutos_en_executing' => $tiempoEnEjecucion,
                     'es_volumen_grande' => $esVolumenGrande,
                 ]);
-                
+
                 $this->recuperarEtapaStuck($etapasEnEjecucion, $ejecucion);
+
                 return;
             }
-            
+
             Log::info('EjecutarNodosProgramados: Esperando que etapa anterior complete', [
                 'ejecucion_id' => $ejecucion->id,
                 'etapa_en_ejecucion' => $etapasEnEjecucion->node_id,
@@ -181,6 +182,7 @@ class EjecutarNodosProgramados implements ShouldQueue
                 'minutos_en_executing' => $tiempoEnEjecucion,
                 'es_volumen_grande' => $esVolumenGrande,
             ]);
+
             return;
         }
 
@@ -205,10 +207,10 @@ class EjecutarNodosProgramados implements ShouldQueue
 
         // Obtener el nodo que se debe ejecutar
         $nodoId = $ejecucion->proximo_nodo;
-        
+
         // Buscar en stages primero, luego en conditions
         $stage = collect($stages)->firstWhere('id', $nodoId);
-        
+
         if (! $stage) {
             // Buscar en conditions si no está en stages
             $stage = collect($conditions)->firstWhere('id', $nodoId);
@@ -237,7 +239,7 @@ class EjecutarNodosProgramados implements ShouldQueue
                 'estado_etapa' => $etapaExistente->estado,
                 'ejecutado' => $etapaExistente->ejecutado,
             ]);
-            
+
             // ✅ FIX: Si la etapa está en 'executing', NO avanzar al siguiente nodo todavía
             // Esperar a que termine (el cron de recuperación lo manejará)
             if ($etapaExistente->estado === 'executing') {
@@ -245,17 +247,19 @@ class EjecutarNodosProgramados implements ShouldQueue
                     'ejecucion_id' => $ejecucion->id,
                     'nodo_id' => $nodoId,
                 ]);
+
                 return;
             }
-            
+
             // Solo avanzar si la etapa está 'completed'
             if ($etapaExistente->estado === 'completed') {
                 $this->programarSiguienteNodo($ejecucion, $stage['id'], $branches);
             }
+
             return;
         }
 
-        if (!$etapaExistente) {
+        if (! $etapaExistente) {
             // Crear nueva etapa (operación atómica)
             $etapaExistente = FlujoEjecucionEtapa::create([
                 'flujo_ejecucion_id' => $ejecucion->id,
@@ -301,14 +305,14 @@ class EjecutarNodosProgramados implements ShouldQueue
 
     /**
      * Ejecuta un nodo de envío (email o SMS)
-     * 
+     *
      * ✅ ARQUITECTURA PARA ENVÍOS MASIVOS:
      * En lugar de llamar a EnvioService directamente (que hace foreach síncrono),
      * despachamos EnviarEtapaJob que tiene:
      * - Batching para procesar en paralelo
      * - Rate limiting para no saturar SMTP
      * - Timeout apropiado para volúmenes grandes (350k+)
-     * 
+     *
      * El cron solo ORQUESTA, no ejecuta envíos directamente.
      */
     private function ejecutarNodoEnvio(
@@ -387,7 +391,7 @@ class EjecutarNodosProgramados implements ShouldQueue
                     'email_node_id' => $nodoEmailAnteriorId,
                     'email_estado' => $etapaEmailDirecta->estado,
                 ]);
-                
+
                 // No ejecutar la condición todavía - el email aún está procesando
                 // El nodo se volverá a intentar en la próxima ejecución del cron
                 return;
@@ -412,7 +416,7 @@ class EjecutarNodosProgramados implements ShouldQueue
                 ->orderBy('fecha_ejecucion', 'desc')
                 ->first();
 
-            if (!$etapaEmailAnterior || !$etapaEmailAnterior->message_id) {
+            if (! $etapaEmailAnterior || ! $etapaEmailAnterior->message_id) {
                 Log::error('EjecutarNodosProgramados: No se encontró etapa de email anterior con message_id', [
                     'ejecucion_id' => $ejecucion->id,
                     'nodo_id' => $stage['id'],
@@ -421,25 +425,25 @@ class EjecutarNodosProgramados implements ShouldQueue
                         ->pluck('node_id', 'estado')
                         ->toArray(),
                 ]);
-                
+
                 // Marcar etapa como fallida
                 $etapa->update([
                     'estado' => 'failed',
                     'ejecutado' => true,
                     'fecha_ejecucion' => now(),
                 ]);
-                
+
                 return;
             }
 
             $messageId = (int) $etapaEmailAnterior->message_id;
-            
+
             Log::info('EjecutarNodosProgramados: Usando message_id de etapa email anterior', [
                 'message_id' => $messageId,
                 'etapa_email_id' => $etapaEmailAnterior->id,
                 'etapa_email_node_id' => $etapaEmailAnterior->node_id,
             ]);
-            
+
             // ✅ Guardar source_etapa_id para que VerificarCondicionJob lo use
             $etapa->update([
                 'response_athenacampaign' => array_merge($responseData, [
@@ -462,11 +466,11 @@ class EjecutarNodosProgramados implements ShouldQueue
         // ✅ PRIORIDAD 1: Usar conexión guardada por EnviarEtapaJob
         // PRIORIDAD 2: Construir desde el stage
         $condicionGuardada = $responseData['conexion'] ?? null;
-        
+
         if ($condicionGuardada) {
             $condicion = $condicionGuardada;
             // Asegurar que tenga los datos de la condición
-            if (!isset($condicion['data'])) {
+            if (! isset($condicion['data'])) {
                 $condicion['data'] = [
                     'check_param' => $stage['check_param'] ?? 'Views',
                     'check_operator' => $stage['check_operator'] ?? '>',
@@ -535,7 +539,7 @@ class EjecutarNodosProgramados implements ShouldQueue
 
     /**
      * Recupera una etapa que quedó stuck en 'executing'.
-     * 
+     *
      * Posibles causas de stuck:
      * - Callback de batch falló silenciosamente
      * - Instancia de Cloud Run matada durante procesamiento
@@ -550,12 +554,13 @@ class EjecutarNodosProgramados implements ShouldQueue
         ]);
 
         $batchInfo = $etapa->response_athenacampaign;
-        
+
         // ✅ CASO ESPECIAL: Volumen grande procesado por chunks
         // EnviarEtapaChunkJob NO tiene callback global, así que verificamos
         // si todos los envíos ya se procesaron basándonos en la tabla envios
         if (isset($batchInfo['modo']) && $batchInfo['modo'] === 'large_volume_chunked') {
             $this->verificarYCompletarEtapaVolumenGrande($etapa, $ejecucion, $batchInfo);
+
             return;
         }
 
@@ -566,7 +571,7 @@ class EjecutarNodosProgramados implements ShouldQueue
             // Intentar obtener estado del batch
             try {
                 $batch = \Illuminate\Support\Facades\Bus::findBatch($batchId);
-                
+
                 if ($batch) {
                     if ($batch->finished()) {
                         // El batch terminó pero el callback no se ejecutó
@@ -595,12 +600,14 @@ class EjecutarNodosProgramados implements ShouldQueue
 
                         // Actualizar la ejecución para continuar
                         $this->actualizarEjecucionDespuesDeRecuperacion($ejecucion, $etapa);
+
                         return;
                     }
 
                     if ($batch->cancelled()) {
                         Log::error('EjecutarNodosProgramados: Batch fue cancelado', ['batch_id' => $batchId]);
                         $this->marcarEtapaComoFallida($etapa, 'Batch cancelado');
+
                         return;
                     }
 
@@ -609,6 +616,7 @@ class EjecutarNodosProgramados implements ShouldQueue
                         'batch_id' => $batchId,
                         'pending' => $batch->pendingJobs,
                     ]);
+
                     return;
                 }
             } catch (\Exception $e) {
@@ -623,20 +631,20 @@ class EjecutarNodosProgramados implements ShouldQueue
         // Esto puede pasar si el response_athenacampaign se perdió o corrompió
         $this->verificarYCompletarEtapaPorEnvios($etapa, $ejecucion);
     }
-    
+
     /**
      * Verifica si una etapa de volumen grande ya completó todos sus envíos.
-     * 
+     *
      * Cuando se usa EnviarEtapaChunkJob, no hay callback global que marque la etapa
      * como completada. Esta función verifica el estado real de los envíos.
      */
     private function verificarYCompletarEtapaVolumenGrande(
-        FlujoEjecucionEtapa $etapa, 
-        FlujoEjecucion $ejecucion, 
+        FlujoEjecucionEtapa $etapa,
+        FlujoEjecucion $ejecucion,
         array $batchInfo
     ): void {
         $totalProspectos = $batchInfo['total_prospectos'] ?? 0;
-        
+
         // Contar envíos procesados (exitosos + fallidos)
         $envioStats = DB::table('envios')
             ->where('flujo_ejecucion_etapa_id', $etapa->id)
@@ -647,12 +655,12 @@ class EjecutarNodosProgramados implements ShouldQueue
                 SUM(CASE WHEN estado = 'pendiente' THEN 1 ELSE 0 END) as pendientes
             ")
             ->first();
-        
+
         $exitosos = (int) ($envioStats->exitosos ?? 0);
         $fallidos = (int) ($envioStats->fallidos ?? 0);
         $pendientes = (int) ($envioStats->pendientes ?? 0);
         $procesados = $exitosos + $fallidos;
-        
+
         Log::info('EjecutarNodosProgramados: Verificando etapa volumen grande', [
             'etapa_id' => $etapa->id,
             'total_prospectos' => $totalProspectos,
@@ -661,27 +669,27 @@ class EjecutarNodosProgramados implements ShouldQueue
             'fallidos' => $fallidos,
             'pendientes' => $pendientes,
         ]);
-        
+
         // ✅ Verificar si está "prácticamente terminado"
         // - No quedan pendientes
         // - Se procesó al menos el 80% de los prospectos (algunos pueden no tener email válido)
         $porcentajeProcesado = $totalProspectos > 0 ? ($procesados / $totalProspectos) * 100 : 0;
         $todosProcesados = $pendientes === 0 && $porcentajeProcesado >= 80;
-        
+
         // También verificar jobs en cola para esta etapa
         $jobsEnCola = DB::table('jobs')
-            ->where('payload', 'like', '%' . $etapa->id . '%')
+            ->where('payload', 'like', '%'.$etapa->id.'%')
             ->count();
-        
+
         if ($todosProcesados && $jobsEnCola < 100) {
             Log::info('EjecutarNodosProgramados: Etapa volumen grande completada', [
                 'etapa_id' => $etapa->id,
                 'porcentaje_procesado' => round($porcentajeProcesado, 2),
                 'jobs_restantes_en_cola' => $jobsEnCola,
             ]);
-            
+
             $messageId = rand(10000, 99999);
-            
+
             $etapa->update([
                 'estado' => 'completed',
                 'ejecutado' => true,
@@ -696,12 +704,13 @@ class EjecutarNodosProgramados implements ShouldQueue
                     'porcentaje_procesado' => round($porcentajeProcesado, 2),
                 ]),
             ]);
-            
+
             // Programar siguiente nodo
             $this->actualizarEjecucionDespuesDeRecuperacion($ejecucion, $etapa);
+
             return;
         }
-        
+
         // Aún procesando - loguear progreso
         Log::info('EjecutarNodosProgramados: Etapa volumen grande aún procesando', [
             'etapa_id' => $etapa->id,
@@ -709,7 +718,7 @@ class EjecutarNodosProgramados implements ShouldQueue
             'jobs_en_cola' => $jobsEnCola,
         ]);
     }
-    
+
     /**
      * Fallback: Verifica completitud basándose únicamente en tabla de envíos.
      * Usado cuando no tenemos información de batch.
@@ -726,12 +735,12 @@ class EjecutarNodosProgramados implements ShouldQueue
                 SUM(CASE WHEN estado = 'pendiente' THEN 1 ELSE 0 END) as pendientes
             ")
             ->first();
-        
+
         $total = (int) ($envioStats->total ?? 0);
         $pendientes = (int) ($envioStats->pendientes ?? 0);
         $exitosos = (int) ($envioStats->exitosos ?? 0);
         $fallidos = (int) ($envioStats->fallidos ?? 0);
-        
+
         Log::info('EjecutarNodosProgramados: Verificando completitud por envíos', [
             'etapa_id' => $etapa->id,
             'total_envios' => $total,
@@ -739,15 +748,15 @@ class EjecutarNodosProgramados implements ShouldQueue
             'fallidos' => $fallidos,
             'pendientes' => $pendientes,
         ]);
-        
+
         // Si hay envíos y no quedan pendientes, marcar como completada
         if ($total > 0 && $pendientes === 0) {
             Log::info('EjecutarNodosProgramados: Completando etapa por verificación de envíos', [
                 'etapa_id' => $etapa->id,
             ]);
-            
+
             $messageId = rand(10000, 99999);
-            
+
             $etapa->update([
                 'estado' => 'completed',
                 'ejecutado' => true,
@@ -764,11 +773,12 @@ class EjecutarNodosProgramados implements ShouldQueue
                     ]
                 ),
             ]);
-            
+
             $this->actualizarEjecucionDespuesDeRecuperacion($ejecucion, $etapa);
+
             return;
         }
-        
+
         // Si no hay envíos o aún hay pendientes, marcar como failed
         if ($total === 0) {
             $this->marcarEtapaComoFallida($etapa, 'No se encontraron envíos para esta etapa');
@@ -803,7 +813,7 @@ class EjecutarNodosProgramados implements ShouldQueue
 
     /**
      * Actualiza la ejecución después de recuperar una etapa y programa el siguiente nodo.
-     * 
+     *
      * Similar a BatchCompletedCallback pero para etapas recuperadas por el cron.
      */
     private function actualizarEjecucionDespuesDeRecuperacion(FlujoEjecucion $ejecucion, FlujoEjecucionEtapa $etapa): void
@@ -813,9 +823,9 @@ class EjecutarNodosProgramados implements ShouldQueue
         $branches = $flujoData['branches'] ?? $flujoData['edges'] ?? [];
         $stages = $flujoData['stages'] ?? [];
         $conditions = $flujoData['conditions'] ?? [];
-        
+
         // Normalizar edges a branches
-        if (!empty($flujoData['edges']) && empty($flujoData['branches'])) {
+        if (! empty($flujoData['edges']) && empty($flujoData['branches'])) {
             $branches = collect($flujoData['edges'])->map(function ($edge) {
                 return [
                     'source_node_id' => $edge['source'] ?? null,
@@ -827,8 +837,8 @@ class EjecutarNodosProgramados implements ShouldQueue
 
         // Buscar siguiente nodo
         $siguienteConexion = collect($branches)->firstWhere('source_node_id', $etapa->node_id);
-        
-        if (!$siguienteConexion) {
+
+        if (! $siguienteConexion) {
             // No hay siguiente nodo - completar ejecución
             $ejecucion->update([
                 'estado' => 'completed',
@@ -837,11 +847,12 @@ class EjecutarNodosProgramados implements ShouldQueue
                 'fecha_proximo_nodo' => null,
             ]);
             Log::info('EjecutarNodosProgramados: Ejecución completada después de recuperación');
+
             return;
         }
 
         $siguienteNodoId = $siguienteConexion['target_node_id'];
-        
+
         // Si es nodo final, completar
         if (str_starts_with($siguienteNodoId, 'end-')) {
             $ejecucion->update([
@@ -851,17 +862,18 @@ class EjecutarNodosProgramados implements ShouldQueue
                 'fecha_proximo_nodo' => null,
             ]);
             Log::info('EjecutarNodosProgramados: Nodo final alcanzado, ejecución completada');
+
             return;
         }
 
         // Buscar datos del siguiente nodo
         $siguienteNodo = collect($stages)->firstWhere('id', $siguienteNodoId);
-        if (!$siguienteNodo) {
+        if (! $siguienteNodo) {
             $siguienteNodo = collect($conditions)->firstWhere('id', $siguienteNodoId);
         }
-        
+
         $tipoNodo = $siguienteNodo['type'] ?? (str_starts_with($siguienteNodoId, 'condition') ? 'condition' : 'stage');
-        
+
         // Obtener prospectos_ids de la etapa actual
         $prospectoIds = $etapa->prospectos_ids ?? $ejecucion->prospectos_ids ?? [];
 
@@ -899,7 +911,7 @@ class EjecutarNodosProgramados implements ShouldQueue
             'prospectos_ids' => $prospectoIds,
             'estado' => 'pending',
         ];
-        
+
         // Si es condición, agregar source info
         if ($tipoNodo === 'condition') {
             $etapaData['response_athenacampaign'] = [
@@ -1004,10 +1016,10 @@ class EjecutarNodosProgramados implements ShouldQueue
             $flujoData = $ejecucion->flujo->flujo_data;
             $stages = $flujoData['stages'] ?? [];
             $conditions = $flujoData['conditions'] ?? [];
-            
+
             // Buscar en stages primero, luego en conditions
             $siguienteStage = collect($stages)->firstWhere('id', $siguienteNodoId);
-            
+
             if (! $siguienteStage) {
                 $siguienteStage = collect($conditions)->firstWhere('id', $siguienteNodoId);
             }

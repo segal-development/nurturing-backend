@@ -12,14 +12,14 @@ use Illuminate\Support\Facades\Log;
 
 /**
  * Servicio principal de importación de prospectos.
- * 
+ *
  * Orquesta todos los componentes del proceso de importación:
  * - ExcelRowReader: Lee filas del Excel en streaming
  * - ProspectoCacheService: Cache de prospectos existentes
  * - TipoProspectoResolver: Resuelve tipos por monto
  * - ProspectoBatchWriter: Escribe en batches a la BD
  * - ImportCheckpointManager: Guarda progreso para resume
- * 
+ *
  * @example
  * $service = new ProspectoImportService($importacion, '/path/to/file.xlsx');
  * $service->import();
@@ -32,9 +32,13 @@ final class ProspectoImportService
     // =========================================================================
 
     private readonly ProspectoCacheService $cacheService;
+
     private readonly TipoProspectoResolver $tipoResolver;
+
     private readonly ProspectoBatchWriter $batchWriter;
+
     private readonly ImportCheckpointManager $checkpointManager;
+
     private readonly ExcelRowReader $rowReader;
 
     // =========================================================================
@@ -42,10 +46,15 @@ final class ProspectoImportService
     // =========================================================================
 
     private int $rowsProcessed = 0;
+
     private int $registrosExitosos = 0;
+
     private int $registrosFallidos = 0;
+
     private int $sinEmail = 0;
+
     private int $sinTelefono = 0;
+
     private float $startTime = 0;
 
     // =========================================================================
@@ -56,12 +65,12 @@ final class ProspectoImportService
         Importacion $importacion,
         string $filePath,
     ) {
-        $this->cacheService = new ProspectoCacheService();
-        $this->tipoResolver = new TipoProspectoResolver();
+        $this->cacheService = new ProspectoCacheService;
+        $this->tipoResolver = new TipoProspectoResolver;
         $this->batchWriter = new ProspectoBatchWriter($importacion->id);
         $this->checkpointManager = new ImportCheckpointManager($importacion);
         $this->rowReader = new ExcelRowReader($filePath);
-        
+
         $this->restoreFromCheckpoint();
     }
 
@@ -71,16 +80,16 @@ final class ProspectoImportService
 
     /**
      * Ejecuta la importación completa con soporte para resume.
-     * 
+     *
      * @throws \Exception Si ocurre un error irrecuperable
      */
     public function import(): void
     {
         $this->startTime = microtime(true);
-        
+
         $this->logStart();
         $this->loadDependencies();
-        
+
         try {
             $this->processAllRows();
             $this->finalize();
@@ -100,13 +109,13 @@ final class ProspectoImportService
     private function restoreFromCheckpoint(): void
     {
         $progress = $this->checkpointManager->getInitialProgress();
-        
+
         $this->rowsProcessed = $progress->lastProcessedRow;
         $this->registrosExitosos = $progress->registrosExitosos;
         $this->registrosFallidos = $progress->registrosFallidos;
         $this->sinEmail = $progress->sinEmail;
         $this->sinTelefono = $progress->sinTelefono;
-        
+
         if ($this->checkpointManager->isResuming()) {
             $this->logResume($progress);
         }
@@ -119,7 +128,7 @@ final class ProspectoImportService
     {
         $this->tipoResolver->load();
         $this->cacheService->loadExistingProspectos();
-        
+
         Log::info('ProspectoImportService: Dependencias cargadas', [
             'tipos_prospecto' => $this->tipoResolver->getTiposCount(),
             'cache_stats' => $this->cacheService->getStats(),
@@ -139,11 +148,11 @@ final class ProspectoImportService
             if ($this->shouldSkipRow($rowIndex)) {
                 continue;
             }
-            
+
             $this->processRow($rowIndex, $rowData);
             $this->updateProgress($rowIndex);
         }
-        
+
         $this->batchWriter->flush();
     }
 
@@ -158,8 +167,8 @@ final class ProspectoImportService
     private function processRow(int $rowIndex, array $rowData): void
     {
         $row = ProspectoRow::fromArray($rowData, $rowIndex);
-        
-        if (!$this->validateAndCountRow($row)) {
+
+        if (! $this->validateAndCountRow($row)) {
             return;
         }
 
@@ -177,11 +186,12 @@ final class ProspectoImportService
      */
     private function validateAndCountRow(ProspectoRow $row): bool
     {
-        if (!$this->validateRow($row)) {
+        if (! $this->validateRow($row)) {
             return false;
         }
 
         $this->countMissingContactData($row);
+
         return true;
     }
 
@@ -190,13 +200,15 @@ final class ProspectoImportService
      */
     private function validateRow(ProspectoRow $row): bool
     {
-        if (!$row->hasValidName()) {
+        if (! $row->hasValidName()) {
             $this->recordValidationError($row->rowIndex, 'nombre', 'Nombre requerido o inválido');
+
             return false;
         }
 
-        if (!$row->hasValidContact()) {
+        if (! $row->hasValidContact()) {
             $this->recordValidationError($row->rowIndex, 'contacto', 'Debe tener email o teléfono');
+
             return false;
         }
 
@@ -214,10 +226,10 @@ final class ProspectoImportService
      */
     private function countMissingContactData(ProspectoRow $row): void
     {
-        if (!$row->hasEmail()) {
+        if (! $row->hasEmail()) {
             $this->sinEmail++;
         }
-        if (!$row->hasTelefono()) {
+        if (! $row->hasTelefono()) {
             $this->sinTelefono++;
         }
     }
@@ -228,11 +240,11 @@ final class ProspectoImportService
     private function resolveTipoProspecto(ProspectoRow $row): ?int
     {
         $tipoId = $this->tipoResolver->resolveIdByMonto((float) $row->montoDeuda);
-        
+
         if ($tipoId === null) {
             $this->registrosFallidos++;
             $this->checkpointManager->addError($row->rowIndex, [
-                'monto_deuda' => "No se encontró tipo para monto: {$row->montoDeuda}"
+                'monto_deuda' => "No se encontró tipo para monto: {$row->montoDeuda}",
             ]);
         }
 
@@ -248,6 +260,7 @@ final class ProspectoImportService
 
         if ($this->shouldUpdate($existingId)) {
             $this->batchWriter->queueUpdate($existingId, $row, $tipoId);
+
             return;
         }
 
@@ -266,7 +279,7 @@ final class ProspectoImportService
     private function updateProgress(int $rowIndex): void
     {
         $this->rowsProcessed = $rowIndex;
-        
+
         $this->checkpointManager->updateProgress(
             $rowIndex,
             $this->registrosExitosos,
@@ -286,7 +299,7 @@ final class ProspectoImportService
     private function finalize(): void
     {
         $result = $this->buildResult();
-        
+
         $this->checkpointManager->markAsCompleted($result);
         $this->logComplete($result);
     }
@@ -346,12 +359,12 @@ final class ProspectoImportService
     private function logStart(): void
     {
         $estimatedRows = $this->rowReader->estimateTotalRows();
-        
+
         Log::info('ProspectoImportService: Iniciando importación', [
             'file_size_mb' => $this->rowReader->getFileSizeMb(),
             'estimated_rows' => $estimatedRows,
         ]);
-        
+
         $this->checkpointManager->saveEstimatedTotal($estimatedRows);
     }
 

@@ -9,10 +9,10 @@ use Illuminate\Support\Facades\Log;
 
 /**
  * Servicio de cache para prospectos existentes.
- * 
+ *
  * Carga emails y teléfonos en memoria para búsqueda O(1).
  * Esencial para performance en importaciones grandes (100k+ registros).
- * 
+ *
  * @example
  * $cache = new ProspectoCacheService();
  * $cache->loadExistingProspectos();
@@ -26,10 +26,10 @@ final class ProspectoCacheService
 
     /** @var array<string, int> email => prospecto_id */
     private array $emailIndex = [];
-    
+
     /** @var array<string, int> telefono => prospecto_id */
     private array $telefonoIndex = [];
-    
+
     private bool $loaded = false;
 
     // =========================================================================
@@ -47,12 +47,12 @@ final class ProspectoCacheService
         }
 
         $startTime = microtime(true);
-        
+
         $this->loadEmailIndex();
         $this->loadTelefonoIndex();
-        
+
         $this->loaded = true;
-        
+
         $this->logCacheLoaded($startTime);
     }
 
@@ -90,10 +90,10 @@ final class ProspectoCacheService
 
     /**
      * Busca un prospecto existente por email o teléfono.
-     * 
+     *
      * Prioridad: email > teléfono
      * Complejidad: O(1)
-     * 
+     *
      * @return int|null ID del prospecto o null si no existe
      */
     public function findExistingProspectoId(?string $email, ?string $telefono): ?int
@@ -106,7 +106,7 @@ final class ProspectoCacheService
         if ($email === null) {
             return null;
         }
-        
+
         return $this->emailIndex[$email] ?? null;
     }
 
@@ -115,7 +115,7 @@ final class ProspectoCacheService
         if ($telefono === null) {
             return null;
         }
-        
+
         return $this->telefonoIndex[$telefono] ?? null;
     }
 
@@ -126,15 +126,15 @@ final class ProspectoCacheService
     /**
      * Registra un nuevo prospecto en el cache.
      * Usado para detectar duplicados dentro del mismo archivo.
-     * 
-     * @param int $id ID del prospecto (-1 para pendientes de crear)
+     *
+     * @param  int  $id  ID del prospecto (-1 para pendientes de crear)
      */
     public function registerNewProspecto(?string $email, ?string $telefono, int $id = -1): void
     {
         if ($email !== null) {
             $this->emailIndex[$email] = $id;
         }
-        
+
         if ($telefono !== null) {
             $this->telefonoIndex[$telefono] = $id;
         }

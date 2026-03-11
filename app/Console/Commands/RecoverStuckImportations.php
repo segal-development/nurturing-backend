@@ -9,10 +9,10 @@ use Illuminate\Console\Command;
 
 /**
  * Comando para recuperar importaciones "stuck".
- * 
+ *
  * Se ejecuta automáticamente al inicio de cada queue worker en Cloud Run
  * para garantizar que ninguna importación quede abandonada.
- * 
+ *
  * Uso:
  *   php artisan importaciones:recover          # Ejecutar recovery
  *   php artisan importaciones:recover --stats  # Solo mostrar estadísticas
@@ -28,7 +28,7 @@ class RecoverStuckImportations extends Command
 
     public function handle(): int
     {
-        $service = new ImportacionRecoveryService();
+        $service = new ImportacionRecoveryService;
 
         // Modo estadísticas
         if ($this->option('stats')) {
@@ -73,9 +73,10 @@ class RecoverStuckImportations extends Command
 
         // Obtener importaciones stuck sin procesarlas
         $stats = $service->getHealthStats();
-        
+
         if ($stats['stuck_count'] === 0) {
             $this->info('No hay importaciones stuck para recuperar.');
+
             return self::SUCCESS;
         }
 
@@ -94,11 +95,12 @@ class RecoverStuckImportations extends Command
 
         if ($result['recovered'] === 0) {
             $this->info('No se encontraron importaciones stuck para recuperar.');
+
             return self::SUCCESS;
         }
 
         $this->info("Recuperadas: {$result['recovered']} importación(es)");
-        
+
         foreach ($result['importaciones'] as $id) {
             $this->line("  - Importación #{$id} re-encolada");
         }

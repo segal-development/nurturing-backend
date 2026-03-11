@@ -11,7 +11,7 @@ use Illuminate\Support\Facades\Log;
 
 /**
  * Comando para forzar la finalización de importaciones que quedaron stuck.
- * 
+ *
  * Uso:
  *   php artisan importaciones:force-complete          # Detectar y completar automáticamente
  *   php artisan importaciones:force-complete --id=3   # Forzar una importación específica
@@ -41,7 +41,7 @@ class ForceCompleteImportations extends Command
 
         // Obtener importaciones a procesar
         $query = Importacion::where('estado', 'procesando');
-        
+
         if ($specificId) {
             $query->where('id', $specificId);
         }
@@ -50,6 +50,7 @@ class ForceCompleteImportations extends Command
 
         if ($importaciones->isEmpty()) {
             $this->info('No se encontraron importaciones en estado "procesando".');
+
             return self::SUCCESS;
         }
 
@@ -69,7 +70,7 @@ class ForceCompleteImportations extends Command
         }
 
         $this->newLine();
-        $this->info("=== Resumen ===");
+        $this->info('=== Resumen ===');
         $this->info("Completadas: {$completed}");
         $this->info("Omitidas: {$skipped}");
 
@@ -94,26 +95,30 @@ class ForceCompleteImportations extends Command
         // Verificar si cumple el threshold
         if ($porcentaje < $threshold) {
             $this->warn("  -> OMITIDA: Solo {$porcentaje}% procesado (threshold: {$threshold}%)");
+
             return false;
         }
 
         // Verificar si el archivo existe (si existe, debería seguir procesando)
         $archivoExiste = $this->checkFileExists($importacion);
-        $this->line("  - Archivo en GCS: " . ($archivoExiste ? 'SÍ existe' : 'NO existe'));
+        $this->line('  - Archivo en GCS: '.($archivoExiste ? 'SÍ existe' : 'NO existe'));
 
         if ($archivoExiste) {
-            $this->warn("  -> OMITIDA: El archivo aún existe, puede estar procesando");
+            $this->warn('  -> OMITIDA: El archivo aún existe, puede estar procesando');
+
             return false;
         }
 
         // Marcar como completada
         if ($dryRun) {
-            $this->info("  -> [DRY-RUN] Se marcaría como COMPLETADA");
+            $this->info('  -> [DRY-RUN] Se marcaría como COMPLETADA');
+
             return true;
         }
 
         $this->markAsCompleted($importacion);
-        $this->info("  -> COMPLETADA exitosamente");
+        $this->info('  -> COMPLETADA exitosamente');
+
         return true;
     }
 
@@ -127,6 +132,7 @@ class ForceCompleteImportations extends Command
             return \Illuminate\Support\Facades\Storage::disk('gcs')->exists($importacion->ruta_archivo);
         } catch (\Exception $e) {
             $this->warn("  - Error verificando archivo: {$e->getMessage()}");
+
             return false;
         }
     }
@@ -155,26 +161,26 @@ class ForceCompleteImportations extends Command
     private function updateLote(Importacion $importacion): void
     {
         $importacion->refresh();
-        
-        if (!$importacion->lote_id) {
+
+        if (! $importacion->lote_id) {
             return;
         }
 
         $lote = Lote::find($importacion->lote_id);
-        if (!$lote) {
+        if (! $lote) {
             return;
         }
 
         $importaciones = $lote->importaciones()->get();
-        
+
         $totalRegistros = $importaciones->sum('total_registros');
         $registrosExitosos = $importaciones->sum('registros_exitosos');
         $registrosFallidos = $importaciones->sum('registros_fallidos');
-        
+
         $todasCompletadas = $importaciones->every(fn ($imp) => in_array($imp->estado, ['completado', 'fallido']));
         $algunaFallida = $importaciones->contains(fn ($imp) => $imp->estado === 'fallido');
-        
-        $estadoLote = $todasCompletadas 
+
+        $estadoLote = $todasCompletadas
             ? ($algunaFallida ? 'fallido' : 'completado')
             : 'procesando';
 

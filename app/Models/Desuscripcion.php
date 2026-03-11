@@ -8,7 +8,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
  * Modelo para registro de desuscripciones.
- * 
+ *
  * Mantiene un historial auditable de todas las desuscripciones
  * para compliance legal (GDPR, etc.)
  */
@@ -33,7 +33,9 @@ class Desuscripcion extends Model
      * Canales disponibles para desuscripción
      */
     public const CANAL_EMAIL = 'email';
+
     public const CANAL_SMS = 'sms';
+
     public const CANAL_TODOS = 'todos';
 
     /**

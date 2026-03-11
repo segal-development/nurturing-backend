@@ -8,7 +8,6 @@ use App\Models\ProspectoEnFlujo;
 use Illuminate\Contracts\Queue\ShouldBeUniqueUntilProcessing;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -23,15 +22,18 @@ use Illuminate\Support\Facades\Log;
  *
  * IMPORTANTE: Ejecutar DESPUÉS de AgregarEnviosMensualesJob para no perder stats.
  */
-class LimpiezaMensualJob implements ShouldQueue, ShouldBeUniqueUntilProcessing
+class LimpiezaMensualJob implements ShouldBeUniqueUntilProcessing, ShouldQueue
 {
     use Queueable;
 
     public int $timeout = 3600; // 1 hora
+
     public int $tries = 3;
+
     public int $uniqueFor = 3600;
 
     private const CHUNK_SIZE = 5000;
+
     private const MESES_RETENCION = 3;
 
     public function __construct(
@@ -40,7 +42,7 @@ class LimpiezaMensualJob implements ShouldQueue, ShouldBeUniqueUntilProcessing
 
     public function uniqueId(): string
     {
-        return 'limpieza-mensual-' . now()->format('Y-m');
+        return 'limpieza-mensual-'.now()->format('Y-m');
     }
 
     public function handle(): void
@@ -80,10 +82,10 @@ class LimpiezaMensualJob implements ShouldQueue, ShouldBeUniqueUntilProcessing
             ->where('estado', 'activo')
             ->where(function ($q) use ($fechaCorte) {
                 $q->where('fecha_ultimo_contacto', '<', $fechaCorte)
-                  ->orWhere(function ($q2) use ($fechaCorte) {
-                      $q2->whereNull('fecha_ultimo_contacto')
-                         ->where('created_at', '<', $fechaCorte);
-                  });
+                    ->orWhere(function ($q2) use ($fechaCorte) {
+                        $q2->whereNull('fecha_ultimo_contacto')
+                            ->where('created_at', '<', $fechaCorte);
+                    });
             });
 
         $total = $query->count();
@@ -162,7 +164,7 @@ class LimpiezaMensualJob implements ShouldQueue, ShouldBeUniqueUntilProcessing
             ->where('updated_at', '<', $fechaCorte)
             ->where(function ($q) {
                 $q->where('completado', true)
-                  ->orWhere('cancelado', true);
+                    ->orWhere('cancelado', true);
             });
 
         $total = $query->count();
@@ -180,7 +182,7 @@ class LimpiezaMensualJob implements ShouldQueue, ShouldBeUniqueUntilProcessing
                 ->where('updated_at', '<', $fechaCorte)
                 ->where(function ($q) {
                     $q->where('completado', true)
-                      ->orWhere('cancelado', true);
+                        ->orWhere('cancelado', true);
                 })
                 ->limit(self::CHUNK_SIZE)
                 ->delete();

@@ -13,7 +13,7 @@ use Illuminate\Support\Collection;
 
 /**
  * Controller para gestión de lotes de importación.
- * 
+ *
  * Un lote agrupa múltiples archivos de importación que se procesan
  * en paralelo. Permite tracking unificado del progreso.
  */
@@ -24,6 +24,7 @@ class LoteController extends Controller
     // =========================================================================
 
     private const ESTADOS_EN_PROCESO = ['procesando', 'pendiente'];
+
     private const MAX_PROGRESS_WHILE_PROCESSING = 99.9;
 
     // =========================================================================
@@ -35,7 +36,7 @@ class LoteController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
-        $lotes = Lote::with(['importaciones' => fn($q) => $q->select(
+        $lotes = Lote::with(['importaciones' => fn ($q) => $q->select(
             'id', 'lote_id', 'nombre_archivo', 'estado',
             'total_registros', 'registros_exitosos', 'registros_fallidos'
         )])
@@ -53,7 +54,7 @@ class LoteController extends Controller
     public function abiertos(Request $request): JsonResponse
     {
         $lotes = Lote::whereIn('estado', ['abierto', 'procesando'])
-            ->with(['importaciones' => fn($q) => $q->select(
+            ->with(['importaciones' => fn ($q) => $q->select(
                 'id', 'lote_id', 'nombre_archivo', 'estado', 'total_registros'
             )])
             ->orderBy('created_at', 'desc')
@@ -99,7 +100,7 @@ class LoteController extends Controller
 
     /**
      * Eliminar un lote y todos sus datos relacionados.
-     * 
+     *
      * Solo permite eliminar lotes que:
      * - No tengan importaciones en proceso
      * - No tengan prospectos asignados a flujos activos
@@ -107,7 +108,7 @@ class LoteController extends Controller
     public function destroy(Lote $lote): JsonResponse
     {
         $importaciones = $lote->importaciones()->get();
-        
+
         // No permitir eliminar si hay importaciones en proceso
         if ($this->tieneImportacionesEnProceso($importaciones)) {
             return response()->json([
@@ -117,16 +118,16 @@ class LoteController extends Controller
 
         // Obtener IDs de importaciones para eliminar prospectos
         $importacionIds = $importaciones->pluck('id')->toArray();
-        
+
         // Contar prospectos que se eliminarán
         $totalProspectos = \App\Models\Prospecto::whereIn('importacion_id', $importacionIds)->count();
-        
+
         // Eliminar prospectos asociados
         \App\Models\Prospecto::whereIn('importacion_id', $importacionIds)->delete();
-        
+
         // Eliminar importaciones
         \App\Models\Importacion::whereIn('id', $importacionIds)->delete();
-        
+
         // Eliminar el lote
         $lote->delete();
 
@@ -142,7 +143,7 @@ class LoteController extends Controller
 
     /**
      * Cerrar/Finalizar un lote manualmente.
-     * 
+     *
      * Llamado cuando el usuario clickea "Finalizar carga" en el frontend.
      * Permite cerrar el lote aunque haya importaciones fallidas.
      */
@@ -153,7 +154,7 @@ class LoteController extends Controller
         }
 
         $importaciones = $lote->importaciones()->get();
-        
+
         if ($this->tieneImportacionesEnProceso($importaciones)) {
             return $this->respuestaImportacionesEnProceso($importaciones);
         }
@@ -161,8 +162,8 @@ class LoteController extends Controller
         $this->cerrarLote($lote, $importaciones);
 
         $algunaFallida = $this->tieneImportacionesFallidas($importaciones);
-        $mensaje = $algunaFallida 
-            ? 'Lote cerrado con algunas importaciones fallidas' 
+        $mensaje = $algunaFallida
+            ? 'Lote cerrado con algunas importaciones fallidas'
             : 'Lote cerrado exitosamente';
 
         return response()->json([
@@ -183,7 +184,7 @@ class LoteController extends Controller
     {
         $lote->load('importaciones');
         $lote->recalcularTotales();
-        
+
         return response()->json([
             'data' => $this->buildProgresoData($lote),
         ]);
@@ -196,29 +197,29 @@ class LoteController extends Controller
     private function tieneImportacionesEnProceso(Collection $importaciones): bool
     {
         return $importaciones->contains(
-            fn($i) => in_array($i->estado, self::ESTADOS_EN_PROCESO)
+            fn ($i) => in_array($i->estado, self::ESTADOS_EN_PROCESO)
         );
     }
 
     private function tieneImportacionesFallidas(Collection $importaciones): bool
     {
-        return $importaciones->contains(fn($i) => $i->estado === 'fallido');
+        return $importaciones->contains(fn ($i) => $i->estado === 'fallido');
     }
 
     private function todasLasImportacionesFallidas(Collection $importaciones): bool
     {
-        return $importaciones->isNotEmpty() 
-            && $importaciones->every(fn($i) => $i->estado === 'fallido');
+        return $importaciones->isNotEmpty()
+            && $importaciones->every(fn ($i) => $i->estado === 'fallido');
     }
 
     private function cerrarLote(Lote $lote, Collection $importaciones): void
     {
         $lote->recalcularTotales();
-        
-        $lote->estado = $this->todasLasImportacionesFallidas($importaciones) 
-            ? 'fallido' 
+
+        $lote->estado = $this->todasLasImportacionesFallidas($importaciones)
+            ? 'fallido'
             : 'completado';
-        
+
         $lote->cerrado_en = now();
         $lote->save();
     }
@@ -226,8 +227,8 @@ class LoteController extends Controller
     private function respuestaImportacionesEnProceso(Collection $importaciones): JsonResponse
     {
         $pendientes = $importaciones
-            ->filter(fn($i) => in_array($i->estado, self::ESTADOS_EN_PROCESO))
-            ->map(fn($i) => [
+            ->filter(fn ($i) => in_array($i->estado, self::ESTADOS_EN_PROCESO))
+            ->map(fn ($i) => [
                 'id' => $i->id,
                 'nombre' => $i->nombre_archivo,
                 'estado' => $i->estado,
@@ -254,21 +255,21 @@ class LoteController extends Controller
             'nombre' => $lote->nombre,
             'estado' => $lote->estado,
             'created_at' => $lote->created_at->toISOString(),
-            
+
             // Contadores de archivos
             'total_archivos' => $lote->total_archivos,
             'archivos_completados' => $estadisticas['completados'],
             'archivos_procesando' => $estadisticas['procesando'],
             'archivos_pendientes' => $estadisticas['pendientes'],
             'archivos_fallidos' => $estadisticas['fallidos'],
-            
+
             // Contadores de registros
             'total_registros' => $lote->total_registros,
             'registros_exitosos' => $lote->registros_exitosos,
             'registros_fallidos' => $lote->registros_fallidos,
             'total_estimado' => $progresoTotal['estimado'],
             'progreso_porcentaje' => $progresoTotal['porcentaje'],
-            
+
             // Detalle por importación
             'importaciones' => $this->mapImportacionesParaProgreso($importaciones),
         ];
@@ -280,10 +281,10 @@ class LoteController extends Controller
     private function calcularEstadisticasArchivos(Collection $importaciones): array
     {
         return [
-            'completados' => $importaciones->filter(fn($i) => $i->estado === 'completado')->count(),
-            'procesando' => $importaciones->filter(fn($i) => $i->estado === 'procesando')->count(),
-            'pendientes' => $importaciones->filter(fn($i) => $i->estado === 'pendiente')->count(),
-            'fallidos' => $importaciones->filter(fn($i) => $i->estado === 'fallido')->count(),
+            'completados' => $importaciones->filter(fn ($i) => $i->estado === 'completado')->count(),
+            'procesando' => $importaciones->filter(fn ($i) => $i->estado === 'procesando')->count(),
+            'pendientes' => $importaciones->filter(fn ($i) => $i->estado === 'pendiente')->count(),
+            'fallidos' => $importaciones->filter(fn ($i) => $i->estado === 'fallido')->count(),
         ];
     }
 
@@ -293,12 +294,12 @@ class LoteController extends Controller
     private function calcularProgresoTotal(Collection $importaciones): array
     {
         $totalEstimado = $importaciones->sum(
-            fn($i) => $i->metadata['total_estimado'] ?? $i->total_registros
+            fn ($i) => $i->metadata['total_estimado'] ?? $i->total_registros
         );
         $totalProcesado = $importaciones->sum('total_registros');
-        
-        $porcentaje = $totalEstimado > 0 
-            ? round(($totalProcesado / $totalEstimado) * 100, 1) 
+
+        $porcentaje = $totalEstimado > 0
+            ? round(($totalProcesado / $totalEstimado) * 100, 1)
             : 0;
 
         return [
@@ -309,7 +310,7 @@ class LoteController extends Controller
 
     private function mapImportacionesParaProgreso(Collection $importaciones): Collection
     {
-        return $importaciones->map(fn($i) => [
+        return $importaciones->map(fn ($i) => [
             'id' => $i->id,
             'nombre_archivo' => $i->nombre_archivo,
             'estado' => $i->estado,
@@ -327,20 +328,20 @@ class LoteController extends Controller
         if ($importacion->estado === 'completado') {
             return 100;
         }
-        
+
         if ($importacion->estado === 'fallido') {
             return 0;
         }
-        
+
         $estimado = $importacion->metadata['total_estimado'] ?? 0;
         $procesado = $importacion->total_registros ?? 0;
-        
+
         if ($estimado <= 0) {
             return 0;
         }
-        
+
         $porcentaje = round(($procesado / $estimado) * 100, 1);
-        
+
         return min($porcentaje, self::MAX_PROGRESS_WHILE_PROCESSING);
     }
 }

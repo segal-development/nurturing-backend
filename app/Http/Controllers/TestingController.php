@@ -15,9 +15,9 @@ use Illuminate\Support\Facades\Log;
 
 /**
  * Controller para testing de condiciones y flujos
- * 
+ *
  * IMPORTANTE: Solo usar en desarrollo/staging, no en producción
- * 
+ *
  * Permite:
  * - Simular estadísticas de AthenaCampaign
  * - Forzar verificación de condiciones
@@ -27,12 +27,11 @@ class TestingController extends Controller
 {
     /**
      * Simula estadísticas de AthenaCampaign para un mensaje
-     * 
+     *
      * POST /api/testing/simular-estadisticas
-     * 
-     * @param Request $request
+     *
      * @return \Illuminate\Http\JsonResponse
-     * 
+     *
      * Body esperado:
      * {
      *   "message_id": 12345,
@@ -81,12 +80,11 @@ class TestingController extends Controller
 
     /**
      * Fuerza la verificación de una condición inmediatamente
-     * 
+     *
      * POST /api/testing/forzar-verificacion-condicion
-     * 
-     * @param Request $request
+     *
      * @return \Illuminate\Http\JsonResponse
-     * 
+     *
      * Body esperado:
      * {
      *   "flujo_ejecucion_id": 1,
@@ -147,10 +145,9 @@ class TestingController extends Controller
 
     /**
      * Lista todas las condiciones evaluadas de una ejecución
-     * 
+     *
      * GET /api/testing/condiciones-evaluadas/{flujoEjecucionId}
-     * 
-     * @param int $flujoEjecucionId
+     *
      * @return \Illuminate\Http\JsonResponse
      */
     public function condicionesEvaluadas(int $flujoEjecucionId)
@@ -194,10 +191,9 @@ class TestingController extends Controller
 
     /**
      * Lista todas las etapas de ejecución de un flujo
-     * 
+     *
      * GET /api/testing/etapas-ejecucion/{flujoEjecucionId}
-     * 
-     * @param int $flujoEjecucionId
+     *
      * @return \Illuminate\Http\JsonResponse
      */
     public function etapasEjecucion(int $flujoEjecucionId)
@@ -235,10 +231,9 @@ class TestingController extends Controller
 
     /**
      * Lista todos los jobs de un flujo de ejecución
-     * 
+     *
      * GET /api/testing/jobs/{flujoEjecucionId}
-     * 
-     * @param int $flujoEjecucionId
+     *
      * @return \Illuminate\Http\JsonResponse
      */
     public function jobsEjecucion(int $flujoEjecucionId)
@@ -273,15 +268,15 @@ class TestingController extends Controller
 
     /**
      * Verifica la IP de salida del servidor
-     * 
+     *
      * GET /api/testing/check-ip
-     * 
+     *
      * @return \Illuminate\Http\JsonResponse
      */
     public function checkIp()
     {
         $ip = @file_get_contents('https://api.ipify.org');
-        
+
         return response()->json([
             'success' => true,
             'data' => [
@@ -294,12 +289,11 @@ class TestingController extends Controller
 
     /**
      * Evalúa una condición manualmente sin afectar la ejecución
-     * 
+     *
      * POST /api/testing/evaluar-condicion
-     * 
-     * @param Request $request
+     *
      * @return \Illuminate\Http\JsonResponse
-     * 
+     *
      * Body esperado:
      * {
      *   "actual_value": 5,
@@ -346,14 +340,13 @@ class TestingController extends Controller
 
     /**
      * Procesa jobs pendientes de la cola
-     * 
+     *
      * POST /api/cron/process-queue
-     * 
+     *
      * Este endpoint es llamado por Cloud Scheduler cada minuto
      * para procesar los jobs pendientes ya que Cloud Run no mantiene
      * workers persistentes.
-     * 
-     * @param Request $request
+     *
      * @return \Illuminate\Http\JsonResponse
      */
     public function processQueue(Request $request)
@@ -373,19 +366,19 @@ class TestingController extends Controller
 
             // Procesar TODAS las colas: default, envios
             $queues = ['default', 'envios'];
-            
+
             while ($jobsProcessed < $maxJobs && (microtime(true) - $startTime) < $maxTime) {
                 // ✅ Obtener un job pendiente que NO hayamos intentado ya
                 $job = DB::table('jobs')
                     ->whereIn('queue', $queues)
                     ->whereNull('reserved_at')
-                    ->when(!empty($processedJobIds), function ($query) use ($processedJobIds) {
+                    ->when(! empty($processedJobIds), function ($query) use ($processedJobIds) {
                         return $query->whereNotIn('id', $processedJobIds);
                     })
                     ->orderBy('id', 'asc')
                     ->first();
 
-                if (!$job) {
+                if (! $job) {
                     Log::info('CronProcessQueue: No hay más jobs pendientes en ninguna cola');
                     break;
                 }
@@ -404,7 +397,7 @@ class TestingController extends Controller
 
                     // ✅ Verificar si el job fue realmente eliminado
                     $jobStillExists = DB::table('jobs')->where('id', $jobIdBefore)->exists();
-                    
+
                     if ($jobStillExists) {
                         Log::warning('CronProcessQueue: Job no fue eliminado después de procesar', [
                             'job_id' => $jobIdBefore,
@@ -439,7 +432,7 @@ class TestingController extends Controller
             // ✅ Solo si queda tiempo suficiente
             if ((microtime(true) - $startTime) < 25) {
                 try {
-                    $ejecutarNodos = new EjecutarNodosProgramados();
+                    $ejecutarNodos = new EjecutarNodosProgramados;
                     $ejecutarNodos->handle(app(\App\Services\EnvioService::class));
                     Log::info('CronProcessQueue: EjecutarNodosProgramados ejecutado');
                 } catch (\Exception $e) {
@@ -455,6 +448,7 @@ class TestingController extends Controller
 
         } catch (\Exception $e) {
             Log::error('CronProcessQueue: Error general', ['error' => $e->getMessage()]);
+
             return response()->json([
                 'success' => false,
                 'error' => $e->getMessage(),
@@ -487,20 +481,20 @@ class TestingController extends Controller
 
     /**
      * Debug endpoint para ver datos de un flujo y sus etapas guardadas
-     * 
+     *
      * GET /api/cron/debug-flujo/{flujoId}
      */
     public function debugFlujo(int $flujoId)
     {
         $flujo = \App\Models\Flujo::findOrFail($flujoId);
-        
+
         // Obtener etapas de la tabla flujo_etapas
         $etapasEnBD = \App\Models\FlujoEtapa::where('flujo_id', $flujoId)->get();
-        
+
         // Obtener stages del flujo_data (JSON)
         $flujoData = $flujo->flujo_data ?? [];
         $stagesEnJson = $flujoData['stages'] ?? [];
-        
+
         // Contar prospectos asignados al flujo
         $prospectosEnFlujoCount = \App\Models\ProspectoEnFlujo::where('flujo_id', $flujoId)->count();
 
@@ -510,10 +504,10 @@ class TestingController extends Controller
             ->filter()
             ->unique()
             ->values();
-        
+
         // Obtener info de plantillas
         $plantillas = \App\Models\Plantilla::whereIn('id', $plantillaIds)->get();
-        
+
         return response()->json([
             'success' => true,
             'flujo' => [
@@ -531,7 +525,7 @@ class TestingController extends Controller
                     'plantilla_type' => $etapa->plantilla_type,
                     'plantilla_id' => $etapa->plantilla_id,
                     'plantilla_id_email' => $etapa->plantilla_id_email,
-                    'tiene_plantilla_mensaje' => !empty($etapa->plantilla_mensaje),
+                    'tiene_plantilla_mensaje' => ! empty($etapa->plantilla_mensaje),
                     'plantilla_mensaje_preview' => substr($etapa->plantilla_mensaje ?? '', 0, 100),
                     'usaPlantillaReferencia' => $etapa->usaPlantillaReferencia(),
                 ];
@@ -543,7 +537,7 @@ class TestingController extends Controller
                     'tipo_mensaje' => $stage['tipo_mensaje'] ?? null,
                     'plantilla_type' => $stage['plantilla_type'] ?? 'NO EXISTE EN JSON',
                     'plantilla_id' => $stage['plantilla_id'] ?? 'NO EXISTE EN JSON',
-                    'tiene_plantilla_mensaje' => isset($stage['plantilla_mensaje']) && !empty($stage['plantilla_mensaje']),
+                    'tiene_plantilla_mensaje' => isset($stage['plantilla_mensaje']) && ! empty($stage['plantilla_mensaje']),
                     'stage_keys' => array_keys($stage),
                 ];
             }),
@@ -552,7 +546,7 @@ class TestingController extends Controller
                     'id' => $p->id,
                     'nombre' => $p->nombre,
                     'tipo' => $p->tipo,
-                    'tiene_componentes' => !empty($p->componentes),
+                    'tiene_componentes' => ! empty($p->componentes),
                     'componentes_count' => is_array($p->componentes) ? count($p->componentes) : 0,
                     'asunto' => $p->asunto,
                     'html_preview' => substr($p->generarPreview() ?? '', 0, 500),
@@ -569,14 +563,14 @@ class TestingController extends Controller
 
     /**
      * Debug endpoint para simular obtenerContenidoMensaje()
-     * 
+     *
      * GET /api/cron/debug-contenido/{stageId}
      */
     public function debugContenido(string $stageId)
     {
         // 1. Buscar en FlujoEtapa (como hace el job)
         $flujoEtapa = \App\Models\FlujoEtapa::find($stageId);
-        
+
         $resultado = [
             'stage_id_buscado' => $stageId,
             'stage_id_tipo' => gettype($stageId),
@@ -598,7 +592,7 @@ class TestingController extends Controller
                 $contenidoData = $flujoEtapa->obtenerContenidoParaEnvio('email');
                 $resultado['contenido'] = [
                     'es_html' => $contenidoData['es_html'],
-                    'tiene_asunto' => !empty($contenidoData['asunto']),
+                    'tiene_asunto' => ! empty($contenidoData['asunto']),
                     'asunto' => $contenidoData['asunto'] ?? null,
                     'contenido_length' => strlen($contenidoData['contenido']),
                     'contenido_preview' => substr($contenidoData['contenido'], 0, 500),
@@ -607,11 +601,11 @@ class TestingController extends Controller
             }
         } else {
             $resultado['flujo_etapa_encontrada'] = false;
-            
+
             // Intentar buscar con LIKE para ver si hay problemas de encoding
-            $etapasSimulares = \App\Models\FlujoEtapa::where('id', 'like', '%' . substr($stageId, 6, 10) . '%')->get();
+            $etapasSimulares = \App\Models\FlujoEtapa::where('id', 'like', '%'.substr($stageId, 6, 10).'%')->get();
             $resultado['etapas_similares'] = $etapasSimulares->pluck('id')->toArray();
-            
+
             // Listar todas las etapas para comparar
             $todasEtapas = \App\Models\FlujoEtapa::all();
             $resultado['todas_etapas_ids'] = $todasEtapas->pluck('id')->toArray();
@@ -630,47 +624,47 @@ class TestingController extends Controller
     {
         // Contar total de ejecuciones
         $totalEjecuciones = FlujoEjecucion::count();
-        
+
         // Obtener ejecuciones recientes (todas, no solo activas)
         $query = FlujoEjecucion::with(['flujo:id,nombre'])
             ->orderBy('id', 'desc');
-        
+
         // Filtrar por estado si se especifica
         if ($request->has('estado')) {
             $query->where('estado', $request->estado);
         }
-        
+
         // Filtrar por ID si se especifica
         if ($request->has('id')) {
             $query->where('id', (int) $request->id);
         } else {
             $query->limit(5);
         }
-        
-        $ejecuciones = $query->get()->map(function ($ejecucion) {
-                // Obtener etapas
-                $etapas = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
-                    ->orderBy('id')
-                    ->get(['id', 'node_id', 'estado', 'ejecutado', 'message_id', 'fecha_programada', 'fecha_ejecucion']);
-                
-                // Obtener condiciones evaluadas
-                $condiciones = FlujoEjecucionCondicion::where('flujo_ejecucion_id', $ejecucion->id)
-                    ->get(['id', 'condition_node_id', 'check_param', 'check_operator', 'check_value', 'check_result_value', 'resultado', 'fecha_verificacion']);
 
-                return [
-                    'id' => $ejecucion->id,
-                    'flujo_id' => $ejecucion->flujo_id,
-                    'flujo_nombre' => $ejecucion->flujo->nombre ?? null,
-                    'estado' => $ejecucion->estado,
-                    'error_message' => $ejecucion->error_message,
-                    'nodo_actual' => $ejecucion->nodo_actual,
-                    'proximo_nodo' => $ejecucion->proximo_nodo,
-                    'fecha_proximo_nodo' => $ejecucion->fecha_proximo_nodo,
-                    'porcentaje_completado' => $ejecucion->porcentaje_completado,
-                    'etapas' => $etapas,
-                    'condiciones' => $condiciones,
-                ];
-            });
+        $ejecuciones = $query->get()->map(function ($ejecucion) {
+            // Obtener etapas
+            $etapas = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
+                ->orderBy('id')
+                ->get(['id', 'node_id', 'estado', 'ejecutado', 'message_id', 'fecha_programada', 'fecha_ejecucion']);
+
+            // Obtener condiciones evaluadas
+            $condiciones = FlujoEjecucionCondicion::where('flujo_ejecucion_id', $ejecucion->id)
+                ->get(['id', 'condition_node_id', 'check_param', 'check_operator', 'check_value', 'check_result_value', 'resultado', 'fecha_verificacion']);
+
+            return [
+                'id' => $ejecucion->id,
+                'flujo_id' => $ejecucion->flujo_id,
+                'flujo_nombre' => $ejecucion->flujo->nombre ?? null,
+                'estado' => $ejecucion->estado,
+                'error_message' => $ejecucion->error_message,
+                'nodo_actual' => $ejecucion->nodo_actual,
+                'proximo_nodo' => $ejecucion->proximo_nodo,
+                'fecha_proximo_nodo' => $ejecucion->fecha_proximo_nodo,
+                'porcentaje_completado' => $ejecucion->porcentaje_completado,
+                'etapas' => $etapas,
+                'condiciones' => $condiciones,
+            ];
+        });
 
         return response()->json([
             'success' => true,
@@ -682,13 +676,13 @@ class TestingController extends Controller
 
     /**
      * Monitoreo en tiempo real de envíos de una ejecución
-     * 
+     *
      * GET /api/cron/monitor-envios/{ejecucionId}
      */
     public function monitorEnvios(int $ejecucionId)
     {
         $ejecucion = FlujoEjecucion::with('flujo:id,nombre')->findOrFail($ejecucionId);
-        
+
         // Contar envíos por estado
         $envioStats = \App\Models\Envio::where('flujo_id', $ejecucion->flujo_id)
             ->where('created_at', '>=', $ejecucion->fecha_inicio_real ?? $ejecucion->created_at)
@@ -702,10 +696,10 @@ class TestingController extends Controller
 
         // Contar prospectos totales del flujo
         $totalProspectos = \App\Models\ProspectoEnFlujo::where('flujo_id', $ejecucion->flujo_id)->count();
-        
+
         // Jobs en cola
         $jobsEnCola = \Illuminate\Support\Facades\DB::table('jobs')->count();
-        
+
         // Calcular velocidad (envíos en última hora)
         $enviosUltimaHora = \App\Models\Envio::where('flujo_id', $ejecucion->flujo_id)
             ->where('created_at', '>=', now()->subHour())
@@ -740,7 +734,7 @@ class TestingController extends Controller
             'rendimiento' => [
                 'velocidad_ultima_hora' => $enviosUltimaHora,
                 'jobs_en_cola' => $jobsEnCola,
-                'tiempo_restante_estimado' => $horasRestantes . ' horas',
+                'tiempo_restante_estimado' => $horasRestantes.' horas',
             ],
             'timestamp' => now()->toIso8601String(),
         ]);
@@ -748,27 +742,27 @@ class TestingController extends Controller
 
     /**
      * Debug de una etapa específica
-     * 
+     *
      * GET /api/cron/debug-etapa/{etapaId}
      */
     public function debugEtapa(int $etapaId)
     {
         $etapa = FlujoEjecucionEtapa::find($etapaId);
-        
-        if (!$etapa) {
+
+        if (! $etapa) {
             return response()->json(['error' => 'Etapa no encontrada'], 404);
         }
-        
+
         // Ver si hay batches en la tabla job_batches
         $batches = DB::table('job_batches')
             ->orderBy('created_at', 'desc')
             ->limit(10)
             ->get();
-        
+
         // Ver jobs en cola
         $jobsEnCola = DB::table('jobs')->count();
         $jobsDetalle = DB::table('jobs')->limit(5)->get(['id', 'queue', 'created_at', 'available_at']);
-        
+
         return response()->json([
             'etapa' => [
                 'id' => $etapa->id,
@@ -789,9 +783,9 @@ class TestingController extends Controller
 
     /**
      * Reinicia una ejecución que quedó huérfana/stuck
-     * 
+     *
      * POST /api/cron/reiniciar-ejecucion/{ejecucionId}
-     * 
+     *
      * Útil cuando:
      * - El servidor se cayó durante el procesamiento
      * - Los jobs se perdieron
@@ -800,7 +794,7 @@ class TestingController extends Controller
     public function reiniciarEjecucion(int $ejecucionId)
     {
         $ejecucion = FlujoEjecucion::with(['flujo', 'etapas'])->findOrFail($ejecucionId);
-        
+
         Log::info('ReiniciarEjecucion: Iniciando reinicio', [
             'ejecucion_id' => $ejecucionId,
             'estado_actual' => $ejecucion->estado,
@@ -808,7 +802,7 @@ class TestingController extends Controller
         ]);
 
         // Verificar que esté en estado que permite reinicio
-        if (!in_array($ejecucion->estado, ['in_progress', 'paused', 'failed'])) {
+        if (! in_array($ejecucion->estado, ['in_progress', 'paused', 'failed'])) {
             return response()->json([
                 'success' => false,
                 'error' => 'Solo se pueden reiniciar ejecuciones en estado in_progress, paused o failed',
@@ -818,13 +812,13 @@ class TestingController extends Controller
 
         // Obtener prospectos del flujo
         $prospectoIds = $ejecucion->prospectos_ids;
-        
+
         if (empty($prospectoIds)) {
             // Si no hay prospectos_ids en la ejecución, obtenerlos del flujo
             $prospectoIds = \App\Models\ProspectoEnFlujo::where('flujo_id', $ejecucion->flujo_id)
                 ->pluck('prospecto_id')
                 ->toArray();
-                
+
             Log::info('ReiniciarEjecucion: Obtenidos prospectos del flujo', [
                 'total_prospectos' => count($prospectoIds),
             ]);
@@ -843,14 +837,14 @@ class TestingController extends Controller
             ->orderBy('fecha_programada')
             ->first();
 
-        if (!$primeraEtapaPendiente) {
+        if (! $primeraEtapaPendiente) {
             // Si no hay etapas pendientes, buscar la primera etapa
             $primeraEtapaPendiente = $ejecucion->etapas()
                 ->orderBy('id')
                 ->first();
         }
 
-        if (!$primeraEtapaPendiente) {
+        if (! $primeraEtapaPendiente) {
             return response()->json([
                 'success' => false,
                 'error' => 'No se encontraron etapas para esta ejecución',
@@ -868,7 +862,7 @@ class TestingController extends Controller
                 'ejecutado' => false,
                 'fecha_ejecucion' => null,
             ]);
-            
+
             Log::info('ReiniciarEjecucion: Etapa stuck reseteada', [
                 'etapa_id' => $etapaStuck->id,
                 'node_id' => $etapaStuck->node_id,
@@ -893,7 +887,7 @@ class TestingController extends Controller
 
         // Limpiar jobs viejos de la cola que puedan estar relacionados
         $jobsEliminados = DB::table('jobs')
-            ->where('payload', 'like', '%' . $ejecucionId . '%')
+            ->where('payload', 'like', '%'.$ejecucionId.'%')
             ->delete();
 
         Log::info('ReiniciarEjecucion: Ejecución reiniciada exitosamente', [

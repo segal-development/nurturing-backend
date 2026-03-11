@@ -25,7 +25,7 @@ class FlujoEjecucionObserver
 
             if ($flujo && $cantidadProspectos > 0) {
                 $costoEstimado = $this->costoService->calcularCostoEstimado($flujo, $cantidadProspectos);
-                
+
                 // Update without triggering another observer event
                 FlujoEjecucion::withoutEvents(function () use ($flujoEjecucion, $costoEstimado) {
                     $flujoEjecucion->update([

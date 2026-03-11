@@ -6,7 +6,7 @@ namespace App\Services\Import\DTO;
 
 /**
  * DTO para el progreso de una importación.
- * 
+ *
  * Permite resumir desde donde se quedó si el proceso se interrumpe.
  * Almacena checkpoints de filas procesadas y contadores.
  */
@@ -31,7 +31,7 @@ final class ImportProgress
     public static function fromMetadata(?array $metadata): self
     {
         if ($metadata === null) {
-            return new self();
+            return new self;
         }
 
         return new self(
@@ -49,7 +49,7 @@ final class ImportProgress
      */
     public static function fresh(): self
     {
-        return new self();
+        return new self;
     }
 
     // =========================================================================
@@ -104,7 +104,7 @@ final class ImportProgress
     public function getSuccessRate(): float
     {
         $total = $this->getTotalProcesados();
-        
+
         if ($total === 0) {
             return 0.0;
         }

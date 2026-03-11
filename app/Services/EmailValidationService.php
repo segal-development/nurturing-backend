@@ -7,13 +7,13 @@ use Illuminate\Support\Facades\Log;
 
 /**
  * Servicio para validar emails y detectar direcciones inválidas.
- * 
+ *
  * Detecta automáticamente:
  * - Formato inválido (no cumple RFC 2822)
  * - Dominios mal escritos (gimeil.com, guimei.con, hotmal.com, etc.)
  * - Dominios inexistentes
  * - Errores de bounce (554, 550, etc.)
- * 
+ *
  * Los prospectos con email inválido son excluidos automáticamente de futuros envíos.
  */
 class EmailValidationService
@@ -36,7 +36,7 @@ class EmailValidationService
         'gnail.com' => 'gmail.com',
         'gmsil.com' => 'gmail.com',
         'gmil.com' => 'gmail.com',
-        
+
         // Hotmail typos
         'hotmal.com' => 'hotmail.com',
         'hotmial.com' => 'hotmail.com',
@@ -47,24 +47,24 @@ class EmailValidationService
         'hotamil.com' => 'hotmail.com',
         'homail.com' => 'hotmail.com',
         'htmail.com' => 'hotmail.com',
-        
+
         // Yahoo typos
         'yaho.com' => 'yahoo.com',
         'yahooo.com' => 'yahoo.com',
         'yahoo.con' => 'yahoo.com',
         'yhaoo.com' => 'yahoo.com',
         'yaoo.com' => 'yahoo.com',
-        
+
         // Outlook typos
         'outlok.com' => 'outlook.com',
         'outllok.com' => 'outlook.com',
         'outlook.con' => 'outlook.com',
         'outlool.com' => 'outlook.com',
-        
+
         // Live typos
         'live.con' => 'live.com',
         'liv.com' => 'live.com',
-        
+
         // Otros comunes en Chile
         'gmail.cl' => 'gmail.com', // Gmail no tiene .cl
     ];
@@ -83,12 +83,12 @@ class EmailValidationService
         'address rejected',
         'invalid recipient',
         'undeliverable',
-        
+
         // Dominio no existe
         'domain not found',
         'host not found',
         'no mx record',
-        
+
         // Códigos SMTP de error permanente
         '550',  // Mailbox unavailable
         '551',  // User not local
@@ -99,8 +99,7 @@ class EmailValidationService
 
     /**
      * Valida un email y retorna si es válido con el motivo si no lo es.
-     * 
-     * @param string $email
+     *
      * @return array{valid: bool, motivo: string|null, sugerencia: string|null}
      */
     public function validar(string $email): array
@@ -108,7 +107,7 @@ class EmailValidationService
         $email = trim(strtolower($email));
 
         // 1. Validar formato básico
-        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        if (! filter_var($email, FILTER_VALIDATE_EMAIL)) {
             return [
                 'valid' => false,
                 'motivo' => 'formato_invalido',
@@ -118,11 +117,11 @@ class EmailValidationService
 
         // 2. Verificar dominios con typos conocidos
         $dominio = substr($email, strpos($email, '@') + 1);
-        
+
         if (isset(self::DOMINIOS_TYPOS[$dominio])) {
             $dominioCorregido = self::DOMINIOS_TYPOS[$dominio];
             $emailCorregido = str_replace("@{$dominio}", "@{$dominioCorregido}", $email);
-            
+
             return [
                 'valid' => false,
                 'motivo' => "dominio_typo:{$dominio}",
@@ -149,8 +148,8 @@ class EmailValidationService
 
     /**
      * Determina si un error de envío indica que el email es permanentemente inválido.
-     * 
-     * @param string $errorMessage Mensaje de error del servidor SMTP
+     *
+     * @param  string  $errorMessage  Mensaje de error del servidor SMTP
      * @return array{es_invalido: bool, motivo: string|null}
      */
     public function analizarErrorEnvio(string $errorMessage): array
@@ -174,9 +173,7 @@ class EmailValidationService
 
     /**
      * Procesa un error de envío y marca el prospecto si el email es inválido.
-     * 
-     * @param Prospecto $prospecto
-     * @param string $errorMessage
+     *
      * @return bool True si se marcó como inválido
      */
     public function procesarErrorEnvio(Prospecto $prospecto, string $errorMessage): bool
@@ -185,7 +182,7 @@ class EmailValidationService
 
         if ($analisis['es_invalido']) {
             $prospecto->marcarEmailInvalido($analisis['motivo']);
-            
+
             Log::info('EmailValidationService: Email marcado como inválido por error de envío', [
                 'prospecto_id' => $prospecto->id,
                 'email' => $prospecto->email,
@@ -202,9 +199,9 @@ class EmailValidationService
     /**
      * Valida emails de prospectos en batch y marca los inválidos.
      * Útil para limpiar la base de datos existente.
-     * 
-     * @param int $batchSize Tamaño del batch
-     * @param callable|null $progressCallback Callback para reportar progreso
+     *
+     * @param  int  $batchSize  Tamaño del batch
+     * @param  callable|null  $progressCallback  Callback para reportar progreso
      * @return array{total: int, invalidos: int, sugerencias: array}
      */
     public function limpiarEmailsInvalidos(int $batchSize = 1000, ?callable $progressCallback = null): array
@@ -220,18 +217,18 @@ class EmailValidationService
             ->where('email', '!=', '')
             ->where(function ($q) {
                 $q->where('email_invalido', false)
-                  ->orWhereNull('email_invalido');
+                    ->orWhereNull('email_invalido');
             })
             ->chunkById($batchSize, function ($prospectos) use (&$resultado, $progressCallback) {
                 foreach ($prospectos as $prospecto) {
                     $resultado['total']++;
-                    
+
                     $validacion = $this->validar($prospecto->email);
-                    
-                    if (!$validacion['valid']) {
+
+                    if (! $validacion['valid']) {
                         $prospecto->marcarEmailInvalido($validacion['motivo']);
                         $resultado['invalidos']++;
-                        
+
                         if ($validacion['sugerencia']) {
                             $resultado['sugerencias'][] = [
                                 'prospecto_id' => $prospecto->id,
@@ -253,8 +250,6 @@ class EmailValidationService
 
     /**
      * Obtiene estadísticas de calidad de emails por origen de importación.
-     * 
-     * @return array
      */
     public function obtenerEstadisticasCalidad(): array
     {
@@ -272,7 +267,7 @@ class EmailValidationService
             ->map(function ($row) {
                 $conEmail = $row->con_email ?? 0;
                 $invalidos = $row->emails_invalidos ?? 0;
-                
+
                 return [
                     'origen' => $row->origen,
                     'total_prospectos' => $row->total_prospectos,
@@ -281,8 +276,8 @@ class EmailValidationService
                     'emails_invalidos' => $invalidos,
                     'emails_validos' => $conEmail - $invalidos,
                     'desuscritos' => $row->desuscritos ?? 0,
-                    'tasa_validez' => $conEmail > 0 
-                        ? round((($conEmail - $invalidos) / $conEmail) * 100, 2) 
+                    'tasa_validez' => $conEmail > 0
+                        ? round((($conEmail - $invalidos) / $conEmail) * 100, 2)
                         : 0,
                 ];
             })
@@ -291,9 +286,6 @@ class EmailValidationService
 
     /**
      * Obtiene los motivos de invalidez más comunes.
-     * 
-     * @param int $limit
-     * @return array
      */
     public function obtenerMotivosComunes(int $limit = 10): array
     {

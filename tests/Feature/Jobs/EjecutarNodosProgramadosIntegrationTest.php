@@ -16,14 +16,12 @@ use App\Services\AthenaCampaignService;
 use App\Services\EnvioService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Bus;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Queue;
 use Mockery;
 use Tests\TestCase;
 
 /**
  * Tests de integración para EjecutarNodosProgramados
- * 
+ *
  * Estos tests verifican el flujo completo end-to-end:
  * - Inicio -> Email -> Condición -> Rama Sí/No -> Fin
  */
@@ -32,9 +30,13 @@ class EjecutarNodosProgramadosIntegrationTest extends TestCase
     use RefreshDatabase;
 
     private User $user;
+
     private TipoProspecto $tipoProspecto;
+
     private Flujo $flujo;
+
     private FlujoEjecucion $ejecucion;
+
     private Prospecto $prospecto;
 
     protected function setUp(): void
@@ -43,7 +45,7 @@ class EjecutarNodosProgramadosIntegrationTest extends TestCase
 
         $this->user = User::factory()->create();
         $this->tipoProspecto = TipoProspecto::factory()->create();
-        
+
         // Crear flujo con estructura completa: Email -> Condición -> Rama Sí/No
         $this->flujo = Flujo::factory()->create([
             'user_id' => $this->user->id,
@@ -150,40 +152,40 @@ class EjecutarNodosProgramadosIntegrationTest extends TestCase
     public function flujo_completo_email_condicion_rama_si(): void
     {
         Bus::fake([VerificarCondicionJob::class, \App\Jobs\EnviarEtapaJob::class]);
-        
+
         // PASO 1: Ejecutar nodo de email (despacha EnviarEtapaJob)
         $envioService = Mockery::mock(EnvioService::class);
-        
-        $job = new EjecutarNodosProgramados();
+
+        $job = new EjecutarNodosProgramados;
         $job->handle($envioService);
-        
+
         // Verificar que se despachó EnviarEtapaJob para el email
         Bus::assertDispatched(\App\Jobs\EnviarEtapaJob::class, function ($job) {
             return $job->flujoEjecucionId === $this->ejecucion->id;
         });
-        
+
         // Verificar etapa en executing (EnviarEtapaJob la marcará completed)
         $this->assertDatabaseHas('flujo_ejecucion_etapas', [
             'flujo_ejecucion_id' => $this->ejecucion->id,
             'node_id' => 'stage-email-1',
             'estado' => 'executing',
         ]);
-        
+
         // Simular que EnviarEtapaJob completó y programó la condición
         $etapa = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $this->ejecucion->id)
             ->where('node_id', 'stage-email-1')
             ->first();
         $etapa->update(['estado' => 'completed', 'message_id' => 12345, 'ejecutado' => true]);
-        
+
         $this->ejecucion->update([
             'proximo_nodo' => 'conditional-opened',
             'fecha_proximo_nodo' => now()->subMinute(),
         ]);
-        
+
         // PASO 2: Ejecutar nodo de condición
-        $job2 = new EjecutarNodosProgramados();
+        $job2 = new EjecutarNodosProgramados;
         $job2->handle($envioService);
-        
+
         // Verificar que se despachó VerificarCondicionJob
         Bus::assertDispatched(VerificarCondicionJob::class, function ($job) {
             return $job->flujoEjecucionId === $this->ejecucion->id
@@ -195,7 +197,7 @@ class EjecutarNodosProgramadosIntegrationTest extends TestCase
     public function flujo_completo_hasta_nodo_final(): void
     {
         Bus::fake([\App\Jobs\EnviarEtapaJob::class]);
-        
+
         // Simplificar flujo: Email -> Fin
         $this->flujo->update([
             'config_structure' => [
@@ -213,16 +215,16 @@ class EjecutarNodosProgramadosIntegrationTest extends TestCase
                 ],
             ],
         ]);
-        
+
         $envioService = Mockery::mock(EnvioService::class);
-        
-        $job = new EjecutarNodosProgramados();
+
+        $job = new EjecutarNodosProgramados;
         $job->handle($envioService);
-        
+
         // EnviarEtapaJob debe recibir branches con nodo end
         // El job detectará el nodo end y completará la ejecución en su callback
         Bus::assertDispatched(\App\Jobs\EnviarEtapaJob::class, function ($job) {
-            return collect($job->branches)->contains(fn($b) => $b['target_node_id'] === 'end-1');
+            return collect($job->branches)->contains(fn ($b) => $b['target_node_id'] === 'end-1');
         });
     }
 
@@ -230,7 +232,7 @@ class EjecutarNodosProgramadosIntegrationTest extends TestCase
     public function multiples_ejecuciones_se_procesan_independientemente(): void
     {
         Bus::fake([\App\Jobs\EnviarEtapaJob::class]);
-        
+
         // Crear segunda ejecución
         $ejecucion2 = FlujoEjecucion::factory()->create([
             'flujo_id' => $this->flujo->id,
@@ -239,15 +241,15 @@ class EjecutarNodosProgramadosIntegrationTest extends TestCase
             'fecha_proximo_nodo' => now()->subMinute(),
             'prospectos_ids' => [$this->prospecto->id],
         ]);
-        
+
         $envioService = Mockery::mock(EnvioService::class);
-        
-        $job = new EjecutarNodosProgramados();
+
+        $job = new EjecutarNodosProgramados;
         $job->handle($envioService);
-        
+
         // Deberían haberse despachado 2 EnviarEtapaJob (uno por ejecución)
         Bus::assertDispatchedTimes(\App\Jobs\EnviarEtapaJob::class, 2);
-        
+
         // Ambas ejecuciones deberían avanzar
         $this->assertEquals('stage-email-1', $this->ejecucion->fresh()->nodo_actual);
         $this->assertEquals('stage-email-1', $ejecucion2->fresh()->nodo_actual);
@@ -264,17 +266,17 @@ class EjecutarNodosProgramadosIntegrationTest extends TestCase
         // El error se manejaría en EnviarEtapaJob, no en el cron
         // Este test ahora verifica que el job se despacha correctamente
         Bus::fake([\App\Jobs\EnviarEtapaJob::class]);
-        
+
         $envioService = Mockery::mock(EnvioService::class);
-        
-        $job = new EjecutarNodosProgramados();
+
+        $job = new EjecutarNodosProgramados;
         $job->handle($envioService);
-        
+
         // El job se despachó, la etapa está en executing
         Bus::assertDispatched(\App\Jobs\EnviarEtapaJob::class);
         $this->ejecucion->refresh();
         $this->assertEquals('in_progress', $this->ejecucion->estado);
-        
+
         // Verificar que podemos seguir haciendo operaciones en la BD
         $count = FlujoEjecucion::count();
         $this->assertGreaterThanOrEqual(1, $count);
@@ -284,12 +286,12 @@ class EjecutarNodosProgramadosIntegrationTest extends TestCase
     public function etapa_se_crea_antes_de_intentar_envio(): void
     {
         Bus::fake([\App\Jobs\EnviarEtapaJob::class]);
-        
+
         $envioService = Mockery::mock(EnvioService::class);
-        
-        $job = new EjecutarNodosProgramados();
+
+        $job = new EjecutarNodosProgramados;
         $job->handle($envioService);
-        
+
         // La etapa debería haberse creado antes de despachar el job
         $this->assertDatabaseHas('flujo_ejecucion_etapas', [
             'flujo_ejecucion_id' => $this->ejecucion->id,
@@ -302,12 +304,12 @@ class EjecutarNodosProgramadosIntegrationTest extends TestCase
     public function nodo_actual_se_actualiza_antes_de_operaciones_externas(): void
     {
         Bus::fake([\App\Jobs\EnviarEtapaJob::class]);
-        
+
         $envioService = Mockery::mock(EnvioService::class);
-        
-        $job = new EjecutarNodosProgramados();
+
+        $job = new EjecutarNodosProgramados;
         $job->handle($envioService);
-        
+
         // Verificar que nodo_actual se actualizó
         $this->ejecucion->refresh();
         $this->assertEquals('stage-email-1', $this->ejecucion->nodo_actual);
@@ -321,25 +323,25 @@ class EjecutarNodosProgramadosIntegrationTest extends TestCase
     public function ejecutar_job_dos_veces_no_duplica_envios(): void
     {
         Bus::fake([\App\Jobs\EnviarEtapaJob::class]);
-        
+
         $envioService = Mockery::mock(EnvioService::class);
-        
+
         // Primera ejecución
-        $job1 = new EjecutarNodosProgramados();
+        $job1 = new EjecutarNodosProgramados;
         $job1->handle($envioService);
-        
+
         // La etapa queda en executing, la segunda ejecución no debe despachar otro job
-        $job2 = new EjecutarNodosProgramados();
+        $job2 = new EjecutarNodosProgramados;
         $job2->handle($envioService);
-        
+
         // Solo debería haber despachado UNA vez (la primera)
         Bus::assertDispatchedTimes(\App\Jobs\EnviarEtapaJob::class, 1);
-        
+
         // Solo debería haber una etapa
         $etapas = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $this->ejecucion->id)
             ->where('node_id', 'stage-email-1')
             ->get();
-        
+
         $this->assertCount(1, $etapas);
     }
 
@@ -347,7 +349,7 @@ class EjecutarNodosProgramadosIntegrationTest extends TestCase
     public function etapa_en_executing_no_se_reejecuta(): void
     {
         Bus::fake([\App\Jobs\EnviarEtapaJob::class]);
-        
+
         // Crear etapa en estado executing
         FlujoEjecucionEtapa::create([
             'flujo_ejecucion_id' => $this->ejecucion->id,
@@ -356,12 +358,12 @@ class EjecutarNodosProgramadosIntegrationTest extends TestCase
             'ejecutado' => false,
             'fecha_programada' => now(),
         ]);
-        
+
         $envioService = Mockery::mock(EnvioService::class);
-        
-        $job = new EjecutarNodosProgramados();
+
+        $job = new EjecutarNodosProgramados;
         $job->handle($envioService);
-        
+
         // La etapa debería seguir en executing
         $this->assertDatabaseHas('flujo_ejecucion_etapas', [
             'flujo_ejecucion_id' => $this->ejecucion->id,
@@ -379,12 +381,12 @@ class EjecutarNodosProgramadosIntegrationTest extends TestCase
     {
         Bus::fake([\App\Jobs\EnviarEtapaJob::class]);
         $this->ejecucion->update(['estado' => 'completed']);
-        
+
         $envioService = Mockery::mock(EnvioService::class);
-        
-        $job = new EjecutarNodosProgramados();
+
+        $job = new EjecutarNodosProgramados;
         $job->handle($envioService);
-        
+
         Bus::assertNotDispatched(\App\Jobs\EnviarEtapaJob::class);
     }
 
@@ -393,12 +395,12 @@ class EjecutarNodosProgramadosIntegrationTest extends TestCase
     {
         Bus::fake([\App\Jobs\EnviarEtapaJob::class]);
         $this->ejecucion->update(['estado' => 'failed']);
-        
+
         $envioService = Mockery::mock(EnvioService::class);
-        
-        $job = new EjecutarNodosProgramados();
+
+        $job = new EjecutarNodosProgramados;
         $job->handle($envioService);
-        
+
         Bus::assertNotDispatched(\App\Jobs\EnviarEtapaJob::class);
     }
 
@@ -407,12 +409,12 @@ class EjecutarNodosProgramadosIntegrationTest extends TestCase
     {
         Bus::fake([\App\Jobs\EnviarEtapaJob::class]);
         $this->ejecucion->update(['proximo_nodo' => null]);
-        
+
         $envioService = Mockery::mock(EnvioService::class);
-        
-        $job = new EjecutarNodosProgramados();
+
+        $job = new EjecutarNodosProgramados;
         $job->handle($envioService);
-        
+
         Bus::assertNotDispatched(\App\Jobs\EnviarEtapaJob::class);
     }
 
@@ -421,12 +423,12 @@ class EjecutarNodosProgramadosIntegrationTest extends TestCase
     {
         Bus::fake([\App\Jobs\EnviarEtapaJob::class]);
         $this->ejecucion->update(['fecha_proximo_nodo' => now()->addHour()]);
-        
+
         $envioService = Mockery::mock(EnvioService::class);
-        
-        $job = new EjecutarNodosProgramados();
+
+        $job = new EjecutarNodosProgramados;
         $job->handle($envioService);
-        
+
         Bus::assertNotDispatched(\App\Jobs\EnviarEtapaJob::class);
     }
 
@@ -439,14 +441,14 @@ class EjecutarNodosProgramadosIntegrationTest extends TestCase
     {
         Bus::fake([\App\Jobs\EnviarEtapaJob::class]);
         $envioService = Mockery::mock(EnvioService::class);
-        
+
         $startTime = microtime(true);
-        
-        $job = new EjecutarNodosProgramados();
+
+        $job = new EjecutarNodosProgramados;
         $job->handle($envioService);
-        
+
         $elapsed = microtime(true) - $startTime;
-        
+
         // Debería completar en menos de 5 segundos (muy conservador)
         $this->assertLessThan(5, $elapsed);
     }
@@ -455,7 +457,7 @@ class EjecutarNodosProgramadosIntegrationTest extends TestCase
     public function job_con_multiples_ejecuciones_completa_en_tiempo_razonable(): void
     {
         Bus::fake([\App\Jobs\EnviarEtapaJob::class]);
-        
+
         // Crear 10 ejecuciones adicionales
         for ($i = 0; $i < 10; $i++) {
             FlujoEjecucion::factory()->create([
@@ -466,16 +468,16 @@ class EjecutarNodosProgramadosIntegrationTest extends TestCase
                 'prospectos_ids' => [$this->prospecto->id],
             ]);
         }
-        
+
         $envioService = Mockery::mock(EnvioService::class);
-        
+
         $startTime = microtime(true);
-        
-        $job = new EjecutarNodosProgramados();
+
+        $job = new EjecutarNodosProgramados;
         $job->handle($envioService);
-        
+
         $elapsed = microtime(true) - $startTime;
-        
+
         // Debería completar en menos de 30 segundos
         $this->assertLessThan(30, $elapsed);
     }
@@ -488,10 +490,10 @@ class EjecutarNodosProgramadosIntegrationTest extends TestCase
     public function cron_despacha_enviar_etapa_job_para_nodo_email(): void
     {
         Bus::fake([\App\Jobs\EnviarEtapaJob::class]);
-        
-        $job = new EjecutarNodosProgramados();
+
+        $job = new EjecutarNodosProgramados;
         $job->handle(app(EnvioService::class));
-        
+
         // Debe despachar EnviarEtapaJob en lugar de llamar EnvioService directamente
         Bus::assertDispatched(\App\Jobs\EnviarEtapaJob::class, function ($job) {
             return $job->flujoEjecucionId === $this->ejecucion->id
@@ -504,10 +506,10 @@ class EjecutarNodosProgramadosIntegrationTest extends TestCase
     public function cron_marca_etapa_como_executing_antes_de_despachar_job(): void
     {
         Bus::fake([\App\Jobs\EnviarEtapaJob::class]);
-        
-        $job = new EjecutarNodosProgramados();
+
+        $job = new EjecutarNodosProgramados;
         $job->handle(app(EnvioService::class));
-        
+
         // La etapa debe estar en 'executing' (el job la marcará como completed)
         $this->assertDatabaseHas('flujo_ejecucion_etapas', [
             'flujo_ejecucion_id' => $this->ejecucion->id,
@@ -527,15 +529,15 @@ class EjecutarNodosProgramadosIntegrationTest extends TestCase
                 'email' => "test{$i}@example.com",
             ]));
         }
-        
+
         $prospectoIds = $prospectos->pluck('id')->toArray();
         $this->ejecucion->update(['prospectos_ids' => $prospectoIds]);
-        
+
         Bus::fake([\App\Jobs\EnviarEtapaJob::class]);
-        
-        $job = new EjecutarNodosProgramados();
+
+        $job = new EjecutarNodosProgramados;
         $job->handle(app(EnvioService::class));
-        
+
         Bus::assertDispatched(\App\Jobs\EnviarEtapaJob::class, function ($job) use ($prospectoIds) {
             return count($job->prospectoIds) === count($prospectoIds)
                 && empty(array_diff($job->prospectoIds, $prospectoIds));
@@ -546,13 +548,13 @@ class EjecutarNodosProgramadosIntegrationTest extends TestCase
     public function cron_pasa_branches_al_enviar_etapa_job(): void
     {
         Bus::fake([\App\Jobs\EnviarEtapaJob::class]);
-        
-        $job = new EjecutarNodosProgramados();
+
+        $job = new EjecutarNodosProgramados;
         $job->handle(app(EnvioService::class));
-        
+
         Bus::assertDispatched(\App\Jobs\EnviarEtapaJob::class, function ($job) {
             // Debe incluir los branches del flujo para que el job sepa hacia dónde continuar
-            return !empty($job->branches);
+            return ! empty($job->branches);
         });
     }
 
@@ -561,7 +563,7 @@ class EjecutarNodosProgramadosIntegrationTest extends TestCase
     {
         // Crear etapa previa con subset de prospectos (simula filtrado por condición)
         $prospectosFiltrados = [$this->prospecto->id];
-        
+
         FlujoEjecucionEtapa::create([
             'flujo_ejecucion_id' => $this->ejecucion->id,
             'node_id' => 'stage-email-1',
@@ -569,12 +571,12 @@ class EjecutarNodosProgramadosIntegrationTest extends TestCase
             'fecha_programada' => now()->subMinute(),
             'estado' => 'pending',
         ]);
-        
+
         Bus::fake([\App\Jobs\EnviarEtapaJob::class]);
-        
-        $job = new EjecutarNodosProgramados();
+
+        $job = new EjecutarNodosProgramados;
         $job->handle(app(EnvioService::class));
-        
+
         Bus::assertDispatched(\App\Jobs\EnviarEtapaJob::class, function ($job) use ($prospectosFiltrados) {
             return $job->prospectoIds === $prospectosFiltrados;
         });
@@ -589,12 +591,12 @@ class EjecutarNodosProgramadosIntegrationTest extends TestCase
             'estado' => 'executing',
             'fecha_programada' => now()->subMinute(),
         ]);
-        
+
         Bus::fake([\App\Jobs\EnviarEtapaJob::class]);
-        
-        $job = new EjecutarNodosProgramados();
+
+        $job = new EjecutarNodosProgramados;
         $job->handle(app(EnvioService::class));
-        
+
         Bus::assertNotDispatched(\App\Jobs\EnviarEtapaJob::class);
     }
 
@@ -608,12 +610,12 @@ class EjecutarNodosProgramadosIntegrationTest extends TestCase
             'ejecutado' => true,
             'fecha_programada' => now()->subMinute(),
         ]);
-        
+
         Bus::fake([\App\Jobs\EnviarEtapaJob::class]);
-        
-        $job = new EjecutarNodosProgramados();
+
+        $job = new EjecutarNodosProgramados;
         $job->handle(app(EnvioService::class));
-        
+
         Bus::assertNotDispatched(\App\Jobs\EnviarEtapaJob::class);
     }
 
@@ -629,7 +631,7 @@ class EjecutarNodosProgramadosIntegrationTest extends TestCase
                 'error' => false,
                 'mensaje' => ['messageID' => $messageId],
             ]);
-        
+
         return $mock;
     }
 
@@ -645,7 +647,7 @@ class EjecutarNodosProgramadosIntegrationTest extends TestCase
                     'Bounces' => 0,
                 ], $stats),
             ]);
-        
+
         $this->app->instance(AthenaCampaignService::class, $mock);
     }
 }

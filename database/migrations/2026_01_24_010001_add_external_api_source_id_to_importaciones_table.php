@@ -17,7 +17,7 @@ return new class extends Migration
                 ->after('metadata')
                 ->constrained('external_api_sources')
                 ->onDelete('set null');
-            
+
             $table->index('external_api_source_id');
         });
     }

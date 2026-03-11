@@ -46,18 +46,20 @@ class LimpiezaMensual extends Command
             return Command::SUCCESS;
         }
 
-        $dryRun = !$this->option('ejecutar');
+        $dryRun = ! $this->option('ejecutar');
 
         if ($dryRun) {
             $this->newLine();
             $this->warn('⚠️  Modo DRY-RUN: No se ejecutará ninguna acción.');
             $this->warn('    Usa --ejecutar para aplicar los cambios.');
+
             return Command::SUCCESS;
         }
 
         // Confirmar antes de ejecutar
-        if (!$this->confirm('¿Confirmas que querés ejecutar la limpieza?')) {
+        if (! $this->confirm('¿Confirmas que querés ejecutar la limpieza?')) {
             $this->info('Operación cancelada.');
+
             return Command::SUCCESS;
         }
 
@@ -86,10 +88,10 @@ class LimpiezaMensual extends Command
                 ->where('estado', 'activo')
                 ->where(function ($q) use ($fechaCorte) {
                     $q->where('fecha_ultimo_contacto', '<', $fechaCorte)
-                      ->orWhere(function ($q2) use ($fechaCorte) {
-                          $q2->whereNull('fecha_ultimo_contacto')
-                             ->where('created_at', '<', $fechaCorte);
-                      });
+                        ->orWhere(function ($q2) use ($fechaCorte) {
+                            $q2->whereNull('fecha_ultimo_contacto')
+                                ->where('created_at', '<', $fechaCorte);
+                        });
                 })
                 ->count(),
 
@@ -99,7 +101,7 @@ class LimpiezaMensual extends Command
                 ->where('updated_at', '<', $fechaCorte)
                 ->where(function ($q) {
                     $q->where('completado', true)
-                      ->orWhere('cancelado', true);
+                        ->orWhere('cancelado', true);
                 })
                 ->count(),
 
@@ -141,7 +143,7 @@ class LimpiezaMensual extends Command
         );
 
         $this->newLine();
-        $this->info("📊 Prospectos ya archivados: " . number_format($stats['prospectos_archivados_actual']));
+        $this->info('📊 Prospectos ya archivados: '.number_format($stats['prospectos_archivados_actual']));
     }
 
     private function porcentaje(int $parte, int $total): string
@@ -150,6 +152,6 @@ class LimpiezaMensual extends Command
             return '0%';
         }
 
-        return round(($parte / $total) * 100, 1) . '%';
+        return round(($parte / $total) * 100, 1).'%';
     }
 }

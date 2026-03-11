@@ -6,14 +6,16 @@ namespace App\Services\Import\DTO;
 
 /**
  * Data Transfer Object para una fila de prospecto del Excel.
- * 
+ *
  * Inmutable y tipado para seguridad. Encapsula toda la lógica
  * de limpieza y validación de datos del Excel.
  */
 final readonly class ProspectoRow
 {
     private const MAX_NOMBRE_LENGTH = 255;
+
     private const MAX_RUT_LENGTH = 12;
+
     private const MAX_TELEFONO_LENGTH = 20;
 
     public function __construct(
@@ -63,8 +65,8 @@ final readonly class ProspectoRow
      */
     public function hasValidName(): bool
     {
-        return $this->nombre !== null 
-            && strlen($this->nombre) > 0 
+        return $this->nombre !== null
+            && strlen($this->nombre) > 0
             && strlen($this->nombre) <= self::MAX_NOMBRE_LENGTH;
     }
 
@@ -91,7 +93,7 @@ final readonly class ProspectoRow
     {
         $errors = [];
 
-        if (!$this->hasValidName()) {
+        if (! $this->hasValidName()) {
             $errors['nombre'] = 'El nombre es requerido y debe tener máximo 255 caracteres';
         }
 
@@ -139,16 +141,16 @@ final readonly class ProspectoRow
         if ($value === null || $value === '') {
             return null;
         }
-        
+
         $cleaned = trim((string) $value);
-        
+
         return $cleaned === '' ? null : $cleaned;
     }
 
     private static function sanitizeNombre(mixed $value): ?string
     {
         $cleaned = self::sanitizeString($value);
-        
+
         if ($cleaned === null) {
             return null;
         }
@@ -164,30 +166,30 @@ final readonly class ProspectoRow
     private static function sanitizeEmail(mixed $value): ?string
     {
         $cleaned = self::sanitizeString($value);
-        
+
         if ($cleaned === null) {
             return null;
         }
-        
+
         // Validación básica de email (más rápida que filter_var para alto volumen)
-        if (!str_contains($cleaned, '@') || !str_contains($cleaned, '.')) {
+        if (! str_contains($cleaned, '@') || ! str_contains($cleaned, '.')) {
             return null;
         }
-        
+
         return strtolower($cleaned);
     }
 
     private static function sanitizeTelefono(mixed $value): ?string
     {
         $cleaned = self::sanitizeString($value);
-        
+
         if ($cleaned === null) {
             return null;
         }
 
         // Remover caracteres no numéricos excepto + al inicio
         $cleaned = preg_replace('/[^0-9+]/', '', $cleaned);
-        
+
         // Limitar longitud
         if (strlen($cleaned) > self::MAX_TELEFONO_LENGTH) {
             $cleaned = substr($cleaned, 0, self::MAX_TELEFONO_LENGTH);
@@ -199,14 +201,14 @@ final readonly class ProspectoRow
     private static function sanitizeRut(mixed $value): ?string
     {
         $cleaned = self::sanitizeString($value);
-        
+
         if ($cleaned === null) {
             return null;
         }
 
         // Remover puntos y guiones, normalizar K mayúscula
         $cleaned = strtoupper(str_replace(['.', '-'], '', $cleaned));
-        
+
         // Limitar longitud
         if (strlen($cleaned) > self::MAX_RUT_LENGTH) {
             $cleaned = substr($cleaned, 0, self::MAX_RUT_LENGTH);
@@ -223,7 +225,7 @@ final readonly class ProspectoRow
 
         // Remover caracteres no numéricos
         $cleaned = preg_replace('/[^0-9]/', '', (string) $value);
-        
+
         return (int) ($cleaned ?: 0);
     }
 }

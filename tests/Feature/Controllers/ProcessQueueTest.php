@@ -3,16 +3,13 @@
 namespace Tests\Feature\Controllers;
 
 use App\Jobs\EjecutarNodosProgramados;
-use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
 use Tests\TestCase;
 
 /**
  * Tests para el endpoint /api/cron/process-queue
- * 
+ *
  * Este endpoint es CRÍTICO - procesa jobs pendientes.
  * Los tests verifican:
  * - No loops infinitos
@@ -29,7 +26,7 @@ class ProcessQueueTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        
+
         // Limpiar tabla de jobs
         DB::table('jobs')->truncate();
     }
@@ -42,7 +39,7 @@ class ProcessQueueTest extends TestCase
     public function endpoint_requiere_header_cloud_scheduler(): void
     {
         $response = $this->postJson($this->endpoint);
-        
+
         // Puede ser 401 (Unauthorized) o 403 (Forbidden) dependiendo del middleware
         $this->assertTrue(in_array($response->status(), [401, 403]));
     }
@@ -53,7 +50,7 @@ class ProcessQueueTest extends TestCase
         $response = $this->postJson($this->endpoint, [], [
             'X-CloudScheduler' => 'true',
         ]);
-        
+
         $response->assertStatus(200);
         $response->assertJson(['success' => true]);
     }
@@ -68,7 +65,7 @@ class ProcessQueueTest extends TestCase
         $response = $this->postJson($this->endpoint, [], [
             'X-CloudScheduler' => 'true',
         ]);
-        
+
         $response->assertStatus(200);
         $response->assertJson([
             'success' => true,
@@ -86,11 +83,11 @@ class ProcessQueueTest extends TestCase
         $this->createTestJob('default');
         $this->createTestJob('default');
         $this->createTestJob('envios');
-        
+
         $response = $this->postJson($this->endpoint, [], [
             'X-CloudScheduler' => 'true',
         ]);
-        
+
         $response->assertStatus(200);
         $response->assertJsonStructure([
             'success',
@@ -109,14 +106,14 @@ class ProcessQueueTest extends TestCase
         // El endpoint debe procesar ambas colas
         $jobDefault = $this->createTestJob('default');
         $jobEnvios = $this->createTestJob('envios');
-        
+
         // Verificar que los jobs existen
         $this->assertEquals(2, DB::table('jobs')->count());
-        
+
         $response = $this->postJson($this->endpoint, [], [
             'X-CloudScheduler' => 'true',
         ]);
-        
+
         $response->assertStatus(200);
         // Los jobs deberían ser procesados (o al menos intentados)
         $this->assertLessThanOrEqual(2, DB::table('jobs')->count());
@@ -131,18 +128,18 @@ class ProcessQueueTest extends TestCase
     {
         // Crear un job inválido
         $jobId = $this->createPersistentTestJob();
-        
+
         $response = $this->postJson($this->endpoint, [], [
             'X-CloudScheduler' => 'true',
         ]);
-        
+
         $response->assertStatus(200);
-        
+
         // Lo importante es que la request completó en tiempo razonable
         // (no entró en loop infinito)
         $duration = $response->json('data.duration_seconds');
         $this->assertLessThan(35, $duration);
-        
+
         // El job puede o no existir dependiendo de cómo el worker lo maneje
         // Lo importante es que NO hubo loop infinito
     }
@@ -154,13 +151,13 @@ class ProcessQueueTest extends TestCase
         for ($i = 0; $i < 15; $i++) {
             $this->createTestJob('default');
         }
-        
+
         $response = $this->postJson($this->endpoint, [], [
             'X-CloudScheduler' => 'true',
         ]);
-        
+
         $response->assertStatus(200);
-        
+
         // No debería procesar más de 10 jobs
         $this->assertLessThanOrEqual(10, $response->json('data.jobs_processed'));
     }
@@ -172,17 +169,17 @@ class ProcessQueueTest extends TestCase
         for ($i = 0; $i < 20; $i++) {
             $this->createTestJob('default');
         }
-        
+
         $startTime = microtime(true);
-        
+
         $response = $this->postJson($this->endpoint, [], [
             'X-CloudScheduler' => 'true',
         ]);
-        
+
         $elapsed = microtime(true) - $startTime;
-        
+
         $response->assertStatus(200);
-        
+
         // No debería tomar más de 35 segundos (30s límite + overhead)
         $this->assertLessThan(35, $elapsed);
     }
@@ -197,7 +194,7 @@ class ProcessQueueTest extends TestCase
         $response = $this->postJson($this->endpoint, [], [
             'X-CloudScheduler' => 'true',
         ]);
-        
+
         $response->assertStatus(200);
         $response->assertJsonStructure([
             'data' => ['errors'],
@@ -210,13 +207,13 @@ class ProcessQueueTest extends TestCase
         // Crear job válido después de uno inválido
         $this->createInvalidJob();
         $this->createTestJob('default');
-        
+
         $response = $this->postJson($this->endpoint, [], [
             'X-CloudScheduler' => 'true',
         ]);
-        
+
         $response->assertStatus(200);
-        
+
         // Debería haber intentado procesar ambos (o continuar después del error)
         $this->assertTrue($response->json('success'));
     }
@@ -231,12 +228,12 @@ class ProcessQueueTest extends TestCase
         $response = $this->postJson($this->endpoint, [], [
             'X-CloudScheduler' => 'true',
         ]);
-        
+
         $response->assertStatus(200);
         $response->assertJsonStructure([
             'data' => ['duration_seconds'],
         ]);
-        
+
         $duration = $response->json('data.duration_seconds');
         $this->assertIsNumeric($duration);
         $this->assertGreaterThanOrEqual(0, $duration);
@@ -248,7 +245,7 @@ class ProcessQueueTest extends TestCase
         $response = $this->postJson($this->endpoint, [], [
             'X-CloudScheduler' => 'true',
         ]);
-        
+
         $response->assertStatus(200);
         $response->assertJsonStructure([
             'success',
@@ -269,19 +266,19 @@ class ProcessQueueTest extends TestCase
     public function endpoint_ejecuta_ejecutar_nodos_programados(): void
     {
         // Este test verifica que el endpoint también ejecuta EjecutarNodosProgramados
-        
+
         $response = $this->postJson($this->endpoint, [], [
             'X-CloudScheduler' => 'true',
         ]);
-        
+
         $response->assertStatus(200);
-        
+
         // Si no hay errores relacionados con EjecutarNodosProgramados, el test pasa
         $errors = $response->json('data.errors');
         $ejecutarNodosError = collect($errors)->first(function ($error) {
             return isset($error['job']) && $error['job'] === 'EjecutarNodosProgramados';
         });
-        
+
         // Puede haber error si no hay ejecuciones pendientes, pero no debería ser un error fatal
         if ($ejecutarNodosError) {
             // Verificar que el error no es crítico (por ejemplo, no encontró ejecuciones)
@@ -299,13 +296,13 @@ class ProcessQueueTest extends TestCase
     public function endpoint_procesa_cola_default(): void
     {
         $jobId = $this->createTestJob('default');
-        
+
         $this->assertDatabaseHas('jobs', ['id' => $jobId, 'queue' => 'default']);
-        
+
         $response = $this->postJson($this->endpoint, [], [
             'X-CloudScheduler' => 'true',
         ]);
-        
+
         $response->assertStatus(200);
     }
 
@@ -313,13 +310,13 @@ class ProcessQueueTest extends TestCase
     public function endpoint_procesa_cola_envios(): void
     {
         $jobId = $this->createTestJob('envios');
-        
+
         $this->assertDatabaseHas('jobs', ['id' => $jobId, 'queue' => 'envios']);
-        
+
         $response = $this->postJson($this->endpoint, [], [
             'X-CloudScheduler' => 'true',
         ]);
-        
+
         $response->assertStatus(200);
     }
 
@@ -328,13 +325,13 @@ class ProcessQueueTest extends TestCase
     {
         // Crear job en cola diferente
         $jobId = $this->createTestJob('otra_cola');
-        
+
         $response = $this->postJson($this->endpoint, [], [
             'X-CloudScheduler' => 'true',
         ]);
-        
+
         $response->assertStatus(200);
-        
+
         // El job en 'otra_cola' debería seguir existiendo
         $this->assertDatabaseHas('jobs', ['id' => $jobId, 'queue' => 'otra_cola']);
     }
@@ -359,13 +356,13 @@ class ProcessQueueTest extends TestCase
             'available_at' => time(),
             'created_at' => time(),
         ]);
-        
+
         $response = $this->postJson($this->endpoint, [], [
             'X-CloudScheduler' => 'true',
         ]);
-        
+
         $response->assertStatus(200);
-        
+
         // El job reservado debería seguir existiendo (no se procesa)
         $this->assertDatabaseHas('jobs', ['id' => $jobId]);
     }
@@ -389,7 +386,7 @@ class ProcessQueueTest extends TestCase
                 'timeout' => 60,
                 'data' => [
                     'commandName' => 'App\\Jobs\\EjecutarNodosProgramados',
-                    'command' => serialize(new EjecutarNodosProgramados()),
+                    'command' => serialize(new EjecutarNodosProgramados),
                 ],
             ]),
             'attempts' => 0,

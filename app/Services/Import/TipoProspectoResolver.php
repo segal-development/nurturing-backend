@@ -10,14 +10,14 @@ use Illuminate\Support\Collection;
 /**
  * Resuelve el tipo de prospecto basado en el monto de deuda.
  * Cachea los tipos en memoria para evitar queries repetidas.
- * 
+ *
  * Single Responsibility: Solo resuelve tipos de prospecto.
  */
 final class TipoProspectoResolver
 {
     /** @var Collection<TipoProspecto> */
     private Collection $tipos;
-    
+
     private bool $loaded = false;
 
     public function __construct()
@@ -43,7 +43,7 @@ final class TipoProspectoResolver
      */
     public function resolveByMonto(float $monto): ?TipoProspecto
     {
-        if (!$this->loaded) {
+        if (! $this->loaded) {
             $this->load();
         }
 
@@ -62,6 +62,7 @@ final class TipoProspectoResolver
     public function resolveIdByMonto(float $monto): ?int
     {
         $tipo = $this->resolveByMonto($monto);
+
         return $tipo?->id;
     }
 

@@ -10,7 +10,7 @@ use Illuminate\Support\Facades\DB;
 
 /**
  * Service for calculating and managing flow execution costs.
- * 
+ *
  * Handles:
  * - Estimated costs before execution (based on etapas × prospectos)
  * - Real costs after execution (based on actual envios)
@@ -20,6 +20,7 @@ use Illuminate\Support\Facades\DB;
 class CostoService
 {
     private float $emailCosto;
+
     private float $smsCosto;
 
     public function __construct()
@@ -54,9 +55,9 @@ class CostoService
 
     /**
      * Calculate estimated cost for a flow before execution.
-     * 
-     * @param Flujo $flujo The flow to estimate
-     * @param int $cantidadProspectos Number of prospects that will receive messages
+     *
+     * @param  Flujo  $flujo  The flow to estimate
+     * @param  int  $cantidadProspectos  Number of prospects that will receive messages
      * @return array Detailed cost breakdown
      */
     public function calcularCostoEstimado(Flujo $flujo, int $cantidadProspectos): array
@@ -113,8 +114,8 @@ class CostoService
 
     /**
      * Calculate real cost for a completed execution based on actual envios.
-     * 
-     * @param FlujoEjecucion $ejecucion The completed execution
+     *
+     * @param  FlujoEjecucion  $ejecucion  The completed execution
      * @return array Detailed cost breakdown
      */
     public function calcularCostoReal(FlujoEjecucion $ejecucion): array
@@ -192,9 +193,9 @@ class CostoService
 
     /**
      * Get cost dashboard statistics.
-     * 
-     * @param string|null $fechaInicio Start date (Y-m-d)
-     * @param string|null $fechaFin End date (Y-m-d)
+     *
+     * @param  string|null  $fechaInicio  Start date (Y-m-d)
+     * @param  string|null  $fechaFin  End date (Y-m-d)
      */
     public function getDashboardStats(?string $fechaInicio = null, ?string $fechaFin = null): array
     {
@@ -203,7 +204,7 @@ class CostoService
 
         // Total costs from completed executions
         $totalStats = FlujoEjecucion::where('estado', 'completed')
-            ->whereBetween('created_at', [$fechaInicio, $fechaFin . ' 23:59:59'])
+            ->whereBetween('created_at', [$fechaInicio, $fechaFin.' 23:59:59'])
             ->select(
                 DB::raw('SUM(costo_real) as costo_total'),
                 DB::raw('SUM(costo_emails) as costo_emails'),
@@ -216,7 +217,7 @@ class CostoService
 
         // Costs by day
         $costosPorDia = FlujoEjecucion::where('estado', 'completed')
-            ->whereBetween('created_at', [$fechaInicio, $fechaFin . ' 23:59:59'])
+            ->whereBetween('created_at', [$fechaInicio, $fechaFin.' 23:59:59'])
             ->whereNotNull('costo_real')
             ->select(
                 DB::raw('DATE(created_at) as fecha'),
@@ -231,7 +232,7 @@ class CostoService
 
         // Costs by flow
         $costosPorFlujo = FlujoEjecucion::where('estado', 'completed')
-            ->whereBetween('flujo_ejecuciones.created_at', [$fechaInicio, $fechaFin . ' 23:59:59'])
+            ->whereBetween('flujo_ejecuciones.created_at', [$fechaInicio, $fechaFin.' 23:59:59'])
             ->whereNotNull('costo_real')
             ->join('flujos', 'flujo_ejecuciones.flujo_id', '=', 'flujos.id')
             ->select(
@@ -250,7 +251,7 @@ class CostoService
 
         // Estimated vs Real comparison for completed executions
         $comparacion = FlujoEjecucion::where('estado', 'completed')
-            ->whereBetween('created_at', [$fechaInicio, $fechaFin . ' 23:59:59'])
+            ->whereBetween('created_at', [$fechaInicio, $fechaFin.' 23:59:59'])
             ->whereNotNull('costo_estimado')
             ->whereNotNull('costo_real')
             ->select(

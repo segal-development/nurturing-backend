@@ -8,7 +8,7 @@ return new class extends Migration
 {
     /**
      * Run the migrations.
-     * 
+     *
      * Adds cost tracking fields to flujo_ejecuciones:
      * - costo_estimado: Calculated before execution starts
      * - costo_real: Calculated after execution completes (based on actual envios)

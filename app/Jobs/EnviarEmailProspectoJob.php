@@ -22,14 +22,14 @@ class EnviarEmailProspectoJob implements ShouldQueue
 
     /**
      * Exponential backoff (seconds): 30s, 60s, 120s
-     * 
+     *
      * @var array<int>
      */
     public array $backoff = [30, 60, 120];
 
     /**
      * Get the middleware the job should pass through.
-     * 
+     *
      * @return array<int, object>
      */
     public function middleware(): array

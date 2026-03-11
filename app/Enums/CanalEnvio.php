@@ -6,7 +6,7 @@ namespace App\Enums;
 
 /**
  * Enum que representa los canales de envío disponibles para un flujo.
- * 
+ *
  * Usar enums en lugar de strings mágicos previene errores tipográficos
  * y hace el código más mantenible y type-safe.
  */
@@ -19,8 +19,7 @@ enum CanalEnvio: string
     /**
      * Crea una instancia desde un tipo de mensaje de etapa.
      *
-     * @param string $tipoMensaje 'email' o 'sms'
-     * @return self
+     * @param  string  $tipoMensaje  'email' o 'sms'
      */
     public static function fromTipoMensaje(string $tipoMensaje): self
     {
@@ -45,9 +44,6 @@ enum CanalEnvio: string
 
     /**
      * Verifica si un string es un canal válido.
-     *
-     * @param string $value
-     * @return bool
      */
     public static function isValid(string $value): bool
     {
@@ -56,8 +52,6 @@ enum CanalEnvio: string
 
     /**
      * Obtiene el label para mostrar en UI.
-     *
-     * @return string
      */
     public function label(): string
     {
@@ -70,8 +64,6 @@ enum CanalEnvio: string
 
     /**
      * Obtiene el emoji/icono representativo.
-     *
-     * @return string
      */
     public function icon(): string
     {

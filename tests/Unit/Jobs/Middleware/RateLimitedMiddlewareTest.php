@@ -41,7 +41,7 @@ class RateLimitedMiddlewareTest extends TestCase
     /** @test */
     public function usa_email_como_canal_por_defecto(): void
     {
-        $middleware = new RateLimitedMiddleware();
+        $middleware = new RateLimitedMiddleware;
         $this->assertInstanceOf(RateLimitedMiddleware::class, $middleware);
     }
 
@@ -314,8 +314,10 @@ class RateLimitedMiddlewareTest extends TestCase
      */
     private function createMockJob(): object
     {
-        return new class {
+        return new class
+        {
             public int $attempts = 0;
+
             public int $prospectoEnFlujoId = 1;
         };
     }
@@ -325,8 +327,10 @@ class RateLimitedMiddlewareTest extends TestCase
      */
     private function createReleasableJob(bool &$releaseCalled, int $attempts = 0): object
     {
-        return new class($releaseCalled, $attempts) {
+        return new class($releaseCalled, $attempts)
+        {
             public int $attempts;
+
             private bool $releaseCalled;
 
             public function __construct(bool &$releaseCalled, int $attempts)
@@ -347,8 +351,10 @@ class RateLimitedMiddlewareTest extends TestCase
      */
     private function createReleasableJobWithDelay(?int &$capturedDelay, int $attempts = 0): object
     {
-        return new class($capturedDelay, $attempts) {
+        return new class($capturedDelay, $attempts)
+        {
             public int $attempts;
+
             private ?int $capturedDelay;
 
             public function __construct(?int &$capturedDelay, int $attempts)

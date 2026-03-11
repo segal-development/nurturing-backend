@@ -52,7 +52,7 @@ return new class extends Migration
 
         if ($flujosConTipo > 0) {
             throw new \RuntimeException(
-                "No se puede eliminar el tipo '{$tipoTodos->nombre}' porque hay {$flujosConTipo} flujos usándolo. " .
+                "No se puede eliminar el tipo '{$tipoTodos->nombre}' porque hay {$flujosConTipo} flujos usándolo. ".
                 'Reasigna los flujos a otro tipo antes de hacer rollback.'
             );
         }

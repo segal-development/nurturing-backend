@@ -26,7 +26,7 @@ use Illuminate\Support\Facades\Log;
  * - Reintentos automáticos con backoff exponencial
  * - Idempotencia: ShouldBeUnique previene jobs duplicados en cola
  */
-class EnviarEmailEtapaProspectoJob implements ShouldQueue, ShouldBeUnique
+class EnviarEmailEtapaProspectoJob implements ShouldBeUnique, ShouldQueue
 {
     use Batchable, Queueable;
 
@@ -104,6 +104,7 @@ class EnviarEmailEtapaProspectoJob implements ShouldQueue, ShouldBeUnique
                 'prospecto_en_flujo_id' => $this->prospectoEnFlujoId,
                 'etapa_ejecucion_id' => $this->etapaEjecucionId,
             ]);
+
             return;
         }
 
@@ -199,10 +200,10 @@ class EnviarEmailEtapaProspectoJob implements ShouldQueue, ShouldBeUnique
 
     /**
      * Llave única para idempotencia.
-     * 
+     *
      * Combina prospecto + etapa para garantizar que solo UN job
      * por prospecto/etapa pueda estar en cola a la vez.
-     * 
+     *
      * Esto previene duplicados cuando:
      * - Cloud Run mata una instancia y re-encola el job
      * - Hay race conditions al crear jobs

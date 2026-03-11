@@ -6,8 +6,6 @@ use App\Models\Envio;
 use App\Models\Prospecto;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
-use App\Services\DesuscripcionService;
-use App\Services\EmailValidationService;
 
 class EnvioService
 {
@@ -257,7 +255,7 @@ class EnvioService
         // =====================================================================
         // VALIDACIÓN DE EMAIL - Detectar emails inválidos ANTES de enviar
         // =====================================================================
-        
+
         // Si ya está marcado como inválido, no intentar enviar
         if ($prospecto->isEmailInvalido()) {
             Log::debug('EnvioService: Email ya marcado como inválido, omitiendo', [
@@ -265,30 +263,31 @@ class EnvioService
                 'email' => $prospecto->email,
                 'motivo' => $prospecto->email_invalido_motivo,
             ]);
+
             return [
                 'success' => false,
                 'envio_id' => null,
-                'error' => 'Email marcado como inválido: ' . $prospecto->email_invalido_motivo,
+                'error' => 'Email marcado como inválido: '.$prospecto->email_invalido_motivo,
                 'email_invalido' => true,
             ];
         }
 
         // Validar formato y dominio del email ANTES de intentar enviar
         $validacion = $this->emailValidationService->validar($prospecto->email);
-        if (!$validacion['valid']) {
+        if (! $validacion['valid']) {
             $prospecto->marcarEmailInvalido($validacion['motivo']);
-            
+
             Log::info('EnvioService: Email detectado como inválido en pre-validación', [
                 'prospecto_id' => $prospecto->id,
                 'email' => $prospecto->email,
                 'motivo' => $validacion['motivo'],
                 'sugerencia' => $validacion['sugerencia'],
             ]);
-            
+
             return [
                 'success' => false,
                 'envio_id' => null,
-                'error' => 'Email inválido: ' . $validacion['motivo'],
+                'error' => 'Email inválido: '.$validacion['motivo'],
                 'email_invalido' => true,
                 'sugerencia' => $validacion['sugerencia'],
             ];
@@ -312,6 +311,7 @@ class EnvioService
                     'envio_existente_id' => $envioExistente->id,
                     'estado' => $envioExistente->estado,
                 ]);
+
                 return [
                     'success' => true, // Consideramos éxito porque ya se envió
                     'envio_id' => $envioExistente->id,
@@ -322,11 +322,12 @@ class EnvioService
         }
 
         // Verificar si el prospecto puede recibir emails (no desuscrito)
-        if (!$prospecto->puedeRecibirComunicacion('email')) {
+        if (! $prospecto->puedeRecibirComunicacion('email')) {
             Log::info('EnvioService: Prospecto desuscrito de emails', [
                 'prospecto_id' => $prospecto->id,
                 'email' => $prospecto->email,
             ]);
+
             return [
                 'success' => false,
                 'envio_id' => null,
@@ -438,11 +439,11 @@ class EnvioService
 
         // Insertar antes del cierre de </body> si existe
         if (stripos($html, '</body>') !== false) {
-            return str_ireplace('</body>', $footer . '</body>', $html);
+            return str_ireplace('</body>', $footer.'</body>', $html);
         }
 
         // Si no hay </body>, agregar al final
-        return $html . $footer;
+        return $html.$footer;
     }
 
     /**
@@ -596,7 +597,7 @@ class EnvioService
 
         try {
             $contenidoPersonalizado = $this->personalizarContenido($contenido, $prospecto);
-            
+
             // Truncar SMS si excede 160 caracteres (después de personalización)
             $contenidoPersonalizado = $this->truncarSmsSimesNecesario($contenidoPersonalizado, $prospecto->id);
 
@@ -662,8 +663,8 @@ class EnvioService
     private function personalizarContenido(string $contenido, Prospecto $prospecto): string
     {
         // Formatear monto de deuda con separador de miles
-        $montoFormateado = $prospecto->monto_deuda 
-            ? '$' . number_format($prospecto->monto_deuda, 0, ',', '.')
+        $montoFormateado = $prospecto->monto_deuda
+            ? '$'.number_format($prospecto->monto_deuda, 0, ',', '.')
             : '';
 
         $variables = [
@@ -694,9 +695,9 @@ class EnvioService
     /**
      * Trunca un SMS a 160 caracteres si es necesario.
      * Los SMS estándar tienen límite de 160 caracteres GSM-7.
-     * 
-     * @param string $contenido Contenido del SMS
-     * @param int $prospectoId ID del prospecto (para logging)
+     *
+     * @param  string  $contenido  Contenido del SMS
+     * @param  int  $prospectoId  ID del prospecto (para logging)
      * @return string Contenido truncado si excede 160 caracteres
      */
     private function truncarSmsSimesNecesario(string $contenido, int $prospectoId): string
@@ -712,10 +713,10 @@ class EnvioService
             'prospecto_id' => $prospectoId,
             'longitud_original' => $length,
             'longitud_truncada' => $maxLength - 3, // -3 por "..."
-            'contenido_original' => mb_substr($contenido, 0, 50) . '...',
+            'contenido_original' => mb_substr($contenido, 0, 50).'...',
         ]);
 
         // Truncar y agregar "..." al final
-        return mb_substr($contenido, 0, $maxLength - 3) . '...';
+        return mb_substr($contenido, 0, $maxLength - 3).'...';
     }
 }

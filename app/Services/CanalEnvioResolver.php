@@ -8,7 +8,7 @@ use App\Enums\CanalEnvio;
 
 /**
  * Service responsable de resolver/inferir el canal de envío de un flujo.
- * 
+ *
  * Aplica Single Responsibility Principle: solo se encarga de determinar
  * el canal basándose en las etapas del flujo.
  */
@@ -19,7 +19,7 @@ final class CanalEnvioResolver
     /**
      * Infiere el canal de envío basándose en los tipos de mensaje de las etapas.
      *
-     * @param array<int, array{tipo_mensaje?: string}> $stages Las etapas del flujo
+     * @param  array<int, array{tipo_mensaje?: string}>  $stages  Las etapas del flujo
      * @return CanalEnvio El canal inferido
      */
     public function resolveFromStages(array $stages): CanalEnvio
@@ -38,8 +38,7 @@ final class CanalEnvioResolver
     /**
      * Infiere el canal desde la estructura completa del FlowBuilder.
      *
-     * @param array{stages?: array<int, array{tipo_mensaje?: string}>} $structure
-     * @return CanalEnvio
+     * @param  array{stages?: array<int, array{tipo_mensaje?: string}>}  $structure
      */
     public function resolveFromStructure(array $structure): CanalEnvio
     {
@@ -50,9 +49,6 @@ final class CanalEnvioResolver
 
     /**
      * Valida si un tipo de mensaje es válido.
-     *
-     * @param string $tipoMensaje
-     * @return bool
      */
     public function isValidTipoMensaje(string $tipoMensaje): bool
     {
@@ -62,7 +58,7 @@ final class CanalEnvioResolver
     /**
      * Extrae los tipos de mensaje de las etapas.
      *
-     * @param array<int, array{tipo_mensaje?: string}> $stages
+     * @param  array<int, array{tipo_mensaje?: string}>  $stages
      * @return array<int, string>
      */
     private function extractTiposMensaje(array $stages): array
@@ -85,8 +81,7 @@ final class CanalEnvioResolver
     /**
      * Extrae el tipo de mensaje de una etapa individual.
      *
-     * @param array{tipo_mensaje?: string} $stage
-     * @return string|null
+     * @param  array{tipo_mensaje?: string}  $stage
      */
     private function extractTipoFromStage(array $stage): ?string
     {
@@ -98,7 +93,7 @@ final class CanalEnvioResolver
 
         $tipoNormalized = strtolower(trim($tipo));
 
-        if (!$this->isValidTipoMensaje($tipoNormalized)) {
+        if (! $this->isValidTipoMensaje($tipoNormalized)) {
             return null;
         }
 
@@ -108,7 +103,7 @@ final class CanalEnvioResolver
     /**
      * Obtiene los tipos únicos de mensaje.
      *
-     * @param array<int, string> $tiposMensaje
+     * @param  array<int, string>  $tiposMensaje
      * @return array<int, string>
      */
     private function getUniqueTipos(array $tiposMensaje): array
@@ -119,8 +114,7 @@ final class CanalEnvioResolver
     /**
      * Determina el canal basándose en los tipos únicos encontrados.
      *
-     * @param array<int, string> $uniqueTipos
-     * @return CanalEnvio
+     * @param  array<int, string>  $uniqueTipos
      */
     private function determineCanal(array $uniqueTipos): CanalEnvio
     {
@@ -143,8 +137,7 @@ final class CanalEnvioResolver
     /**
      * Helper para verificar si el array está vacío.
      *
-     * @param array<int, string> $items
-     * @return bool
+     * @param  array<int, string>  $items
      */
     private function isEmpty(array $items): bool
     {

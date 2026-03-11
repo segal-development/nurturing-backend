@@ -3,6 +3,7 @@
 return [
     App\Providers\AppServiceProvider::class,
     App\Providers\EnvioServiceProvider::class,
+    App\Providers\EventServiceProvider::class,
     App\Providers\GoogleCloudStorageServiceProvider::class,
     Maatwebsite\Excel\ExcelServiceProvider::class,
 ];

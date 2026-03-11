@@ -13,6 +13,7 @@ use App\Http\Controllers\ImportacionController;
 use App\Http\Controllers\LoteController;
 use App\Http\Controllers\MetricasController;
 use App\Http\Controllers\MonitoreoController;
+use App\Http\Controllers\MonitoringController;
 use App\Http\Controllers\PlantillaController;
 use App\Http\Controllers\ProspectoController;
 use App\Http\Controllers\TestingController;
@@ -196,5 +197,13 @@ Route::middleware(['auth:sanctum', 'throttle:api'])->group(function () {
         Route::delete('/{id}', [ExternalApiSourceController::class, 'destroy']);
         Route::post('/{id}/sync', [ExternalApiSourceController::class, 'sync']);
         Route::post('/{id}/test', [ExternalApiSourceController::class, 'test']);
+    });
+
+    // Rutas de Monitoreo - Circuit Breakers y Salud del Sistema
+    Route::prefix('monitoring')->group(function () {
+        Route::get('/circuit-breakers', [MonitoringController::class, 'circuitBreakers']);
+        Route::get('/envios-stats', [MonitoringController::class, 'enviosStats']);
+        Route::post('/circuit-breakers/{channel}/close', [MonitoringController::class, 'forceCloseCircuitBreaker']);
+        Route::post('/etapas/{id}/resume', [MonitoringController::class, 'resumeEtapa']);
     });
 });

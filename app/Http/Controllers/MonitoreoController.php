@@ -9,7 +9,7 @@ use Illuminate\Support\Facades\Log;
 
 /**
  * Controller para monitoreo del sistema de colas y envíos
- * 
+ *
  * Proporciona visibilidad sobre:
  * - Estado de la cola de jobs (pendientes, fallidos, procesados)
  * - Estado del circuit breaker
@@ -20,7 +20,7 @@ class MonitoreoController extends Controller
 {
     /**
      * Dashboard general de monitoreo
-     * 
+     *
      * GET /api/monitoreo/dashboard
      */
     public function dashboard(): JsonResponse
@@ -45,7 +45,7 @@ class MonitoreoController extends Controller
 
     /**
      * Estado detallado de la cola de jobs
-     * 
+     *
      * GET /api/monitoreo/queue
      */
     public function queueStatus(): JsonResponse
@@ -66,7 +66,7 @@ class MonitoreoController extends Controller
 
     /**
      * Estado del circuit breaker
-     * 
+     *
      * GET /api/monitoreo/circuit-breaker
      */
     public function circuitBreakerStatus(): JsonResponse
@@ -88,7 +88,7 @@ class MonitoreoController extends Controller
 
     /**
      * Reiniciar circuit breaker manualmente
-     * 
+     *
      * POST /api/monitoreo/circuit-breaker/reset
      */
     public function resetCircuitBreaker(): JsonResponse
@@ -112,7 +112,7 @@ class MonitoreoController extends Controller
 
     /**
      * Estadísticas de rate limiting
-     * 
+     *
      * GET /api/monitoreo/rate-limits
      */
     public function rateLimitStatus(): JsonResponse
@@ -133,7 +133,7 @@ class MonitoreoController extends Controller
 
     /**
      * Health check para alertas externas (ej: UptimeRobot, Pingdom)
-     * 
+     *
      * GET /api/monitoreo/health
      */
     public function health(): JsonResponse
@@ -159,13 +159,13 @@ class MonitoreoController extends Controller
 
     /**
      * Reintentar todos los jobs fallidos
-     * 
+     *
      * POST /api/monitoreo/queue/retry-failed
      */
     public function retryFailedJobs(): JsonResponse
     {
         $failedCount = DB::table('failed_jobs')->count();
-        
+
         if ($failedCount === 0) {
             return response()->json([
                 'success' => true,
@@ -217,7 +217,7 @@ class MonitoreoController extends Controller
 
     /**
      * Limpiar jobs fallidos (sin reintentar)
-     * 
+     *
      * DELETE /api/monitoreo/queue/failed
      */
     public function clearFailedJobs(): JsonResponse
@@ -245,7 +245,7 @@ class MonitoreoController extends Controller
     {
         $pending = DB::table('jobs')->count();
         $failed = DB::table('failed_jobs')->count();
-        
+
         // Jobs procesados hoy (de la tabla envios)
         $processedToday = DB::table('envios')
             ->whereDate('created_at', today())
@@ -263,7 +263,7 @@ class MonitoreoController extends Controller
             ->orderBy('created_at', 'asc')
             ->first();
 
-        $oldestJobAge = $oldestJob 
+        $oldestJobAge = $oldestJob
             ? now()->diffInMinutes(\Carbon\Carbon::createFromTimestamp($oldestJob->created_at))
             : 0;
 
@@ -285,6 +285,7 @@ class MonitoreoController extends Controller
             ->get()
             ->map(function ($job) {
                 $payload = json_decode($job->payload, true);
+
                 return [
                     'id' => $job->uuid,
                     'queue' => $job->queue,
@@ -317,7 +318,7 @@ class MonitoreoController extends Controller
         if ($openedAt) {
             $openedAtCarbon = \Carbon\Carbon::parse($openedAt);
             $recoveryAt = $openedAtCarbon->addSeconds($recoveryTime);
-            
+
             if (now()->lt($recoveryAt)) {
                 $isOpen = true;
                 $timeUntilRecovery = now()->diffInSeconds($recoveryAt);
@@ -392,8 +393,8 @@ class MonitoreoController extends Controller
                 'email' => (int) ($stats->emails ?? 0),
                 'sms' => (int) ($stats->sms ?? 0),
             ],
-            'tasa_exito' => $stats->total > 0 
-                ? round(($stats->enviados / $stats->total) * 100, 1) 
+            'tasa_exito' => $stats->total > 0
+                ? round(($stats->enviados / $stats->total) * 100, 1)
                 : 100,
         ];
     }
@@ -429,7 +430,9 @@ class MonitoreoController extends Controller
                 'status' => 'degraded',
                 'message' => "Hay {$queueStats['failed']} jobs fallidos",
             ];
-            if ($status === 'healthy') $status = 'degraded';
+            if ($status === 'healthy') {
+                $status = 'degraded';
+            }
         } else {
             $checks['failed_jobs'] = [
                 'status' => 'healthy',
@@ -443,7 +446,9 @@ class MonitoreoController extends Controller
                 'status' => 'degraded',
                 'message' => "Cola con {$queueStats['pending']} jobs pendientes",
             ];
-            if ($status === 'healthy') $status = 'degraded';
+            if ($status === 'healthy') {
+                $status = 'degraded';
+            }
         } else {
             $checks['queue_backlog'] = [
                 'status' => 'healthy',
@@ -529,21 +534,21 @@ class MonitoreoController extends Controller
 
     /**
      * Envía una alerta de prueba
-     * 
+     *
      * POST /api/monitoreo/alertas/test
      * Body: { "tipo": "info" | "warning" | "critical" | "resumen" }
-     * 
+     *
      * ⚠️ CRITICAL enviará SMS real al número configurado
      */
     public function testAlerta(): JsonResponse
     {
         $tipo = request()->input('tipo', 'info');
-        
+
         $allowedTypes = ['info', 'warning', 'critical', 'resumen'];
-        if (!in_array($tipo, $allowedTypes)) {
+        if (! in_array($tipo, $allowedTypes)) {
             return response()->json([
                 'success' => false,
-                'error' => 'Tipo inválido. Usar: ' . implode(', ', $allowedTypes),
+                'error' => 'Tipo inválido. Usar: '.implode(', ', $allowedTypes),
             ], 400);
         }
 
@@ -604,8 +609,8 @@ class MonitoreoController extends Controller
                 'success' => true,
                 'message' => "Alerta de tipo '{$tipo}' enviada correctamente",
                 'config' => $config,
-                'nota' => $tipo === 'critical' 
-                    ? 'Se envió SMS + Email' 
+                'nota' => $tipo === 'critical'
+                    ? 'Se envió SMS + Email'
                     : 'Se envió solo Email',
             ]);
 
@@ -624,7 +629,7 @@ class MonitoreoController extends Controller
 
     /**
      * Obtiene la configuración actual de alertas
-     * 
+     *
      * GET /api/monitoreo/alertas/config
      */
     public function getAlertasConfig(): JsonResponse

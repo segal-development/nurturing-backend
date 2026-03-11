@@ -7,7 +7,7 @@ use Illuminate\Console\Command;
 
 /**
  * Comando para probar el sistema de alertas.
- * 
+ *
  * Uso:
  *   php artisan alertas:test              # Envía alerta de prueba (info)
  *   php artisan alertas:test --warning    # Envía alerta de warning
@@ -93,7 +93,8 @@ class TestAlertasCommand extends Command
             return Command::SUCCESS;
 
         } catch (\Exception $e) {
-            $this->error('Error: ' . $e->getMessage());
+            $this->error('Error: '.$e->getMessage());
+
             return Command::FAILURE;
         }
     }

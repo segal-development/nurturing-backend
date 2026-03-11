@@ -55,6 +55,7 @@ class RateLimitedMiddleware
         // Check circuit breaker first
         if ($this->isCircuitOpen()) {
             $this->handleCircuitOpen($job);
+
             return;
         }
 
@@ -82,11 +83,11 @@ class RateLimitedMiddleware
             60 // decay seconds (1 minute window)
         );
 
-        if (!$executed) {
+        if (! $executed) {
             $this->handleRateLimited($job);
         }
     }
-    
+
     /**
      * Determina si un error es del proveedor (SMTP/API) o es de validación.
      * Solo los errores de proveedor deben activar el circuit breaker.
@@ -94,7 +95,7 @@ class RateLimitedMiddleware
     private function isProviderError(\Throwable $e): bool
     {
         $message = strtolower($e->getMessage());
-        
+
         // Errores de validación que NO deben contar para circuit breaker
         $validationErrors = [
             'no tiene email',
@@ -105,13 +106,13 @@ class RateLimitedMiddleware
             'desuscrito',
             'unsubscribed',
         ];
-        
+
         foreach ($validationErrors as $validationError) {
             if (str_contains($message, $validationError)) {
                 return false;
             }
         }
-        
+
         // Errores de proveedor que SÍ deben contar
         $providerErrors = [
             'connection',
@@ -133,13 +134,13 @@ class RateLimitedMiddleware
             '553',
             '554',
         ];
-        
+
         foreach ($providerErrors as $providerError) {
             if (str_contains($message, $providerError)) {
                 return true;
             }
         }
-        
+
         // Por defecto, no contar como error de proveedor
         // Esto es conservador - preferimos no abrir el circuit breaker
         return false;
@@ -151,28 +152,29 @@ class RateLimitedMiddleware
     private function handleRateLimited(object $job): void
     {
         $attempts = method_exists($job, 'attempts') ? $job->attempts() : 0;
-        
+
         // Safety valve: if job has been released too many times, let it through
         // This prevents infinite loops when rate limit is misconfigured
         if ($attempts > 50) {
-            Log::warning("RateLimitedMiddleware: Job exceeded 50 attempts, letting through", [
+            Log::warning('RateLimitedMiddleware: Job exceeded 50 attempts, letting through', [
                 'channel' => $this->channel,
                 'job_class' => get_class($job),
                 'attempts' => $attempts,
             ]);
+
             return; // Let the job proceed without rate limiting
         }
 
         // Get available time until next slot
         $rateLimitKey = "envio-rate:{$this->channel}";
         $availableIn = RateLimiter::availableIn($rateLimitKey);
-        
+
         // Use a small random delay to prevent thundering herd
         $delay = max(1, $availableIn) + rand(0, 2);
 
         if (config('envios.monitoring.log_rate_limits', true) && $attempts < 5) {
             // Only log first few attempts to avoid log spam
-            Log::debug("RateLimitedMiddleware: Job rate limited", [
+            Log::debug('RateLimitedMiddleware: Job rate limited', [
                 'channel' => $this->channel,
                 'job_class' => get_class($job),
                 'delay_seconds' => $delay,
@@ -191,6 +193,7 @@ class RateLimitedMiddleware
     private function isCircuitOpen(): bool
     {
         $circuitKey = "envio-circuit:{$this->channel}";
+
         return Cache::get($circuitKey) === 'open';
     }
 
@@ -202,7 +205,7 @@ class RateLimitedMiddleware
         $recoveryTime = config('envios.circuit_breaker.recovery_time', 60);
 
         if (config('envios.monitoring.log_circuit_breaker', true)) {
-            Log::warning("RateLimitedMiddleware: Circuit breaker open, releasing job", [
+            Log::warning('RateLimitedMiddleware: Circuit breaker open, releasing job', [
                 'channel' => $this->channel,
                 'job_class' => get_class($job),
                 'recovery_time' => $recoveryTime,
@@ -221,7 +224,7 @@ class RateLimitedMiddleware
         // Reset failure counter on success
         $failureKey = "envio-failures:{$this->channel}";
         $current = (int) Cache::get($failureKey, 0);
-        
+
         if ($current > 0) {
             Cache::decrement($failureKey);
         }
@@ -272,7 +275,7 @@ class RateLimitedMiddleware
         Cache::put($circuitKey, 'open', $recoveryTime);
 
         if (config('envios.monitoring.log_circuit_breaker', true)) {
-            Log::error("RateLimitedMiddleware: Circuit breaker OPENED", [
+            Log::error('RateLimitedMiddleware: Circuit breaker OPENED', [
                 'channel' => $this->channel,
                 'failures' => $failures,
                 'threshold' => $threshold,
@@ -300,7 +303,7 @@ class RateLimitedMiddleware
             Cache::forget($circuitKey);
 
             if (config('envios.monitoring.log_circuit_breaker', true)) {
-                Log::info("RateLimitedMiddleware: Circuit breaker CLOSED", [
+                Log::info('RateLimitedMiddleware: Circuit breaker CLOSED', [
                     'channel' => $this->channel,
                 ]);
             }

@@ -89,7 +89,7 @@ class EnvioController extends Controller
      * Lista todos los envíos con filtros opcionales
      *
      * GET /api/envios?estado=enviado&canal=email&fecha_desde=2025-01-01
-     * 
+     *
      * Response format:
      * {
      *   "data": [...envios],

@@ -32,6 +32,7 @@ class BatchCompletedCallback
 
         if (! $etapaEjecucion || ! $ejecucion) {
             Log::error('BatchCompletedCallback: No se encontraron modelos', $this->callbackData);
+
             return;
         }
 
@@ -74,6 +75,7 @@ class BatchCompletedCallback
 
         if ($conexionesDesdeEsta->isEmpty()) {
             $this->finalizarFlujo($ejecucion);
+
             return;
         }
 
@@ -82,6 +84,7 @@ class BatchCompletedCallback
 
         if (str_starts_with($targetNodeId, 'end-')) {
             $this->finalizarFlujo($ejecucion);
+
             return;
         }
 
@@ -107,10 +110,10 @@ class BatchCompletedCallback
         $flujoData = $ejecucion->flujo->flujo_data;
         $stages = $flujoData['stages'] ?? [];
         $conditions = $flujoData['conditions'] ?? [];
-        
+
         $targetNode = collect($stages)->firstWhere('id', $targetNodeId);
-        
-        if (!$targetNode) {
+
+        if (! $targetNode) {
             $targetNode = collect($conditions)->firstWhere('id', $targetNodeId);
         }
 
@@ -118,11 +121,11 @@ class BatchCompletedCallback
     }
 
     private function procesarNodoSiguiente(
-        FlujoEjecucion $ejecucion, 
-        FlujoEjecucionEtapa $etapaEjecucion, 
-        array $targetNode, 
-        string $targetNodeId, 
-        array $primeraConexion, 
+        FlujoEjecucion $ejecucion,
+        FlujoEjecucionEtapa $etapaEjecucion,
+        array $targetNode,
+        string $targetNodeId,
+        array $primeraConexion,
         int $messageId,
         array $prospectoIds,
         array $branches
@@ -138,10 +141,10 @@ class BatchCompletedCallback
     }
 
     private function programarVerificacionCondicion(
-        FlujoEjecucion $ejecucion, 
-        FlujoEjecucionEtapa $etapaEjecucion, 
-        string $targetNodeId, 
-        array $conexion, 
+        FlujoEjecucion $ejecucion,
+        FlujoEjecucionEtapa $etapaEjecucion,
+        string $targetNodeId,
+        array $conexion,
         int $messageId,
         array $prospectoIds
     ): void {
@@ -153,7 +156,7 @@ class BatchCompletedCallback
             ->where('node_id', $targetNodeId)
             ->first();
 
-        if (!$condicionEtapa) {
+        if (! $condicionEtapa) {
             FlujoEjecucionEtapa::create([
                 'flujo_ejecucion_id' => $this->callbackData['flujo_ejecucion_id'],
                 'etapa_id' => null,
@@ -212,7 +215,7 @@ class BatchCompletedCallback
             ]);
         }
 
-        if (!$siguienteEtapaEjecucion) {
+        if (! $siguienteEtapaEjecucion) {
             FlujoEjecucionEtapa::create([
                 'flujo_ejecucion_id' => $this->callbackData['flujo_ejecucion_id'],
                 'etapa_id' => null,

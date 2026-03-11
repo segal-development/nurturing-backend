@@ -24,6 +24,9 @@ class FlujoEjecucionEtapa extends Model
         'message_id',
         'response_athenacampaign',
         'error_mensaje',
+        'pause_reason',
+        'paused_at',
+        'auto_resume_at',
     ];
 
     protected function casts(): array
@@ -34,6 +37,9 @@ class FlujoEjecucionEtapa extends Model
             'ejecutado' => 'boolean',
             'response_athenacampaign' => 'array',
             'prospectos_ids' => 'array',
+            'pause_reason' => 'array',
+            'paused_at' => 'datetime',
+            'auto_resume_at' => 'datetime',
         ];
     }
 
@@ -73,5 +79,89 @@ class FlujoEjecucionEtapa extends Model
     public function scopeEjecutadas($query)
     {
         return $query->where('ejecutado', true);
+    }
+
+    /**
+     * Scope para etapas pausadas automáticamente por circuit breaker
+     */
+    public function scopePausadasPorCircuitBreaker($query)
+    {
+        return $query->where('estado', 'paused')
+            ->whereNotNull('pause_reason');
+    }
+
+    /**
+     * Scope para etapas que deberían reanudarse automáticamente
+     */
+    public function scopeDeberianReanudarse($query)
+    {
+        return $query->where('estado', 'paused')
+            ->whereNotNull('auto_resume_at')
+            ->where('auto_resume_at', '<=', now());
+    }
+
+    /**
+     * Scope para etapas en ejecución de un canal específico (email/sms)
+     */
+    public function scopeEnEjecucionDeCanal($query, string $channel)
+    {
+        return $query->where('estado', 'executing')
+            ->whereHas('ejecucion.flujo', function ($q) use ($channel) {
+                // Verificar por tipo de mensaje en config_structure
+                $q->whereRaw("config_structure->'stages' @> ?", [
+                    json_encode([['tipo_mensaje' => $channel]]),
+                ]);
+            });
+    }
+
+    /**
+     * Pausa la etapa por circuit breaker
+     */
+    public function pausarPorCircuitBreaker(string $channel, int $failures, int $recoverySeconds, ?string $errorMessage = null): void
+    {
+        $this->update([
+            'estado' => 'paused',
+            'pause_reason' => [
+                'reason' => 'circuit_breaker_opened',
+                'channel' => $channel,
+                'failures' => $failures,
+                'error_message' => $errorMessage,
+            ],
+            'paused_at' => now(),
+            'auto_resume_at' => now()->addSeconds($recoverySeconds),
+        ]);
+    }
+
+    /**
+     * Reanuda la etapa pausada
+     */
+    public function reanudar(): void
+    {
+        $this->update([
+            'estado' => 'pending', // Vuelve a pending para que el scheduler la retome
+            'pause_reason' => null,
+            'paused_at' => null,
+            'auto_resume_at' => null,
+        ]);
+    }
+
+    /**
+     * Verifica si está pausada por circuit breaker
+     */
+    public function estaPausadaPorCircuitBreaker(): bool
+    {
+        return $this->estado === 'paused'
+            && isset($this->pause_reason['reason'])
+            && $this->pause_reason['reason'] === 'circuit_breaker_opened';
+    }
+
+    /**
+     * Verifica si debería reanudarse automáticamente
+     */
+    public function deberiaReanudarse(): bool
+    {
+        return $this->estado === 'paused'
+            && $this->auto_resume_at !== null
+            && $this->auto_resume_at->isPast();
     }
 }

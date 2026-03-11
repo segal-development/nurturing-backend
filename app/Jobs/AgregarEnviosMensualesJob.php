@@ -23,12 +23,14 @@ use Illuminate\Support\Facades\Log;
  *
  * @see EnvioMensual
  */
-class AgregarEnviosMensualesJob implements ShouldQueue, ShouldBeUniqueUntilProcessing
+class AgregarEnviosMensualesJob implements ShouldBeUniqueUntilProcessing, ShouldQueue
 {
     use Queueable;
 
     public int $timeout = 1800; // 30 minutos
+
     public int $tries = 3;
+
     public int $uniqueFor = 1800;
 
     private const CHUNK_SIZE = 10000;
@@ -55,11 +57,12 @@ class AgregarEnviosMensualesJob implements ShouldQueue, ShouldBeUniqueUntilProce
         ]);
 
         // Si ya existe y no forzamos recálculo, verificar si es necesario
-        if (!$this->forzarRecalculo && $this->yaFueAgregado()) {
+        if (! $this->forzarRecalculo && $this->yaFueAgregado()) {
             Log::info('⏭️ Mes ya agregado, saltando...', [
                 'anio' => $this->anio,
                 'mes' => $this->mes,
             ]);
+
             return;
         }
 

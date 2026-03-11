@@ -5,8 +5,6 @@ namespace App\Http\Controllers;
 use App\Models\Configuracion;
 use App\Models\Envio;
 use App\Models\Flujo;
-use App\Models\FlujoEjecucion;
-use App\Models\FlujoEjecucionEtapa;
 use App\Models\OfertaInfocom;
 use App\Models\Prospecto;
 use Carbon\Carbon;
@@ -65,7 +63,7 @@ class DashboardController extends Controller
 
     /**
      * Mensajes programados (pendientes de envío)
-     * 
+     *
      * Calcula el total de envíos programados basándose en:
      * 1. Etapas de ejecución pendientes × prospectos en cada ejecución
      * 2. Envíos en tabla envios con estado pendiente/programado (legacy)
@@ -113,7 +111,7 @@ class DashboardController extends Controller
             ")
             ->first();
 
-        if (!$stats || $stats->total === 0) {
+        if (! $stats || $stats->total === 0) {
             return 0.0;
         }
 

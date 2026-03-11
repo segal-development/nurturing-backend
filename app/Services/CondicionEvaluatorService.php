@@ -3,17 +3,16 @@
 namespace App\Services;
 
 use App\Models\Envio;
-use App\Models\FlujoEjecucion;
 use App\Models\FlujoEjecucionEtapa;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 
 /**
  * Servicio para evaluar condiciones por prospecto individual.
- * 
+ *
  * En lugar de evaluar estadísticas globales (ej: "¿alguien abrió?"),
  * evalúa cada prospecto individualmente y los separa en ramas Sí/No.
- * 
+ *
  * Ejemplo:
  * - 100 prospectos reciben email
  * - Condición: ¿Abrió email? (Views > 0)
@@ -24,13 +23,12 @@ class CondicionEvaluatorService
 {
     /**
      * Evalúa una condición para cada prospecto y los separa en ramas.
-     * 
-     * @param array $prospectoIds IDs de prospectos a evaluar
-     * @param int $etapaEmailId ID de la etapa de email anterior (para buscar envíos)
-     * @param string $checkParam Parámetro a evaluar (Views, Clicks, Bounces)
-     * @param string $checkOperator Operador de comparación (>, >=, ==, etc.)
-     * @param mixed $checkValue Valor esperado
-     * 
+     *
+     * @param  array  $prospectoIds  IDs de prospectos a evaluar
+     * @param  int  $etapaEmailId  ID de la etapa de email anterior (para buscar envíos)
+     * @param  string  $checkParam  Parámetro a evaluar (Views, Clicks, Bounces)
+     * @param  string  $checkOperator  Operador de comparación (>, >=, ==, etc.)
+     * @param  mixed  $checkValue  Valor esperado
      * @return array{
      *   rama_si: array<int>,
      *   rama_no: array<int>,
@@ -50,7 +48,7 @@ class CondicionEvaluatorService
 
         // Obtener todos los envíos de la etapa anterior para estos prospectos
         $envios = $this->obtenerEnviosPorEtapa($etapaEmailId, $prospectoIds);
-        
+
         // Crear un mapa de prospecto_id => envio para búsqueda rápida
         $enviosPorProspecto = $envios->keyBy('prospecto_id');
 
@@ -65,14 +63,15 @@ class CondicionEvaluatorService
         foreach ($prospectoIds as $prospectoId) {
             $envio = $enviosPorProspecto->get($prospectoId);
 
-            if (!$envio) {
+            if (! $envio) {
                 // Si no hay envío registrado, va a rama No (conservador)
                 $ramaNo[] = $prospectoId;
                 $sinEnvio++;
-                
+
                 Log::debug('CondicionEvaluatorService: Prospecto sin envío → rama No', [
                     'prospecto_id' => $prospectoId,
                 ]);
+
                 continue;
             }
 
@@ -114,11 +113,11 @@ class CondicionEvaluatorService
 
     /**
      * Evalúa si un prospecto individual cumple la condición.
-     * 
-     * @param Envio $envio El envío del prospecto
-     * @param string $checkParam Parámetro (Views, Clicks, Bounces)
-     * @param string $checkOperator Operador (>, >=, ==, etc.)
-     * @param mixed $checkValue Valor esperado
+     *
+     * @param  Envio  $envio  El envío del prospecto
+     * @param  string  $checkParam  Parámetro (Views, Clicks, Bounces)
+     * @param  string  $checkOperator  Operador (>, >=, ==, etc.)
+     * @param  mixed  $checkValue  Valor esperado
      * @return bool True si cumple la condición (va a rama Sí)
      */
     private function evaluarProspectoIndividual(
@@ -136,9 +135,7 @@ class CondicionEvaluatorService
 
     /**
      * Obtiene el valor de un parámetro para un prospecto específico.
-     * 
-     * @param Envio $envio
-     * @param string $checkParam
+     *
      * @return int|bool El valor del parámetro
      */
     private function obtenerValorProspecto(Envio $envio, string $checkParam): int|bool
@@ -146,19 +143,19 @@ class CondicionEvaluatorService
         return match (strtolower($checkParam)) {
             // Para Views: 1 si abrió, 0 si no
             'views', 'email_opened', 'aperturas' => $envio->fecha_abierto !== null ? 1 : 0,
-            
+
             // Para Clicks: 1 si clickeó, 0 si no
             'clicks', 'email_clicked' => $envio->fecha_clickeado !== null ? 1 : 0,
-            
+
             // Para Bounces: 1 si rebotó, 0 si no
             'bounces', 'email_bounced' => $envio->estado === 'bounced' ? 1 : 0,
-            
+
             // Para total de aperturas (número exacto)
             'total_aperturas' => $envio->total_aperturas ?? 0,
-            
+
             // Para total de clicks (número exacto)
             'total_clicks' => $envio->total_clicks ?? 0,
-            
+
             // Por defecto, retornar 0
             default => 0,
         };
@@ -166,11 +163,6 @@ class CondicionEvaluatorService
 
     /**
      * Compara dos valores según un operador.
-     * 
-     * @param int|bool $valorActual
-     * @param string $operador
-     * @param mixed $valorEsperado
-     * @return bool
      */
     private function compararValores(int|bool $valorActual, string $operador, mixed $valorEsperado): bool
     {
@@ -191,11 +183,11 @@ class CondicionEvaluatorService
 
     /**
      * Obtiene los envíos de una etapa para un conjunto de prospectos.
-     * 
+     *
      * Procesa en chunks para evitar el límite de 65,535 parámetros de PostgreSQL.
-     * 
-     * @param int $etapaEjecucionId ID de FlujoEjecucionEtapa
-     * @param array $prospectoIds IDs de prospectos
+     *
+     * @param  int  $etapaEjecucionId  ID de FlujoEjecucionEtapa
+     * @param  array  $prospectoIds  IDs de prospectos
      * @return Collection<Envio>
      */
     private function obtenerEnviosPorEtapa(int $etapaEjecucionId, array $prospectoIds): Collection
@@ -203,49 +195,45 @@ class CondicionEvaluatorService
         // PostgreSQL/PDO tiene límite de 65,535 parámetros por query
         // Usamos chunks de 10,000 para tener margen de seguridad
         $chunkSize = 10000;
-        
+
         if (count($prospectoIds) <= $chunkSize) {
             return Envio::where('flujo_ejecucion_etapa_id', $etapaEjecucionId)
                 ->whereIn('prospecto_id', $prospectoIds)
                 ->get();
         }
-        
+
         Log::info('CondicionEvaluatorService: Procesando envíos en chunks', [
             'total_prospectos' => count($prospectoIds),
             'chunk_size' => $chunkSize,
             'total_chunks' => ceil(count($prospectoIds) / $chunkSize),
         ]);
-        
+
         $envios = collect();
-        
+
         foreach (array_chunk($prospectoIds, $chunkSize) as $index => $chunk) {
             $chunkEnvios = Envio::where('flujo_ejecucion_etapa_id', $etapaEjecucionId)
                 ->whereIn('prospecto_id', $chunk)
                 ->get();
-            
+
             $envios = $envios->concat($chunkEnvios);
-            
+
             Log::debug('CondicionEvaluatorService: Chunk procesado', [
                 'chunk' => $index + 1,
                 'envios_en_chunk' => $chunkEnvios->count(),
                 'total_acumulado' => $envios->count(),
             ]);
         }
-        
+
         return $envios;
     }
 
     /**
      * Evalúa una condición usando estadísticas globales (fallback).
-     * 
+     *
      * Se usa cuando no hay envíos individuales registrados
      * o para compatibilidad con el comportamiento anterior.
-     * 
-     * @param array $stats Estadísticas globales de AthenaCampaign
-     * @param string $checkParam
-     * @param string $checkOperator
-     * @param mixed $checkValue
-     * @return bool
+     *
+     * @param  array  $stats  Estadísticas globales de AthenaCampaign
      */
     public function evaluarEstadisticasGlobales(
         array $stats,
@@ -254,6 +242,7 @@ class CondicionEvaluatorService
         mixed $checkValue
     ): bool {
         $valorActual = $stats[$checkParam] ?? 0;
+
         return $this->compararValores($valorActual, $checkOperator, $checkValue);
     }
 }

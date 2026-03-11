@@ -16,10 +16,10 @@ use Illuminate\Support\Facades\Log;
 
 /**
  * Job para sincronizar desuscripciones desde Athena Campaign API.
- * 
+ *
  * Este job consulta la API de Athena para obtener las estadísticas
  * de los envíos recientes y detectar nuevas desuscripciones.
- * 
+ *
  * Se ejecuta periódicamente (cada hora) vía scheduler.
  */
 class SincronizarDesuscripcionesAthenaJob implements ShouldQueue
@@ -27,6 +27,7 @@ class SincronizarDesuscripcionesAthenaJob implements ShouldQueue
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public int $tries = 3;
+
     public int $timeout = 300; // 5 minutos
 
     public function __construct(
@@ -95,7 +96,7 @@ class SincronizarDesuscripcionesAthenaJob implements ShouldQueue
     {
         $prospecto = Prospecto::find($envio->prospecto_id);
 
-        if (!$prospecto) {
+        if (! $prospecto) {
             return false;
         }
 
@@ -157,6 +158,7 @@ class SincronizarDesuscripcionesAthenaJob implements ShouldQueue
                 'prospecto_id' => $prospecto->id,
                 'error' => $e->getMessage(),
             ]);
+
             return false;
         }
     }

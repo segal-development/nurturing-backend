@@ -8,7 +8,7 @@ use Illuminate\Support\Facades\DB;
  *
  * Este estado se usa para prospectos que no han tenido interacción
  * en los últimos 3 meses y son archivados por el job de limpieza mensual.
- * 
+ *
  * NOTA: Esta migración es idempotente - puede correr múltiples veces sin error.
  */
 return new class extends Migration

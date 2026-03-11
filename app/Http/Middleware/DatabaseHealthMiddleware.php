@@ -11,13 +11,13 @@ use Symfony\Component\HttpFoundation\Response;
 
 /**
  * Middleware de protección de la API cuando la BD está saturada.
- * 
+ *
  * Estrategia:
  * 1. Verifica si hay un circuit breaker abierto (cache)
  * 2. Si no, hace un health check rápido a la BD
  * 3. Si falla, abre el circuit breaker y retorna 503
  * 4. Si pasa, continúa con el request
- * 
+ *
  * Esto previene que la API se quede colgada esperando una BD saturada,
  * fallando rápido con un error claro en vez de timeout.
  */
@@ -62,15 +62,16 @@ class DatabaseHealthMiddleware
         }
 
         // Hacer health check rápido
-        if (!$this->isDatabaseHealthy()) {
+        if (! $this->isDatabaseHealthy()) {
             $this->recordFailure();
-            
+
             // Si superamos el threshold, abrir el circuit
             if ($this->shouldOpenCircuit()) {
                 $this->openCircuit();
+
                 return $this->serviceUnavailableResponse('Base de datos saturada. Reintente en 30 segundos.');
             }
-            
+
             // Aún no abrimos el circuit, pero advertimos
             return $this->serviceUnavailableResponse('Base de datos lenta. Reintente en unos segundos.');
         }
@@ -87,13 +88,13 @@ class DatabaseHealthMiddleware
     private function shouldBypass(Request $request): bool
     {
         $path = $request->path();
-        
+
         foreach (self::BYPASS_ROUTES as $route) {
             if (str_starts_with($path, $route)) {
                 return true;
             }
         }
-        
+
         return false;
     }
 
@@ -111,7 +112,7 @@ class DatabaseHealthMiddleware
     private function openCircuit(): void
     {
         Cache::put('db_circuit_breaker_open', true, self::CIRCUIT_OPEN_DURATION);
-        
+
         Log::critical('DatabaseHealthMiddleware: Circuit breaker ABIERTO - BD no disponible', [
             'duration' => self::CIRCUIT_OPEN_DURATION,
             'timestamp' => now()->toISOString(),
@@ -125,27 +126,29 @@ class DatabaseHealthMiddleware
     {
         try {
             $startTime = microtime(true);
-            
+
             // Query simple y rápido - solo verifica conexión
             DB::select('SELECT 1');
-            
+
             $duration = (microtime(true) - $startTime) * 1000;
-            
+
             // Si tarda más de 2 segundos, consideramos que está lenta
             if ($duration > self::HEALTH_CHECK_TIMEOUT_MS) {
                 Log::warning('DatabaseHealthMiddleware: BD lenta', [
                     'duration_ms' => round($duration, 2),
                     'threshold_ms' => self::HEALTH_CHECK_TIMEOUT_MS,
                 ]);
+
                 return false;
             }
-            
+
             return true;
-            
+
         } catch (\Exception $e) {
             Log::error('DatabaseHealthMiddleware: BD no disponible', [
                 'error' => $e->getMessage(),
             ]);
+
             return false;
         }
     }

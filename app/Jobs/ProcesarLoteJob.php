@@ -18,15 +18,15 @@ use Illuminate\Support\Facades\Storage;
 
 /**
  * Job para procesar un LOTE COMPLETO de importaciones.
- * 
+ *
  * ESTRATEGIA: Un solo job procesa TODOS los archivos del lote secuencialmente.
  * Esto elimina problemas de concurrencia, race conditions y cache desincronizado.
- * 
+ *
  * FLUJO:
  * 1. Obtener todas las importaciones pendientes/procesando del lote
  * 2. Procesar cada una secuencialmente
  * 3. Si se cae, retomar desde el archivo y fila donde quedó
- * 
+ *
  * CHECKPOINT:
  * - Se guarda en lote.metadata: current_importacion_id, last_processed_row
  * - Cada importación tiene su propio checkpoint también
@@ -40,8 +40,11 @@ class ProcesarLoteJob implements ShouldQueue
     // =========================================================================
 
     public int $tries = 9999;
+
     public int $timeout = 0;
+
     public bool $failOnTimeout = false;
+
     public int $backoff = 30;
 
     // =========================================================================
@@ -71,16 +74,18 @@ class ProcesarLoteJob implements ShouldQueue
         $this->logInicio();
 
         $lote = Lote::find($this->loteId);
-        
-        if (!$lote) {
+
+        if (! $lote) {
             $this->logLoteNoEncontrado();
             $this->delete();
+
             return;
         }
 
         if ($this->esEstadoFinal($lote)) {
             $this->logLoteYaFinalizado($lote);
             $this->delete();
+
             return;
         }
 
@@ -102,7 +107,7 @@ class ProcesarLoteJob implements ShouldQueue
 
     /**
      * Procesa todas las importaciones del lote secuencialmente.
-     * 
+     *
      * Usa un loop con refresh para detectar nuevas importaciones
      * que se agreguen mientras el job está corriendo.
      */
@@ -110,22 +115,23 @@ class ProcesarLoteJob implements ShouldQueue
     {
         $procesadas = [];
         $intentosSinNuevas = 0;
-        
+
         while ($intentosSinNuevas < self::MAX_INTENTOS_SIN_NUEVAS) {
             $lote->refresh();
-            
+
             $importaciones = $this->obtenerImportacionesPendientes($lote, $procesadas);
 
             if ($importaciones->isEmpty()) {
                 $intentosSinNuevas++;
-                
+
                 if ($intentosSinNuevas < self::MAX_INTENTOS_SIN_NUEVAS) {
                     $this->logEsperandoNuevasImportaciones($lote, $intentosSinNuevas, count($procesadas));
                     sleep(self::SEGUNDOS_ESPERA_NUEVAS);
                 }
+
                 continue;
             }
-            
+
             $intentosSinNuevas = 0;
             $this->logProcesandoImportaciones($lote, $importaciones, count($procesadas));
 
@@ -134,7 +140,7 @@ class ProcesarLoteJob implements ShouldQueue
                 $procesadas[] = $importacion->id;
             }
         }
-        
+
         $this->logTodasProcesadas($lote, count($procesadas));
     }
 
@@ -152,7 +158,7 @@ class ProcesarLoteJob implements ShouldQueue
 
     /**
      * Procesa una importación individual.
-     * 
+     *
      * IMPORTANTE: Libera memoria después de cada archivo para evitar OOM.
      */
     private function procesarImportacion(Importacion $importacion, Lote $lote): void
@@ -167,9 +173,9 @@ class ProcesarLoteJob implements ShouldQueue
             $tempPath = $this->descargarArchivo($importacion);
             $this->procesarConServicio($importacion, $tempPath);
             $this->cleanup($importacion, $tempPath);
-            
+
             unset($tempPath);
-            
+
             $this->logImportacionCompletada($lote, $importacion);
             $lote->recalcularTotales();
             $this->liberarMemoria();
@@ -182,22 +188,22 @@ class ProcesarLoteJob implements ShouldQueue
     private function procesarConServicio(Importacion $importacion, string $tempPath): void
     {
         $this->actualizarMetadataInicio($importacion, $tempPath);
-        
+
         $this->logCreandoServicio($importacion);
         $service = new ProspectoImportService($importacion, $tempPath);
-        
+
         $this->logIniciandoImport($importacion);
         $service->import();
 
         $this->verificarYForzarCompletado($importacion, $service);
-        
+
         unset($service);
     }
 
     private function verificarYForzarCompletado(Importacion $importacion, ProspectoImportService $service): void
     {
         $importacion->refresh();
-        
+
         if ($importacion->estado !== 'procesando') {
             return;
         }
@@ -226,16 +232,16 @@ class ProcesarLoteJob implements ShouldQueue
     private function descargarArchivo(Importacion $importacion): string
     {
         $this->logDescargandoArchivo($importacion);
-        
+
         $disk = $importacion->metadata['disk'] ?? 'gcs';
         $rutaArchivo = $importacion->ruta_archivo;
 
-        if (!Storage::disk($disk)->exists($rutaArchivo)) {
+        if (! Storage::disk($disk)->exists($rutaArchivo)) {
             throw new \Exception("Archivo no encontrado en storage: {$rutaArchivo}");
         }
 
         $content = Storage::disk($disk)->get($rutaArchivo);
-        $tempPath = sys_get_temp_dir() . '/' . uniqid('import_') . '.xlsx';
+        $tempPath = sys_get_temp_dir().'/'.uniqid('import_').'.xlsx';
         file_put_contents($tempPath, $content);
 
         $this->logArchivoDescargado($importacion, strlen($content));
@@ -262,7 +268,7 @@ class ProcesarLoteJob implements ShouldQueue
     private function actualizarMetadataInicio(Importacion $importacion, string $tempPath): void
     {
         $this->logArchivoDescargadoIniciandoProcesamiento($importacion, $tempPath);
-        
+
         $importacion->update([
             'metadata' => array_merge($importacion->metadata ?? [], [
                 'procesamiento_iniciado_en' => now()->toISOString(),
@@ -347,14 +353,14 @@ class ProcesarLoteJob implements ShouldQueue
         $lote->recalcularTotales();
 
         $importaciones = $lote->importaciones()->get();
-        
-        if (!$this->todasFinalizadas($importaciones)) {
+
+        if (! $this->todasFinalizadas($importaciones)) {
             return;
         }
 
         $algunaFallida = $this->tieneAlgunaFallida($importaciones);
         $estadoFinal = $algunaFallida ? 'fallido' : 'completado';
-        
+
         $this->marcarLoteComoFinalizado($lote, $estadoFinal);
         $this->logLoteFinalizado($lote, $estadoFinal);
     }
@@ -362,13 +368,13 @@ class ProcesarLoteJob implements ShouldQueue
     private function todasFinalizadas(Collection $importaciones): bool
     {
         return $importaciones->every(
-            fn($i) => in_array($i->estado, ['completado', 'fallido'])
+            fn ($i) => in_array($i->estado, ['completado', 'fallido'])
         );
     }
 
     private function tieneAlgunaFallida(Collection $importaciones): bool
     {
-        return $importaciones->contains(fn($i) => $i->estado === 'fallido');
+        return $importaciones->contains(fn ($i) => $i->estado === 'fallido');
     }
 
     private function marcarLoteComoFinalizado(Lote $lote, string $estadoFinal): void

@@ -6,10 +6,10 @@ use Illuminate\Support\Facades\Schema;
 
 /**
  * Migración para soportar filtrado de prospectos por condición.
- * 
+ *
  * Permite que cada nodo condicional evalúe a cada prospecto individualmente
  * y los dirija a la rama correspondiente (Sí/No).
- * 
+ *
  * Ejemplo:
  * - 100 prospectos reciben email
  * - Condición: ¿Abrió email?

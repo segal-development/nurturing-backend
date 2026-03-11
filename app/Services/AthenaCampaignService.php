@@ -41,7 +41,7 @@ class AthenaCampaignService
      *     "Unsubscribes": 0  // Bajas (si disponible)
      *   }
      * }
-     * 
+     *
      * También soporta estadísticas mockeadas para testing:
      * Si existe cache key "mock_stats_{messageId}", usa esos datos en lugar de llamar a la API
      */
@@ -148,6 +148,7 @@ class AthenaCampaignService
 
                 if (empty($phone)) {
                     $errores[] = ['phone' => $phone, 'error' => 'Teléfono vacío'];
+
                     continue;
                 }
 
@@ -166,6 +167,7 @@ class AthenaCampaignService
                     ]);
 
                     $errores[] = ['phone' => $phone, 'error' => $errorMsg, 'status' => $response->status()];
+
                     continue;
                 }
 
@@ -212,8 +214,8 @@ class AthenaCampaignService
     /**
      * Envía un SMS directo a un número (para alertas del sistema)
      *
-     * @param string $telefono Número con código país (+56...)
-     * @param string $mensaje Texto del SMS (máx 160 caracteres)
+     * @param  string  $telefono  Número con código país (+56...)
+     * @param  string  $mensaje  Texto del SMS (máx 160 caracteres)
      * @return array{success: bool, message_id: string|null, error: string|null}
      */
     public function enviarSmsDirecto(string $telefono, string $mensaje): array
@@ -230,7 +232,7 @@ class AthenaCampaignService
                 'MESSAGE' => $mensaje,
             ]);
 
-            if (!$response->successful()) {
+            if (! $response->successful()) {
                 Log::error('AthenaCampaign SMS Directo: Error HTTP', [
                     'telefono' => $telefono,
                     'status' => $response->status(),

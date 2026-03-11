@@ -2,13 +2,11 @@
 
 namespace App\Jobs;
 
-use App\Models\Envio;
 use App\Models\FlujoCondicion;
 use App\Models\FlujoEjecucion;
 use App\Models\FlujoEjecucionCondicion;
 use App\Models\FlujoEjecucionEtapa;
 use App\Models\FlujoJob;
-use App\Services\AthenaCampaignService;
 use App\Services\CondicionEvaluatorService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -19,9 +17,9 @@ use Illuminate\Support\Facades\Log;
 
 /**
  * Job para verificar condiciones y filtrar prospectos por rama.
- * 
+ *
  * Este job evalúa CADA PROSPECTO individualmente y los separa en ramas Sí/No.
- * 
+ *
  * Ejemplo:
  * - 100 prospectos reciben email
  * - Condición: ¿Abrió email?
@@ -40,12 +38,12 @@ class VerificarCondicionJob implements ShouldQueue
 
     /**
      * Create a new job instance.
-     * 
-     * @param int $flujoEjecucionId ID de la ejecución del flujo
-     * @param int $etapaEjecucionId ID de la etapa de la condición
-     * @param array $condicion Datos de la condición (target_node_id, source_node_id)
-     * @param int $messageId ID del mensaje en AthenaCampaign (para fallback)
-     * @param array|null $prospectoIds IDs de prospectos a evaluar (si null, usa los de la ejecución)
+     *
+     * @param  int  $flujoEjecucionId  ID de la ejecución del flujo
+     * @param  int  $etapaEjecucionId  ID de la etapa de la condición
+     * @param  array  $condicion  Datos de la condición (target_node_id, source_node_id)
+     * @param  int  $messageId  ID del mensaje en AthenaCampaign (para fallback)
+     * @param  array|null  $prospectoIds  IDs de prospectos a evaluar (si null, usa los de la ejecución)
      */
     public function __construct(
         public int $flujoEjecucionId,
@@ -78,9 +76,9 @@ class VerificarCondicionJob implements ShouldQueue
             // 2. Obtener configuración de la condición
             $conditionNodeId = $this->condicion['target_node_id'];
             $sourceNodeId = $this->condicion['source_node_id'] ?? null;
-            
+
             $flujoCondicion = FlujoCondicion::find($conditionNodeId);
-            
+
             if ($flujoCondicion) {
                 $checkParam = $flujoCondicion->check_param;
                 $checkOperator = $flujoCondicion->check_operator;
@@ -91,7 +89,7 @@ class VerificarCondicionJob implements ShouldQueue
                 $checkParam = $conditionData['check_param'] ?? 'Views';
                 $checkOperator = $conditionData['check_operator'] ?? '>';
                 $checkValue = $conditionData['check_value'] ?? '0';
-                
+
                 Log::warning('VerificarCondicionJob: Condición no encontrada en BD, usando fallback', [
                     'condition_node_id' => $conditionNodeId,
                 ]);
@@ -99,32 +97,34 @@ class VerificarCondicionJob implements ShouldQueue
 
             // 3. Obtener prospectos a evaluar
             // Prioridad: parámetro del job > etapa > ejecución
-            $prospectoIds = $this->prospectoIds 
-                ?? $etapaEjecucion->prospectos_ids 
-                ?? $ejecucion->prospectos_ids 
+            $prospectoIds = $this->prospectoIds
+                ?? $etapaEjecucion->prospectos_ids
+                ?? $ejecucion->prospectos_ids
                 ?? [];
 
             if (empty($prospectoIds)) {
                 Log::warning('VerificarCondicionJob: No hay prospectos para evaluar', [
                     'flujo_ejecucion_id' => $this->flujoEjecucionId,
                 ]);
+
                 return;
             }
 
             // 4. Obtener la etapa de email anterior (para buscar envíos)
             $etapaEmailAnterior = $this->obtenerEtapaEmailAnterior($ejecucion, $sourceNodeId);
 
-            if (!$etapaEmailAnterior) {
+            if (! $etapaEmailAnterior) {
                 Log::error('VerificarCondicionJob: No se encontró etapa de email anterior', [
                     'flujo_ejecucion_id' => $this->flujoEjecucionId,
                     'source_node_id' => $sourceNodeId,
                 ]);
-                
+
                 // Marcar la etapa como fallida
                 $etapaEjecucion->update([
                     'estado' => 'failed',
                     'error_mensaje' => 'No se encontró etapa de email anterior para evaluar condición',
                 ]);
+
                 return;
             }
 
@@ -240,7 +240,7 @@ class VerificarCondicionJob implements ShouldQueue
         $branches = $flujoData['branches'] ?? [];
 
         // Programar rama Sí (si hay prospectos)
-        if (!empty($resultado['rama_si'])) {
+        if (! empty($resultado['rama_si'])) {
             $this->programarRama(
                 $ejecucion,
                 $condicion->condition_node_id,
@@ -256,7 +256,7 @@ class VerificarCondicionJob implements ShouldQueue
         }
 
         // Programar rama No (si hay prospectos)
-        if (!empty($resultado['rama_no'])) {
+        if (! empty($resultado['rama_no'])) {
             $this->programarRama(
                 $ejecucion,
                 $condicion->condition_node_id,
@@ -289,17 +289,18 @@ class VerificarCondicionJob implements ShouldQueue
         // Buscar conexión para esta rama
         $siguienteConexion = collect($branches)->first(function ($branch) use ($conditionNodeId, $rama) {
             $sourceHandle = $branch['source_handle'] ?? '';
-            
-            $handleMatchesRama = $sourceHandle === $rama 
-                || str_ends_with($sourceHandle, '-' . $rama);
-            
+
+            $handleMatchesRama = $sourceHandle === $rama
+                || str_ends_with($sourceHandle, '-'.$rama);
+
             return $branch['source_node_id'] === $conditionNodeId && $handleMatchesRama;
         });
 
-        if (!$siguienteConexion) {
+        if (! $siguienteConexion) {
             Log::info("VerificarCondicionJob: No hay conexión para rama {$rama}", [
                 'condition_node_id' => $conditionNodeId,
             ]);
+
             return;
         }
 
@@ -311,23 +312,25 @@ class VerificarCondicionJob implements ShouldQueue
                 'end_node_id' => $siguienteNodeId,
                 'prospectos_finalizados' => count($prospectoIds),
             ]);
+
             return;
         }
 
         // Buscar datos del siguiente nodo (puede ser stage o condition)
         $stages = $flujoData['stages'] ?? [];
         $conditions = $flujoData['conditions'] ?? [];
-        
+
         $siguienteStage = collect($stages)->firstWhere('id', $siguienteNodeId);
-        
-        if (!$siguienteStage) {
+
+        if (! $siguienteStage) {
             $siguienteStage = collect($conditions)->firstWhere('id', $siguienteNodeId);
         }
 
-        if (!$siguienteStage) {
+        if (! $siguienteStage) {
             Log::warning("VerificarCondicionJob: No se encontró el nodo {$siguienteNodeId}", [
                 'rama' => $rama,
             ]);
+
             return;
         }
 
@@ -404,7 +407,7 @@ class VerificarCondicionJob implements ShouldQueue
 
     /**
      * Obtiene la etapa de email anterior para buscar envíos.
-     * 
+     *
      * Estrategia de búsqueda (en orden de prioridad):
      * 1. Por source_etapa_id guardado en response_athenacampaign de la condición
      * 2. Por source_node_id si es un stage (no condition)
@@ -417,18 +420,19 @@ class VerificarCondicionJob implements ShouldQueue
         // 1. Intentar obtener source_etapa_id del response de la condición
         $etapaCondicion = FlujoEjecucionEtapa::find($this->etapaEjecucionId);
         $responseData = $etapaCondicion?->response_athenacampaign ?? [];
-        
-        if (!empty($responseData['source_etapa_id'])) {
+
+        if (! empty($responseData['source_etapa_id'])) {
             $etapa = FlujoEjecucionEtapa::find($responseData['source_etapa_id']);
             if ($etapa && $etapa->message_id) {
                 Log::info('VerificarCondicionJob: Usando source_etapa_id del response', [
                     'source_etapa_id' => $responseData['source_etapa_id'],
                     'message_id' => $etapa->message_id,
                 ]);
+
                 return $etapa;
             }
         }
-        
+
         // 2. Si source_node_id es un stage (no una condición), buscar por node_id
         if ($sourceNodeId && str_starts_with($sourceNodeId, 'stage-')) {
             $etapa = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
@@ -436,16 +440,17 @@ class VerificarCondicionJob implements ShouldQueue
                 ->where('ejecutado', true)
                 ->whereNotNull('message_id')
                 ->first();
-            
+
             if ($etapa) {
                 Log::info('VerificarCondicionJob: Usando etapa por source_node_id', [
                     'source_node_id' => $sourceNodeId,
                     'message_id' => $etapa->message_id,
                 ]);
+
                 return $etapa;
             }
         }
-        
+
         // 3. Fallback: buscar la última etapa ejecutada con message_id
         // Esto cubre casos donde la condición viene justo después de una etapa
         $etapa = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
@@ -454,7 +459,7 @@ class VerificarCondicionJob implements ShouldQueue
             ->where('id', '!=', $this->etapaEjecucionId) // Excluir la condición actual
             ->orderBy('fecha_ejecucion', 'desc')
             ->first();
-        
+
         if ($etapa) {
             Log::info('VerificarCondicionJob: Usando fallback - última etapa ejecutada', [
                 'etapa_id' => $etapa->id,
@@ -462,7 +467,7 @@ class VerificarCondicionJob implements ShouldQueue
                 'message_id' => $etapa->message_id,
             ]);
         }
-        
+
         return $etapa;
     }
 

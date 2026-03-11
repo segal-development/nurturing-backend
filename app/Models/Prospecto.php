@@ -130,12 +130,12 @@ class Prospecto extends Model
             return false;
         }
 
-        if (!$this->preferencias_comunicacion) {
+        if (! $this->preferencias_comunicacion) {
             return true;
         }
 
         if ($canal === 'todos') {
-            return ($this->preferencias_comunicacion['email'] ?? true) 
+            return ($this->preferencias_comunicacion['email'] ?? true)
                 || ($this->preferencias_comunicacion['sms'] ?? true);
         }
 
@@ -166,7 +166,7 @@ class Prospecto extends Model
         return $query->where('estado', '!=', 'desuscrito')
             ->where(function ($q) {
                 $q->whereNull('preferencias_comunicacion')
-                  ->orWhereRaw("(preferencias_comunicacion->>'email')::boolean = true");
+                    ->orWhereRaw("(preferencias_comunicacion->>'email')::boolean = true");
             });
     }
 
@@ -178,7 +178,7 @@ class Prospecto extends Model
         return $query->where('estado', '!=', 'desuscrito')
             ->where(function ($q) {
                 $q->whereNull('preferencias_comunicacion')
-                  ->orWhereRaw("(preferencias_comunicacion->>'sms')::boolean = true");
+                    ->orWhereRaw("(preferencias_comunicacion->>'sms')::boolean = true");
             });
     }
 
@@ -193,7 +193,7 @@ class Prospecto extends Model
     {
         return $query->where(function ($q) {
             $q->where('email_invalido', false)
-              ->orWhereNull('email_invalido');
+                ->orWhereNull('email_invalido');
         });
     }
 
@@ -214,7 +214,7 @@ class Prospecto extends Model
         return $query->where('estado', '!=', 'desuscrito')
             ->where(function ($q) {
                 $q->where('email_invalido', false)
-                  ->orWhereNull('email_invalido');
+                    ->orWhereNull('email_invalido');
             })
             ->whereNotNull('email')
             ->where('email', '!=', '');
@@ -225,15 +225,15 @@ class Prospecto extends Model
      */
     public function tieneEmailValido(): bool
     {
-        return !empty($this->email) 
-            && !$this->email_invalido 
+        return ! empty($this->email)
+            && ! $this->email_invalido
             && $this->estado !== 'desuscrito';
     }
 
     /**
      * Marca el email como inválido con un motivo.
-     * 
-     * @param string $motivo Razón por la que el email es inválido
+     *
+     * @param  string  $motivo  Razón por la que el email es inválido
      */
     public function marcarEmailInvalido(string $motivo): void
     {
@@ -267,14 +267,14 @@ class Prospecto extends Model
 
     /**
      * Get the origen from the related importacion.
-     * 
+     *
      * Only accesses the relation if already eager-loaded to prevent N+1 queries.
      * Before: Triggered a lazy-load query per prospecto in list views (50 prospectos = 50 queries).
      * After: Returns null if importacion is not eager-loaded. Callers must use ->with('importacion').
      */
     public function getOrigenAttribute(): ?string
     {
-        if (!$this->relationLoaded('importacion')) {
+        if (! $this->relationLoaded('importacion')) {
             return null;
         }
 

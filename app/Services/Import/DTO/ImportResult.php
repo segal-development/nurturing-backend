@@ -6,7 +6,7 @@ namespace App\Services\Import\DTO;
 
 /**
  * DTO que encapsula el resultado final de una importación.
- * 
+ *
  * Inmutable y completo para evitar pasar múltiples parámetros.
  */
 final readonly class ImportResult

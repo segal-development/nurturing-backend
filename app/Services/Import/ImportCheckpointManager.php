@@ -12,13 +12,13 @@ use Illuminate\Support\Facades\Log;
 
 /**
  * Maneja los checkpoints de importación para soportar resume.
- * 
+ *
  * Responsabilidades:
  * - Guardar progreso periódicamente (checkpoints)
  * - Enviar heartbeats para indicar que el proceso está vivo
  * - Marcar importaciones como completadas/fallidas
  * - Actualizar el lote padre cuando corresponde
- * 
+ *
  * @see ImportProgress DTO que maneja el estado del progreso
  */
 final class ImportCheckpointManager
@@ -29,10 +29,10 @@ final class ImportCheckpointManager
 
     /** Guardar checkpoint completo cada N filas */
     private const CHECKPOINT_INTERVAL = 5000;
-    
+
     /** Enviar heartbeat (touch) cada N filas */
     private const HEARTBEAT_INTERVAL = 1000;
-    
+
     /** Máximo de errores a almacenar (para no consumir memoria) */
     private const MAX_ERRORS_STORED = 100;
 
@@ -41,10 +41,13 @@ final class ImportCheckpointManager
     // =========================================================================
 
     private Importacion $importacion;
+
     private ImportProgress $progress;
+
     private int $lastCheckpointRow = 0;
+
     private int $lastHeartbeatRow = 0;
-    
+
     /** @var array<array{fila: int, errores: array}> */
     private array $errores = [];
 
@@ -142,6 +145,7 @@ final class ImportCheckpointManager
             $this->saveCheckpoint();
             $this->lastCheckpointRow = $currentRow;
             $this->lastHeartbeatRow = $currentRow;
+
             return;
         }
 
@@ -185,7 +189,7 @@ final class ImportCheckpointManager
     public function saveEstimatedTotal(int $estimatedRows): void
     {
         $this->updateMetadata(['total_estimado' => $estimatedRows]);
-        
+
         $this->logInfo('Total estimado guardado', [
             'total_estimado' => $estimatedRows,
         ]);
@@ -265,6 +269,7 @@ final class ImportCheckpointManager
 
     /**
      * Marca la importación como completada con parámetros individuales.
+     *
      * @deprecated Use markAsCompleted(ImportResult) instead
      */
     public function markAsCompletedLegacy(
@@ -329,14 +334,14 @@ final class ImportCheckpointManager
 
     /**
      * Actualiza el lote padre cuando una importación termina.
-     * 
+     *
      * IMPORTANTE: Solo recalcula totales, NO cierra el lote automáticamente.
      * El lote solo se cierra via POST /api/lotes/{id}/cerrar.
      */
     private function updateLoteIfExists(): void
     {
         $this->importacion->refresh();
-        
+
         $lote = $this->getLoteIfExists();
         if ($lote === null) {
             return;
@@ -347,7 +352,7 @@ final class ImportCheckpointManager
 
     private function getLoteIfExists(): ?Lote
     {
-        if (!$this->importacion->lote_id) {
+        if (! $this->importacion->lote_id) {
             return null;
         }
 
@@ -357,7 +362,7 @@ final class ImportCheckpointManager
     private function recalcularTotalesLote(Lote $lote): void
     {
         $importaciones = $lote->importaciones()->get();
-        
+
         $totales = $this->calcularTotalesImportaciones($importaciones);
         $estadoLote = $this->determinarEstadoLote($importaciones);
 

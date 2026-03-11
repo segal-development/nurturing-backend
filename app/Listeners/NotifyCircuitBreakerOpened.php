@@ -8,7 +8,7 @@ use Illuminate\Support\Facades\Log;
 
 /**
  * Listener que notifica cuando el circuit breaker se abre.
- * 
+ *
  * Usa el AlertasService para enviar:
  * - SMS a los números configurados (alerta crítica)
  * - Email a los destinatarios configurados

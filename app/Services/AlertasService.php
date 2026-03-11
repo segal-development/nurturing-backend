@@ -2,17 +2,17 @@
 
 namespace App\Services;
 
+use App\Mail\AlertaCriticaMail;
+use App\Mail\AlertaWarningMail;
+use App\Mail\ResumenDiarioMail;
 use App\Models\Envio;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
-use App\Mail\AlertaCriticaMail;
-use App\Mail\AlertaWarningMail;
-use App\Mail\ResumenDiarioMail;
 
 /**
  * Servicio centralizado de alertas del sistema.
- * 
+ *
  * Niveles de alerta:
  * - CRÍTICO (SMS + Email): Sistema caído, circuit breaker abierto
  * - WARNING (Email): Tasa de error alta, cola saturada
@@ -22,19 +22,20 @@ class AlertasService
 {
     /**
      * Envía una alerta crítica (SMS + Email)
-     * 
+     *
      * Usado para: circuit breaker abierto, sistema caído, errores masivos
      */
     public function alertaCritica(string $titulo, string $mensaje, array $contexto = []): void
     {
-        if (!config('envios.alerts.enabled.critical', true)) {
+        if (! config('envios.alerts.enabled.critical', true)) {
             return;
         }
 
         // Verificar cooldown para evitar spam
-        $cacheKey = 'alerta_critica_' . md5($titulo);
+        $cacheKey = 'alerta_critica_'.md5($titulo);
         if ($this->estaDentroDeCooldown($cacheKey)) {
             Log::info('[Alertas] Alerta crítica en cooldown, omitiendo', ['titulo' => $titulo]);
+
             return;
         }
 
@@ -63,19 +64,20 @@ class AlertasService
 
     /**
      * Envía una alerta de warning (solo Email)
-     * 
+     *
      * Usado para: tasa de error alta, cola saturada, warnings
      */
     public function alertaWarning(string $titulo, string $mensaje, array $contexto = []): void
     {
-        if (!config('envios.alerts.enabled.warning', true)) {
+        if (! config('envios.alerts.enabled.warning', true)) {
             return;
         }
 
         // Verificar cooldown
-        $cacheKey = 'alerta_warning_' . md5($titulo);
+        $cacheKey = 'alerta_warning_'.md5($titulo);
         if ($this->estaDentroDeCooldown($cacheKey)) {
             Log::info('[Alertas] Alerta warning en cooldown, omitiendo', ['titulo' => $titulo]);
+
             return;
         }
 
@@ -98,12 +100,12 @@ class AlertasService
 
     /**
      * Envía una alerta informativa (solo Email)
-     * 
+     *
      * Usado para: resumen diario, notificaciones generales
      */
     public function alertaInfo(string $titulo, string $mensaje, array $contexto = []): void
     {
-        if (!config('envios.alerts.enabled.info', true)) {
+        if (! config('envios.alerts.enabled.info', true)) {
             return;
         }
 
@@ -136,7 +138,7 @@ class AlertasService
 
     /**
      * Alerta cuando el circuit breaker se abre
-     * 
+     *
      * DISABLED: Con 20+ workers y alto volumen, el circuit breaker se abre/cierra
      * frecuentemente de forma normal. Solo se loguea, no se envía alerta.
      */
@@ -164,7 +166,7 @@ class AlertasService
 
         $this->alertaWarning(
             "⚠️ Tasa de Error Alta: {$tasaError}%",
-            "La tasa de error de envíos ha superado el umbral del {$umbral}%. " .
+            "La tasa de error de envíos ha superado el umbral del {$umbral}%. ".
             "En la última hora: {$enviosFallidos} fallidos de {$enviosTotales} totales.",
             [
                 'tasa_error' => $tasaError,
@@ -188,8 +190,8 @@ class AlertasService
 
         $this->alertaWarning(
             "⚠️ Cola Saturada: {$jobsPendientes} jobs pendientes",
-            "La cola de envíos tiene {$jobsPendientes} trabajos pendientes, superando el umbral de {$umbral}. " .
-            "Esto puede causar retrasos en los envíos.",
+            "La cola de envíos tiene {$jobsPendientes} trabajos pendientes, superando el umbral de {$umbral}. ".
+            'Esto puede causar retrasos en los envíos.',
             [
                 'jobs_pendientes' => $jobsPendientes,
                 'umbral' => $umbral,
@@ -210,6 +212,7 @@ class AlertasService
 
         if (empty($numeros)) {
             Log::warning('[Alertas] No hay números SMS configurados para alertas críticas');
+
             return;
         }
 
@@ -222,7 +225,7 @@ class AlertasService
         foreach ($numeros as $numero) {
             try {
                 $resultado = $athena->enviarSmsDirecto($numero, $smsTexto);
-                
+
                 if ($resultado['success']) {
                     Log::info('[Alertas] SMS crítico enviado', ['numero' => $numero]);
                 } else {
@@ -249,6 +252,7 @@ class AlertasService
 
         if (empty($emails)) {
             Log::warning('[Alertas] No hay emails configurados para alertas');
+
             return;
         }
 
@@ -327,13 +331,13 @@ class AlertasService
      */
     private function formatearResumenDiario(array $metricas): string
     {
-        return "📊 Resumen de Envíos - {$metricas['fecha']}\n\n" .
-            "Total de envíos: {$metricas['total_envios']}\n" .
-            "✅ Exitosos: {$metricas['exitosos']}\n" .
-            "❌ Fallidos: {$metricas['fallidos']}\n" .
-            "📈 Tasa de éxito: {$metricas['tasa_exito']}%\n\n" .
-            "Por canal:\n" .
-            "📧 Email: {$metricas['por_canal']['email']}\n" .
+        return "📊 Resumen de Envíos - {$metricas['fecha']}\n\n".
+            "Total de envíos: {$metricas['total_envios']}\n".
+            "✅ Exitosos: {$metricas['exitosos']}\n".
+            "❌ Fallidos: {$metricas['fallidos']}\n".
+            "📈 Tasa de éxito: {$metricas['tasa_exito']}%\n\n".
+            "Por canal:\n".
+            "📧 Email: {$metricas['por_canal']['email']}\n".
             "📱 SMS: {$metricas['por_canal']['sms']}";
     }
 
@@ -360,6 +364,7 @@ class AlertasService
     private function getAlertEmails(): array
     {
         $emails = config('envios.alerts.emails', '');
+
         return array_filter(array_map('trim', explode(',', $emails)));
     }
 
@@ -369,6 +374,7 @@ class AlertasService
     private function getSmsNumbers(): array
     {
         $numbers = config('envios.alerts.sms_numbers', '');
+
         return array_filter(array_map('trim', explode(',', $numbers)));
     }
 }

@@ -14,11 +14,10 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Log;
-use Throwable;
 
 /**
  * Job que procesa un chunk de prospectos para envío de emails.
- * 
+ *
  * Este job obtiene los prospectos de la BD usando offset/limit,
  * sin cargar todo en memoria. Es despachado por EnviarEtapaJob
  * para volúmenes grandes (>5000 prospectos).
@@ -28,7 +27,9 @@ class EnviarEtapaChunkJob implements ShouldQueue
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public $timeout = 300;
+
     public $tries = 3;
+
     public $backoff = [60, 300, 900];
 
     public function __construct(
@@ -56,14 +57,16 @@ class EnviarEtapaChunkJob implements ShouldQueue
         ]);
 
         $ejecucion = FlujoEjecucion::find($this->flujoEjecucionId);
-        if (!$ejecucion) {
+        if (! $ejecucion) {
             Log::error('EnviarEtapaChunkJob: Ejecución no encontrada');
+
             return;
         }
 
         $etapaEjecucion = FlujoEjecucionEtapa::find($this->etapaEjecucionId);
-        if (!$etapaEjecucion) {
+        if (! $etapaEjecucion) {
             Log::error('EnviarEtapaChunkJob: Etapa no encontrada');
+
             return;
         }
 
@@ -74,6 +77,7 @@ class EnviarEtapaChunkJob implements ShouldQueue
             Log::warning('EnviarEtapaChunkJob: Chunk vacío', [
                 'chunk_index' => $this->chunkIndex,
             ]);
+
             return;
         }
 
@@ -92,6 +96,7 @@ class EnviarEtapaChunkJob implements ShouldQueue
 
         if (empty($jobs)) {
             Log::warning('EnviarEtapaChunkJob: No se crearon jobs para el chunk');
+
             return;
         }
 
@@ -148,7 +153,7 @@ class EnviarEtapaChunkJob implements ShouldQueue
 
         $idsToCreate = array_diff($prospectoIds, $existingIds);
 
-        if (!empty($idsToCreate)) {
+        if (! empty($idsToCreate)) {
             $now = now();
             $insertData = array_map(function ($prospectoId) use ($tipoMensaje, $now) {
                 return [
@@ -208,7 +213,7 @@ class EnviarEtapaChunkJob implements ShouldQueue
         }
 
         $contenido = $this->stage['plantilla_mensaje'] ?? $this->stage['data']['contenido'] ?? '';
-        
+
         return [
             'contenido' => $contenido,
             'asunto' => $this->stage['template']['asunto'] ?? $this->stage['data']['template']['asunto'] ?? null,

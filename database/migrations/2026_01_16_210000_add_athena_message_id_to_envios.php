@@ -8,7 +8,7 @@ return new class extends Migration
 {
     /**
      * Agrega campo para almacenar el messageID de Athena Campaign.
-     * 
+     *
      * Esto permite sincronizar estadísticas (aperturas, clicks, bounces, unsubscribes)
      * desde la API de Athena.
      */
@@ -21,7 +21,7 @@ return new class extends Migration
         Schema::table('envios', function (Blueprint $table) {
             $table->string('athena_message_id', 50)->nullable()->after('tracking_token');
             $table->timestamp('athena_synced_at')->nullable()->after('athena_message_id');
-            
+
             $table->index('athena_message_id');
         });
     }

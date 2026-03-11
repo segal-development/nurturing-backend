@@ -74,16 +74,16 @@ class FlujoEtapa extends Model
 
     /**
      * Obtiene el contenido a enviar, ya sea de la plantilla o inline
-     * 
-     * @param string $tipo 'sms' o 'email'
+     *
+     * @param  string  $tipo  'sms' o 'email'
      * @return array{contenido: string, asunto: string|null, es_html: bool}
      */
     public function obtenerContenidoParaEnvio(string $tipo = 'email'): array
     {
         // Si usa plantilla de referencia
         if ($this->usaPlantillaReferencia()) {
-            $plantilla = $tipo === 'email' && $this->plantilla_id_email 
-                ? $this->plantillaEmail 
+            $plantilla = $tipo === 'email' && $this->plantilla_id_email
+                ? $this->plantillaEmail
                 : $this->plantilla;
 
             if ($plantilla) {
@@ -105,6 +105,7 @@ class FlujoEtapa extends Model
 
         // Fallback: contenido inline
         $contenido = $this->plantilla_mensaje ?? '';
+
         return [
             'contenido' => $contenido,
             'asunto' => null,

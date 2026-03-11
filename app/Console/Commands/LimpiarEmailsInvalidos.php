@@ -7,12 +7,12 @@ use Illuminate\Console\Command;
 
 /**
  * Comando para limpiar emails inválidos de la base de datos.
- * 
+ *
  * Detecta y marca emails con:
  * - Formato inválido
  * - Dominios mal escritos (gimeil.com, guimei.con, etc.)
  * - Extensiones incorrectas (.con, .cpm)
- * 
+ *
  * Uso:
  *   php artisan emails:limpiar              # Ejecuta limpieza completa
  *   php artisan emails:limpiar --dry-run    # Solo muestra qué haría sin modificar
@@ -43,8 +43,8 @@ class LimpiarEmailsInvalidos extends Command
         $batchSize = (int) $this->option('batch-size');
 
         $this->info('');
-        $this->info($dryRun 
-            ? '🔍 MODO DRY-RUN: Analizando emails sin modificar...' 
+        $this->info($dryRun
+            ? '🔍 MODO DRY-RUN: Analizando emails sin modificar...'
             : '🧹 Iniciando limpieza de emails inválidos...');
         $this->info('');
 
@@ -68,15 +68,15 @@ class LimpiarEmailsInvalidos extends Command
             [
                 ['Total analizados', number_format($resultado['total'])],
                 ['Emails inválidos', number_format($resultado['invalidos'])],
-                ['Tasa de invalidez', $resultado['total'] > 0 
-                    ? round(($resultado['invalidos'] / $resultado['total']) * 100, 2) . '%' 
+                ['Tasa de invalidez', $resultado['total'] > 0
+                    ? round(($resultado['invalidos'] / $resultado['total']) * 100, 2).'%'
                     : '0%'],
-                ['Tiempo', $duration . 's'],
+                ['Tiempo', $duration.'s'],
             ]
         );
 
         // Mostrar sugerencias de corrección si hay
-        if (!empty($resultado['sugerencias'])) {
+        if (! empty($resultado['sugerencias'])) {
             $this->info('');
             $this->info('💡 Emails con sugerencia de corrección (primeros 20):');
             $this->table(
@@ -96,7 +96,7 @@ class LimpiarEmailsInvalidos extends Command
         $this->mostrarMotivosComunes();
 
         $this->info('');
-        
+
         if ($dryRun) {
             $this->warn('⚠️  MODO DRY-RUN: Ningún email fue modificado.');
             $this->info('    Ejecuta sin --dry-run para aplicar los cambios.');
@@ -124,17 +124,17 @@ class LimpiarEmailsInvalidos extends Command
             ->where('email', '!=', '')
             ->where(function ($q) {
                 $q->where('email_invalido', false)
-                  ->orWhereNull('email_invalido');
+                    ->orWhereNull('email_invalido');
             })
             ->chunkById($batchSize, function ($prospectos) use (&$resultado, $progressBar) {
                 foreach ($prospectos as $prospecto) {
                     $resultado['total']++;
-                    
+
                     $validacion = $this->emailService->validar($prospecto->email);
-                    
-                    if (!$validacion['valid']) {
+
+                    if (! $validacion['valid']) {
                         $resultado['invalidos']++;
-                        
+
                         if ($validacion['sugerencia']) {
                             $resultado['sugerencias'][] = [
                                 'prospecto_id' => $prospecto->id,
@@ -188,6 +188,7 @@ class LimpiarEmailsInvalidos extends Command
 
         if (empty($estadisticas)) {
             $this->warn('No hay datos para mostrar.');
+
             return Command::SUCCESS;
         }
 
@@ -201,7 +202,7 @@ class LimpiarEmailsInvalidos extends Command
                     number_format($row['emails_validos']),
                     number_format($row['emails_invalidos']),
                     number_format($row['desuscritos']),
-                    $row['tasa_validez'] . '%',
+                    $row['tasa_validez'].'%',
                 ];
             }, $estadisticas)
         );

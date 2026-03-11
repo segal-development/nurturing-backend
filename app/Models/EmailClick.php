@@ -8,7 +8,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
  * Modelo para registrar clicks en enlaces de emails
- * 
+ *
  * @property int $id
  * @property int $envio_id
  * @property int $prospecto_id
@@ -125,14 +125,13 @@ class EmailClick extends Model
 
     /**
      * Genera un token único para tracking de click
-     * 
-     * @param int $envioId
-     * @param string $urlOriginal
+     *
      * @return string Token único de 32 caracteres
      */
     public static function generarToken(int $envioId, string $urlOriginal): string
     {
-        $data = $envioId . '|' . $urlOriginal . '|' . microtime(true);
+        $data = $envioId.'|'.$urlOriginal.'|'.microtime(true);
+
         return md5($data);
     }
 }

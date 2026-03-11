@@ -10,10 +10,10 @@ use Illuminate\Support\Facades\Log;
 
 /**
  * Escribe prospectos en batches optimizados.
- * 
+ *
  * Usa INSERT batch para creates y UPSERT para updates.
  * Incluye fallback a escritura individual si el batch falla.
- * 
+ *
  * @example
  * $writer = new ProspectoBatchWriter($importacionId);
  * $writer->queueCreate($row, $tipoId);
@@ -32,7 +32,7 @@ final class ProspectoBatchWriter
     /** Columnas a actualizar en UPSERT */
     private const UPDATE_COLUMNS = [
         'nombre',
-        'email', 
+        'email',
         'telefono',
         'rut',
         'url_informe',
@@ -47,15 +47,17 @@ final class ProspectoBatchWriter
     // =========================================================================
 
     private readonly int $importacionId;
-    
+
     /** @var array<int, array<string, mixed>> */
     private array $createBuffer = [];
-    
+
     /** @var array<int, array<string, mixed>> */
     private array $updateBuffer = [];
-    
+
     private int $totalCreated = 0;
+
     private int $totalUpdated = 0;
+
     private int $totalFailed = 0;
 
     // =========================================================================
@@ -145,7 +147,7 @@ final class ProspectoBatchWriter
     private function buildCreateData(ProspectoRow $row, int $tipoProspectoId): array
     {
         $now = now();
-        
+
         return [
             'importacion_id' => $this->importacionId,
             'nombre' => $row->nombre,
@@ -200,14 +202,14 @@ final class ProspectoBatchWriter
         }
 
         $count = count($this->createBuffer);
-        
+
         try {
             DB::table('prospectos')->insert($this->createBuffer);
             $this->totalCreated += $count;
         } catch (\Exception $e) {
             $this->handleBatchCreateFailure($count, $e);
         }
-        
+
         $this->createBuffer = [];
     }
 
@@ -229,7 +231,7 @@ final class ProspectoBatchWriter
         } catch (\Exception $e) {
             $this->handleBatchUpdateFailure($count, $e);
         }
-        
+
         $this->updateBuffer = [];
     }
 
@@ -243,7 +245,7 @@ final class ProspectoBatchWriter
             'count' => $count,
             'error' => $e->getMessage(),
         ]);
-        
+
         $this->insertOneByOne();
     }
 
@@ -253,7 +255,7 @@ final class ProspectoBatchWriter
             'count' => $count,
             'error' => $e->getMessage(),
         ]);
-        
+
         $this->updateOneByOne();
     }
 
@@ -275,7 +277,7 @@ final class ProspectoBatchWriter
         foreach ($this->updateBuffer as $data) {
             $id = $data['id'];
             unset($data['id']);
-            
+
             try {
                 DB::table('prospectos')->where('id', $id)->update($data);
                 $this->totalUpdated++;

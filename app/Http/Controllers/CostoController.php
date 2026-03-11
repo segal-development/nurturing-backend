@@ -10,7 +10,7 @@ use Illuminate\Http\Request;
 
 /**
  * Controller for cost-related endpoints.
- * 
+ *
  * Handles:
  * - Cost estimation for flows
  * - Cost dashboard statistics
@@ -24,7 +24,7 @@ class CostoController extends Controller
 
     /**
      * Get current pricing configuration.
-     * 
+     *
      * GET /api/costos/precios
      */
     public function getPrecios(): JsonResponse
@@ -37,11 +37,8 @@ class CostoController extends Controller
 
     /**
      * Calculate estimated cost for a flow.
-     * 
+     *
      * GET /api/flujos/{flujo}/costo-estimado?cantidad_prospectos=100
-     * 
-     * @param Flujo $flujo
-     * @param Request $request
      */
     public function getCostoEstimado(Flujo $flujo, Request $request): JsonResponse
     {
@@ -64,7 +61,7 @@ class CostoController extends Controller
 
     /**
      * Get cost for a specific execution.
-     * 
+     *
      * GET /api/ejecuciones/{ejecucion}/costo
      */
     public function getCostoEjecucion(FlujoEjecucion $ejecucion): JsonResponse
@@ -83,7 +80,7 @@ class CostoController extends Controller
                     'costo_sms' => $ejecucion->costo_sms,
                     'total_emails_enviados' => $ejecucion->total_emails_enviados,
                     'total_sms_enviados' => $ejecucion->total_sms_enviados,
-                    'diferencia' => $ejecucion->costo_estimado 
+                    'diferencia' => $ejecucion->costo_estimado
                         ? round($ejecucion->costo_real - $ejecucion->costo_estimado, 2)
                         : null,
                 ],
@@ -98,7 +95,7 @@ class CostoController extends Controller
             'data' => array_merge($costoActual, [
                 'estado' => $ejecucion->estado,
                 'costo_estimado' => $ejecucion->costo_estimado,
-                'nota' => $ejecucion->estado !== 'completed' 
+                'nota' => $ejecucion->estado !== 'completed'
                     ? 'El costo puede cambiar mientras la ejecución esté en progreso'
                     : null,
             ]),
@@ -107,7 +104,7 @@ class CostoController extends Controller
 
     /**
      * Get cost dashboard statistics.
-     * 
+     *
      * GET /api/costos/dashboard?fecha_inicio=2025-01-01&fecha_fin=2025-01-31
      */
     public function getDashboard(Request $request): JsonResponse
@@ -126,7 +123,7 @@ class CostoController extends Controller
     /**
      * Recalculate and update costs for a completed execution.
      * Useful for fixing executions that completed before cost tracking was implemented.
-     * 
+     *
      * POST /api/ejecuciones/{ejecucion}/recalcular-costo
      */
     public function recalcularCosto(FlujoEjecucion $ejecucion): JsonResponse

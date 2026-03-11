@@ -7,19 +7,17 @@ use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
 
 /**
- * Evento disparado cuando el circuit breaker se abre
+ * Evento disparado cuando el circuit breaker se cierra (API vuelve a funcionar).
  *
- * Esto indica que hubo demasiados fallos consecutivos
- * y los envíos están temporalmente bloqueados
+ * Esto indica que la API está respondiendo correctamente y los envíos
+ * pueden reanudarse automáticamente.
  */
-class CircuitBreakerOpened
+class CircuitBreakerClosed
 {
     use Dispatchable, InteractsWithSockets, SerializesModels;
 
     public function __construct(
         public string $channel,
-        public int $failureCount,
-        public int $threshold,
-        public int $recoveryTimeSeconds
+        public string $closedReason = 'health_check_passed'
     ) {}
 }

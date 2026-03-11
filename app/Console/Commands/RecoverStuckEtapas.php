@@ -43,6 +43,7 @@ class RecoverStuckEtapas extends Command
 
         if ($etapasEjecutando->isEmpty()) {
             $this->info('No hay etapas en ejecución.');
+
             return Command::SUCCESS;
         }
 
@@ -53,8 +54,9 @@ class RecoverStuckEtapas extends Command
         foreach ($etapasEjecutando as $etapa) {
             $result = $this->analyzeEtapa($etapa, $minutesThreshold);
 
-            if (!$result['is_stuck']) {
+            if (! $result['is_stuck']) {
                 $this->line("  ✓ Etapa {$etapa->id} ({$etapa->node_id}): Procesando normalmente");
+
                 continue;
             }
 
@@ -69,7 +71,7 @@ class RecoverStuckEtapas extends Command
             } else {
                 $this->recoverEtapa($etapa, $result);
                 $recovered++;
-                $this->info("    ✓ Etapa recuperada");
+                $this->info('    ✓ Etapa recuperada');
             }
         }
 
@@ -78,8 +80,8 @@ class RecoverStuckEtapas extends Command
         }
 
         $this->newLine();
-        $this->info($dryRun 
-            ? "Modo dry-run: no se realizaron cambios" 
+        $this->info($dryRun
+            ? 'Modo dry-run: no se realizaron cambios'
             : "Proceso completado. Etapas recuperadas: {$recovered}");
 
         return Command::SUCCESS;
@@ -128,8 +130,8 @@ class RecoverStuckEtapas extends Command
             ->whereIn('estado', ['enviado', 'abierto', 'clickeado', 'fallido'])
             ->max('updated_at');
 
-        $minutesInactive = $lastProcessed 
-            ? now()->diffInMinutes($lastProcessed) 
+        $minutesInactive = $lastProcessed
+            ? now()->diffInMinutes($lastProcessed)
             : 999; // Si nunca se procesó nada, considerar muy inactiva
 
         $isStuck = $minutesInactive >= $minutesThreshold && $jobsCount < 10;
@@ -197,7 +199,7 @@ class RecoverStuckEtapas extends Command
             'response_athenacampaign' => $responseData,
         ]);
 
-        Log::info("RecoverStuckEtapas: Etapa marcada como completed", [
+        Log::info('RecoverStuckEtapas: Etapa marcada como completed', [
             'etapa_id' => $etapa->id,
             'node_id' => $etapa->node_id,
             'message_id' => $messageId,
@@ -214,10 +216,11 @@ class RecoverStuckEtapas extends Command
     private function scheduleNextNode(FlujoEjecucionEtapa $etapa, int $messageId): void
     {
         $ejecucion = $etapa->flujoEjecucion;
-        if (!$ejecucion || !$ejecucion->flujo) {
-            Log::warning("RecoverStuckEtapas: No se pudo cargar flujo para programar siguiente nodo", [
+        if (! $ejecucion || ! $ejecucion->flujo) {
+            Log::warning('RecoverStuckEtapas: No se pudo cargar flujo para programar siguiente nodo', [
                 'etapa_id' => $etapa->id,
             ]);
+
             return;
         }
 
@@ -233,13 +236,14 @@ class RecoverStuckEtapas extends Command
 
         if ($conexiones->isEmpty()) {
             // No hay siguiente nodo - finalizar flujo
-            Log::info("RecoverStuckEtapas: No hay siguiente nodo, finalizando flujo", [
+            Log::info('RecoverStuckEtapas: No hay siguiente nodo, finalizando flujo', [
                 'flujo_ejecucion_id' => $ejecucion->id,
             ]);
             $ejecucion->update([
                 'estado' => 'completed',
                 'fecha_fin' => now(),
             ]);
+
             return;
         }
 
@@ -248,26 +252,28 @@ class RecoverStuckEtapas extends Command
 
         // Si es un nodo de fin
         if (str_starts_with($targetNodeId, 'end-')) {
-            Log::info("RecoverStuckEtapas: Siguiente es nodo fin, finalizando flujo", [
+            Log::info('RecoverStuckEtapas: Siguiente es nodo fin, finalizando flujo', [
                 'flujo_ejecucion_id' => $ejecucion->id,
             ]);
             $ejecucion->update([
                 'estado' => 'completed',
                 'fecha_fin' => now(),
             ]);
+
             return;
         }
 
         // Buscar el nodo destino
         $targetNode = collect($stages)->firstWhere('id', $targetNodeId);
-        if (!$targetNode) {
+        if (! $targetNode) {
             $targetNode = collect($conditions)->firstWhere('id', $targetNodeId);
         }
 
-        if (!$targetNode) {
-            Log::warning("RecoverStuckEtapas: No se encontró nodo destino", [
+        if (! $targetNode) {
+            Log::warning('RecoverStuckEtapas: No se encontró nodo destino', [
                 'target_node_id' => $targetNodeId,
             ]);
+
             return;
         }
 
@@ -281,7 +287,7 @@ class RecoverStuckEtapas extends Command
         // ✅ FIX: Usar fecha_programada existente si la etapa ya fue creada al inicio del flujo
         if ($siguienteEtapa && $siguienteEtapa->fecha_programada) {
             $fechaProgramada = $siguienteEtapa->fecha_programada;
-            Log::info("RecoverStuckEtapas: Usando fecha_programada existente", [
+            Log::info('RecoverStuckEtapas: Usando fecha_programada existente', [
                 'node_id' => $targetNodeId,
                 'fecha_programada' => $fechaProgramada,
             ]);
@@ -294,7 +300,7 @@ class RecoverStuckEtapas extends Command
                 $tiempoEspera = $targetNode['tiempo_espera'] ?? 0;
                 $fechaProgramada = now()->addDays($tiempoEspera);
             }
-            Log::info("RecoverStuckEtapas: Calculando nueva fecha_programada", [
+            Log::info('RecoverStuckEtapas: Calculando nueva fecha_programada', [
                 'node_id' => $targetNodeId,
                 'tipo_nodo' => $tipoNodo,
                 'fecha_programada' => $fechaProgramada,
@@ -337,7 +343,7 @@ class RecoverStuckEtapas extends Command
             'fecha_proximo_nodo' => $fechaProgramada,
         ]);
 
-        Log::info("RecoverStuckEtapas: Programado siguiente nodo", [
+        Log::info('RecoverStuckEtapas: Programado siguiente nodo', [
             'target_node_id' => $targetNodeId,
             'tipo' => $tipoNodo,
             'fecha_programada' => $fechaProgramada,

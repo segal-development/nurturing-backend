@@ -43,6 +43,12 @@ return Application::configure(basePath: dirname(__DIR__))
             ->name('ejecutar-nodos-programados')
             ->withoutOverlapping();
 
+        // Verificar salud de APIs y reanudar etapas pausadas cada 2 minutos
+        $schedule->job(\App\Jobs\VerificarSaludApiJob::class)
+            ->everyTwoMinutes()
+            ->name('verificar-salud-api')
+            ->withoutOverlapping();
+
         // Sincronizar prospectos desde APIs externas - todos los viernes a las 2am
         $schedule->job(\App\Jobs\SyncExternalApiJob::class)
             ->fridays()

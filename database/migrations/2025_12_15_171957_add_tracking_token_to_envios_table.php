@@ -11,7 +11,7 @@ return new class extends Migration
         Schema::table('envios', function (Blueprint $table) {
             $table->string('tracking_token', 64)->nullable()->unique()->after('destinatario');
             $table->unsignedInteger('total_aperturas')->default(0)->after('fecha_clickeado');
-            
+
             $table->index('tracking_token');
         });
     }

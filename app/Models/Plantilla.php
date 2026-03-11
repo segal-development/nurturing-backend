@@ -65,7 +65,7 @@ class Plantilla extends Model
 
     /**
      * Validar longitud de SMS (considerando caracteres especiales)
-     * 
+     *
      * IMPORTANTE: Esta validación usa la plantilla sin personalizar.
      * Las variables como {{nombre}} serán reemplazadas por valores reales
      * que pueden ser más largos, por lo que se recomienda dejar margen.
@@ -78,18 +78,18 @@ class Plantilla extends Model
 
         $contenido = $this->contenido ?? '';
         $longitud = $this->calcularLongitudSMS($contenido);
-        
+
         // Detectar variables en el contenido
         preg_match_all('/\{\{?\w+\}?\}/', $contenido, $matches);
         $variables = $matches[0] ?? [];
         $tieneVariables = count($variables) > 0;
-        
+
         // Estimar longitud máxima con variables expandidas
         // Asumimos: nombre ~30 chars, monto ~15 chars, otros ~20 chars
         $longitudEstimadaVariables = 0;
         foreach ($variables as $var) {
             $varName = strtolower(trim($var, '{}'));
-            $longitudEstimadaVariables += match(true) {
+            $longitudEstimadaVariables += match (true) {
                 str_contains($varName, 'nombre') => 30 - strlen($var),
                 str_contains($varName, 'monto') => 15 - strlen($var),
                 str_contains($varName, 'email') => 35 - strlen($var),
@@ -98,16 +98,16 @@ class Plantilla extends Model
                 default => 20 - strlen($var),
             };
         }
-        
+
         $longitudEstimada = $longitud + max(0, $longitudEstimadaVariables);
-        
+
         // Advertencias
         $advertencias = [];
         if ($tieneVariables && $longitudEstimada > 160) {
             $advertencias[] = "Con variables expandidas, el SMS podría exceder 160 caracteres (~{$longitudEstimada} estimados). Se truncará automáticamente.";
         }
         if ($tieneVariables && $longitud > 120) {
-            $advertencias[] = "Recomendamos mantener la plantilla bajo 120 caracteres cuando usa variables para evitar truncamiento.";
+            $advertencias[] = 'Recomendamos mantener la plantilla bajo 120 caracteres cuando usa variables para evitar truncamiento.';
         }
 
         return [
@@ -182,15 +182,15 @@ class Plantilla extends Model
         $html .= '<head>';
         $html .= '<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />';
         $html .= '<meta name="viewport" content="width=device-width, initial-scale=1.0" />';
-        $html .= '<title>' . htmlspecialchars($this->asunto ?? 'Email') . '</title>';
+        $html .= '<title>'.htmlspecialchars($this->asunto ?? 'Email').'</title>';
         $html .= '</head>';
         $html .= '<body style="margin: 0; padding: 0; background-color: #f4f4f4; font-family: Arial, Helvetica, sans-serif;">';
-        
+
         // Tabla contenedora externa (para centrar y dar fondo)
         $html .= '<table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #f4f4f4;">';
         $html .= '<tr>';
         $html .= '<td align="center" style="padding: 20px 10px;">';
-        
+
         // Tabla principal del email (600px de ancho)
         $html .= sprintf(
             '<table border="0" cellpadding="0" cellspacing="0" width="%d" style="background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.05);">',
@@ -202,11 +202,11 @@ class Plantilla extends Model
         }
 
         $html .= '</table>'; // Fin tabla principal
-        
+
         $html .= '</td>';
         $html .= '</tr>';
         $html .= '</table>'; // Fin tabla contenedora
-        
+
         $html .= '</body>';
         $html .= '</html>';
 
@@ -219,7 +219,7 @@ class Plantilla extends Model
     private function renderizarComponente(array $componente): string
     {
         $tipo = $componente['tipo'] ?? '';
-        
+
         // Si 'contenido' es un JSON string, parsearlo y mergear con el componente
         if (isset($componente['contenido']) && is_string($componente['contenido'])) {
             $contenidoData = json_decode($componente['contenido'], true);
@@ -334,7 +334,7 @@ class Plantilla extends Model
             $alineacion,
             self::CONTENT_PADDING
         );
-        
+
         // Tabla contenedora del botón para border-radius en todos los clientes
         $html .= '<table border="0" cellpadding="0" cellspacing="0" role="presentation">';
         $html .= '<tr>';
@@ -356,7 +356,7 @@ class Plantilla extends Model
         $html .= '</td>';
         $html .= '</tr>';
         $html .= '</table>';
-        
+
         $html .= '</td>';
         $html .= '</tr>';
 
@@ -427,7 +427,7 @@ class Plantilla extends Model
         );
 
         // Si tiene link, envolver en anchor
-        if (!empty($linkUrl)) {
+        if (! empty($linkUrl)) {
             $imgHtml = sprintf(
                 '<a href="%s" target="%s" style="display: inline-block; text-decoration: none;">%s</a>',
                 htmlspecialchars($linkUrl),
@@ -467,16 +467,16 @@ class Plantilla extends Model
             $padding,
             self::CONTENT_PADDING
         );
-        
+
         // Texto principal del footer
         $html .= sprintf(
             '<p style="font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: %s; margin: 0 0 10px 0; line-height: 1.5; white-space: pre-line;">%s</p>',
             $colorTexto,
             nl2br(htmlspecialchars($texto))
         );
-        
+
         // Enlaces del footer
-        if (!empty($enlaces)) {
+        if (! empty($enlaces)) {
             $linksHtml = [];
             foreach ($enlaces as $enlace) {
                 $linksHtml[] = sprintf(
@@ -492,7 +492,7 @@ class Plantilla extends Model
                 implode(' &nbsp;|&nbsp; ', $linksHtml)
             );
         }
-        
+
         $html .= '</td>';
         $html .= '</tr>';
 

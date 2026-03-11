@@ -18,7 +18,7 @@ use Illuminate\Support\Facades\Storage;
 
 /**
  * Job para procesar importaciones de prospectos en background.
- * 
+ *
  * ESTRATEGIA DE RESILIENCIA:
  * - El job permanece en la cola hasta que termine exitosamente
  * - Si Cloud Run mata el proceso, el scheduler lo retomará
@@ -35,10 +35,10 @@ class ProcesarImportacionJob implements ShouldQueue
 
     /** Intentos altos - el job debe persistir hasta completarse */
     public int $tries = 9999;
-    
+
     /** Sin timeout de Laravel - Cloud Run maneja el timeout */
     public int $timeout = 0;
-    
+
     /** No fallar por timeout */
     public bool $failOnTimeout = false;
 
@@ -69,16 +69,18 @@ class ProcesarImportacionJob implements ShouldQueue
     public function handle(): void
     {
         $startTime = microtime(true);
-        
+
         $this->logInicio();
 
-        if (!$this->tryAcquireLock()) {
+        if (! $this->tryAcquireLock()) {
             $this->logNoLock();
+
             return;
         }
 
         if ($this->isAlreadyCompleted()) {
             $this->deleteAndLog('Importación ya completada');
+
             return;
         }
 
@@ -98,10 +100,11 @@ class ProcesarImportacionJob implements ShouldQueue
     private function tryAcquireLock(): bool
     {
         $importacion = Importacion::find($this->importacionId);
-        
-        if (!$importacion) {
+
+        if (! $importacion) {
             $this->logImportacionNoEncontrada();
             $this->delete();
+
             return false;
         }
 
@@ -118,12 +121,13 @@ class ProcesarImportacionJob implements ShouldQueue
 
         if ($minutesSinceUpdate < self::STALE_LOCK_THRESHOLD_MINUTES) {
             $this->logLockActivo($minutesSinceUpdate);
+
             return false;
         }
 
         $this->logRecuperandoLock($minutesSinceUpdate, $importacion);
         $importacion->update(['updated_at' => now()]);
-        
+
         return true;
     }
 
@@ -139,10 +143,12 @@ class ProcesarImportacionJob implements ShouldQueue
 
         if ($acquired === 0) {
             $this->logNoSePudoAdquirirLock();
+
             return false;
         }
 
         $this->logLockAdquirido();
+
         return true;
     }
 
@@ -152,12 +158,14 @@ class ProcesarImportacionJob implements ShouldQueue
             'importacion_id' => $this->importacionId,
             'estado' => $estado,
         ]);
+
         return false;
     }
 
     private function isAlreadyCompleted(): bool
     {
         $importacion = Importacion::find($this->importacionId);
+
         return $importacion && $importacion->estado === 'completado';
     }
 
@@ -168,8 +176,8 @@ class ProcesarImportacionJob implements ShouldQueue
     private function processImport(): bool
     {
         $importacion = Importacion::find($this->importacionId);
-        
-        if (!$importacion) {
+
+        if (! $importacion) {
             return false;
         }
 
@@ -178,18 +186,19 @@ class ProcesarImportacionJob implements ShouldQueue
         try {
             $tempPath = $this->downloadFile();
             $this->updateMetadataInicio($importacion, $tempPath);
-            
+
             $service = $this->ejecutarServicioImportacion($importacion, $tempPath);
             $this->verificarYForzarCompletado($importacion, $service);
             $this->cleanup($tempPath);
             $this->forceMemoryCleanup();
-            
+
             $this->logProcesamientoCompletado($importacion, $service);
 
             return true;
 
         } catch (\Exception $e) {
             $this->handleError($importacion, $tempPath, $e);
+
             return false;
         }
     }
@@ -198,13 +207,14 @@ class ProcesarImportacionJob implements ShouldQueue
     {
         $service = new ProspectoImportService($importacion, $tempPath);
         $service->import();
+
         return $service;
     }
 
     private function verificarYForzarCompletado(Importacion $importacion, ProspectoImportService $service): void
     {
         $importacion->refresh();
-        
+
         if ($importacion->estado !== 'procesando') {
             return;
         }
@@ -213,7 +223,7 @@ class ProcesarImportacionJob implements ShouldQueue
             'importacion_id' => $this->importacionId,
             'registros_exitosos' => $service->getRegistrosExitosos(),
         ]);
-        
+
         $this->forceMarkAsCompleted($importacion, $service);
     }
 
@@ -239,20 +249,20 @@ class ProcesarImportacionJob implements ShouldQueue
 
     /**
      * Actualiza el lote después de completar una importación.
-     * 
+     *
      * IMPORTANTE: Solo recalcula totales, NO cierra el lote automáticamente.
      * El lote debe ser cerrado manualmente por el usuario via POST /api/lotes/{id}/cerrar.
      */
     private function updateLoteAfterComplete(Importacion $importacion): void
     {
         $importacion->refresh();
-        
-        if (!$importacion->lote_id) {
+
+        if (! $importacion->lote_id) {
             return;
         }
 
         $lote = $importacion->lote;
-        if (!$lote) {
+        if (! $lote) {
             return;
         }
 
@@ -262,11 +272,11 @@ class ProcesarImportacionJob implements ShouldQueue
     private function recalcularTotalesLote(Lote $lote): void
     {
         $importaciones = $lote->importaciones()->get();
-        
+
         $hayEnProceso = $importaciones->contains(
-            fn($imp) => in_array($imp->estado, ['procesando', 'pendiente'])
+            fn ($imp) => in_array($imp->estado, ['procesando', 'pendiente'])
         );
-        
+
         $estadoLote = $hayEnProceso ? 'procesando' : 'abierto';
 
         $lote->update([
@@ -291,10 +301,10 @@ class ProcesarImportacionJob implements ShouldQueue
         $this->logDescargaInicio();
 
         $this->validarArchivoExiste();
-        
+
         $contenido = $this->descargarContenido();
         $tempPath = $this->guardarEnTemporal($contenido);
-        
+
         unset($contenido);
 
         $this->logDescargaCompletada($tempPath);
@@ -304,7 +314,7 @@ class ProcesarImportacionJob implements ShouldQueue
 
     private function validarArchivoExiste(): void
     {
-        if (!Storage::disk($this->diskName)->exists($this->rutaArchivo)) {
+        if (! Storage::disk($this->diskName)->exists($this->rutaArchivo)) {
             throw new \Exception("Archivo no encontrado: {$this->rutaArchivo}");
         }
     }
@@ -314,7 +324,7 @@ class ProcesarImportacionJob implements ShouldQueue
         $contenido = Storage::disk($this->diskName)->get($this->rutaArchivo);
 
         if (empty($contenido)) {
-            throw new \Exception("Archivo descargado está vacío");
+            throw new \Exception('Archivo descargado está vacío');
         }
 
         return $contenido;
@@ -324,12 +334,12 @@ class ProcesarImportacionJob implements ShouldQueue
     {
         $storageSize = Storage::disk($this->diskName)->size($this->rutaArchivo);
         $extension = pathinfo($this->rutaArchivo, PATHINFO_EXTENSION) ?: 'xlsx';
-        $tempPath = storage_path('app/temp_' . uniqid() . '.' . $extension);
-        
+        $tempPath = storage_path('app/temp_'.uniqid().'.'.$extension);
+
         file_put_contents($tempPath, $contenido);
 
         if (filesize($tempPath) !== $storageSize) {
-            throw new \Exception("Tamaño no coincide. Storage: {$storageSize}, Local: " . filesize($tempPath));
+            throw new \Exception("Tamaño no coincide. Storage: {$storageSize}, Local: ".filesize($tempPath));
         }
 
         return $tempPath;
@@ -379,9 +389,9 @@ class ProcesarImportacionJob implements ShouldQueue
         if (function_exists('gc_collect_cycles')) {
             gc_collect_cycles();
         }
-        
+
         gc_mem_caches();
-        
+
         Log::info('ProcesarImportacionJob: Memoria limpiada', [
             'importacion_id' => $this->importacionId,
             'memoria_despues_gc_mb' => round(memory_get_usage(true) / 1024 / 1024, 2),
@@ -413,8 +423,8 @@ class ProcesarImportacionJob implements ShouldQueue
     public function shouldRetry(\Throwable $exception): bool
     {
         $importacion = Importacion::find($this->importacionId);
-        
-        return !($importacion && $importacion->estado === 'completado');
+
+        return ! ($importacion && $importacion->estado === 'completado');
     }
 
     // =========================================================================

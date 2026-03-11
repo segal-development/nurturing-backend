@@ -96,14 +96,14 @@ return [
             'prefix_indexes' => true,
             'search_path' => 'public',
             'sslmode' => 'prefer',
-            
+
             // =========================================================================
             // RESILIENCIA: Connection pooling y timeouts
             // =========================================================================
-            
+
             // Timeout de conexión: falla rápido si no puede conectar (segundos)
             'connect_timeout' => env('DB_CONNECT_TIMEOUT', 5),
-            
+
             // Opciones PDO para resiliencia
             'options' => [
                 // Timeout para operaciones de conexión
@@ -114,7 +114,7 @@ return [
                 PDO::ATTR_PERSISTENT => false,
             ],
         ],
-        
+
         // =========================================================================
         // Conexión de solo lectura (para API queries no críticas)
         // Usar cuando tengamos Read Replica configurada

@@ -9,11 +9,11 @@ use Illuminate\Http\Request;
 
 /**
  * Controller para gestión de desuscripciones.
- * 
+ *
  * Rutas públicas (sin autenticación):
  * - GET /desuscribir/{token} - Muestra página de confirmación
  * - POST /desuscribir/{token} - Procesa la desuscripción
- * 
+ *
  * Rutas protegidas (con autenticación):
  * - GET /api/desuscripciones/estadisticas - Estadísticas de desuscripciones
  */
@@ -25,17 +25,17 @@ class DesuscripcionController extends Controller
 
     /**
      * Muestra la página de confirmación de desuscripción.
-     * 
+     *
      * GET /desuscribir/{token}
-     * 
+     *
      * Esta es una página pública accesible sin autenticación
      * que permite al usuario confirmar su desuscripción.
      */
     public function mostrarFormulario(string $token)
     {
         $tokenData = $this->desuscripcionService->decodificarToken($token);
-        
-        if (!$tokenData) {
+
+        if (! $tokenData) {
             return response()->view('desuscripcion.error', [
                 'mensaje' => 'El enlace de desuscripción es inválido o ha expirado.',
             ], 400);
@@ -49,7 +49,7 @@ class DesuscripcionController extends Controller
 
     /**
      * Procesa la solicitud de desuscripción.
-     * 
+     *
      * POST /desuscribir/{token}
      */
     public function procesar(Request $request, string $token)
@@ -84,7 +84,7 @@ class DesuscripcionController extends Controller
 
     /**
      * Obtiene estadísticas de desuscripciones (requiere autenticación).
-     * 
+     *
      * GET /api/desuscripciones/estadisticas
      */
     public function estadisticas(Request $request): JsonResponse
@@ -100,7 +100,7 @@ class DesuscripcionController extends Controller
 
     /**
      * Lista las desuscripciones recientes (requiere autenticación).
-     * 
+     *
      * GET /api/desuscripciones
      */
     public function index(Request $request): JsonResponse

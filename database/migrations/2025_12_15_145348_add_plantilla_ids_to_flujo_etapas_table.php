@@ -8,7 +8,7 @@ return new class extends Migration
 {
     /**
      * Run the migrations.
-     * 
+     *
      * Agrega referencias a plantillas para permitir usar templates guardados
      * en lugar de solo texto plano en las etapas del flujo.
      */
@@ -17,10 +17,10 @@ return new class extends Migration
         Schema::table('flujo_etapas', function (Blueprint $table) {
             // ID de plantilla SMS (o plantilla principal si tipo_mensaje es 'sms' o 'email')
             $table->unsignedBigInteger('plantilla_id')->nullable()->after('plantilla_mensaje');
-            
+
             // ID de plantilla Email adicional (solo cuando tipo_mensaje es 'ambos')
             $table->unsignedBigInteger('plantilla_id_email')->nullable()->after('plantilla_id');
-            
+
             // Tipo de contenido: 'reference' (usa plantilla) o 'inline' (usa plantilla_mensaje)
             $table->string('plantilla_type', 20)->default('inline')->after('plantilla_id_email');
 
@@ -29,7 +29,7 @@ return new class extends Migration
                 ->references('id')
                 ->on('plantillas')
                 ->onDelete('set null');
-            
+
             $table->foreign('plantilla_id_email')
                 ->references('id')
                 ->on('plantillas')

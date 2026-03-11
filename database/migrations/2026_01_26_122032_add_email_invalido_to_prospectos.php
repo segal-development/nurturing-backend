@@ -6,12 +6,12 @@ use Illuminate\Support\Facades\Schema;
 
 /**
  * Agrega campo para marcar emails inválidos.
- * 
+ *
  * Emails se marcan como inválidos automáticamente cuando:
  * - No cumplen con RFC 2822 (formato inválido)
  * - Retornan error 554 (rechazado por servidor destino)
  * - Dominio no existe o está mal escrito
- * 
+ *
  * Prospectos con email_invalido=true son excluidos de futuros envíos.
  */
 return new class extends Migration
@@ -22,7 +22,7 @@ return new class extends Migration
             $table->boolean('email_invalido')->default(false)->after('email');
             $table->string('email_invalido_motivo')->nullable()->after('email_invalido');
             $table->timestamp('email_invalido_at')->nullable()->after('email_invalido_motivo');
-            
+
             // Índice para filtrar rápidamente prospectos con email válido
             $table->index('email_invalido');
         });

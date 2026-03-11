@@ -3,7 +3,6 @@
 namespace App\Services;
 
 use App\Models\Desuscripcion;
-use App\Models\Envio;
 use App\Models\Prospecto;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -11,7 +10,7 @@ use Illuminate\Support\Str;
 
 /**
  * Servicio para gestión de desuscripciones.
- * 
+ *
  * Maneja todo el flujo de opt-out:
  * - Generación de tokens seguros
  * - Procesamiento de desuscripciones
@@ -22,7 +21,7 @@ class DesuscripcionService
 {
     /**
      * Genera un token seguro para desuscripción.
-     * 
+     *
      * El token contiene información encriptada del prospecto y envío
      * para poder procesar la desuscripción sin autenticación.
      */
@@ -39,50 +38,52 @@ class DesuscripcionService
         // Codificar y firmar
         $payload = base64_encode(json_encode($data));
         $signature = hash_hmac('sha256', $payload, config('app.key'));
-        
-        return $payload . '.' . substr($signature, 0, 16);
+
+        return $payload.'.'.substr($signature, 0, 16);
     }
 
     /**
      * Decodifica y valida un token de desuscripción.
-     * 
+     *
      * @return array|null Datos del token o null si es inválido
      */
     public function decodificarToken(string $token): ?array
     {
         $parts = explode('.', $token);
-        
+
         if (count($parts) !== 2) {
             return null;
         }
 
         [$payload, $signature] = $parts;
-        
+
         // Verificar firma
         $expectedSignature = substr(hash_hmac('sha256', $payload, config('app.key')), 0, 16);
-        
-        if (!hash_equals($expectedSignature, $signature)) {
+
+        if (! hash_equals($expectedSignature, $signature)) {
             Log::warning('DesuscripcionService: Token con firma inválida', [
-                'token_preview' => substr($token, 0, 20) . '...',
+                'token_preview' => substr($token, 0, 20).'...',
             ]);
+
             return null;
         }
 
         $data = json_decode(base64_decode($payload), true);
-        
-        if (!$data || !isset($data['p'])) {
+
+        if (! $data || ! isset($data['p'])) {
             return null;
         }
 
         // Verificar que el token no sea muy viejo (90 días máximo)
         $tokenAge = now()->timestamp - ($data['t'] ?? 0);
         $maxAge = 90 * 24 * 60 * 60; // 90 días en segundos
-        
+
         if ($tokenAge > $maxAge) {
             Log::info('DesuscripcionService: Token expirado', [
                 'prospecto_id' => $data['p'],
                 'token_age_days' => round($tokenAge / 86400),
             ]);
+
             return null;
         }
 
@@ -101,18 +102,18 @@ class DesuscripcionService
     {
         $token = $this->generarToken($prospectoId, $envioId, $flujoId);
         $baseUrl = config('app.url', 'http://localhost');
-        
+
         return "{$baseUrl}/desuscribir/{$token}";
     }
 
     /**
      * Procesa una solicitud de desuscripción.
-     * 
-     * @param string $token Token de desuscripción
-     * @param string $canal Canal a desuscribir (email, sms, todos)
-     * @param string|null $motivo Motivo de desuscripción
-     * @param string|null $ipAddress IP del solicitante
-     * @param string|null $userAgent User agent del navegador
+     *
+     * @param  string  $token  Token de desuscripción
+     * @param  string  $canal  Canal a desuscribir (email, sms, todos)
+     * @param  string|null  $motivo  Motivo de desuscripción
+     * @param  string|null  $ipAddress  IP del solicitante
+     * @param  string|null  $userAgent  User agent del navegador
      * @return array{success: bool, message: string, prospecto?: Prospecto}
      */
     public function procesarDesuscripcion(
@@ -123,8 +124,8 @@ class DesuscripcionService
         ?string $userAgent = null
     ): array {
         $tokenData = $this->decodificarToken($token);
-        
-        if (!$tokenData) {
+
+        if (! $tokenData) {
             return [
                 'success' => false,
                 'message' => 'El enlace de desuscripción es inválido o ha expirado.',
@@ -132,8 +133,8 @@ class DesuscripcionService
         }
 
         $prospecto = Prospecto::find($tokenData['prospecto_id']);
-        
-        if (!$prospecto) {
+
+        if (! $prospecto) {
             return [
                 'success' => false,
                 'message' => 'No se encontró el registro asociado.',
@@ -224,8 +225,8 @@ class DesuscripcionService
 
         // Verificar preferencias específicas
         $preferencias = $prospecto->preferencias_comunicacion;
-        
-        if (!$preferencias) {
+
+        if (! $preferencias) {
             return true; // Sin preferencias = todo permitido
         }
 
@@ -238,7 +239,7 @@ class DesuscripcionService
     public function generarFooterDesuscripcion(int $prospectoId, ?int $envioId = null, ?int $flujoId = null): string
     {
         $url = $this->generarUrlDesuscripcion($prospectoId, $envioId, $flujoId);
-        
+
         return <<<HTML
         <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #e0e0e0; text-align: center; font-size: 12px; color: #666666;">
             <p style="margin: 0 0 10px 0;">
@@ -260,7 +261,7 @@ class DesuscripcionService
         $desde = now()->subDays($dias);
 
         $total = Desuscripcion::where('created_at', '>=', $desde)->count();
-        
+
         $porCanal = Desuscripcion::where('created_at', '>=', $desde)
             ->select('canal', DB::raw('COUNT(*) as total'))
             ->groupBy('canal')

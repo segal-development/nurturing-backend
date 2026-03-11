@@ -12,7 +12,7 @@ return new class extends Migration
     public function up(): void
     {
         // PostgreSQL: Drop and recreate the check constraint with the new value
-        DB::statement("ALTER TABLE importaciones DROP CONSTRAINT IF EXISTS importaciones_estado_check");
+        DB::statement('ALTER TABLE importaciones DROP CONSTRAINT IF EXISTS importaciones_estado_check');
         DB::statement("ALTER TABLE importaciones ADD CONSTRAINT importaciones_estado_check CHECK (estado IN ('pendiente', 'procesando', 'completado', 'fallido'))");
     }
 
@@ -22,7 +22,7 @@ return new class extends Migration
     public function down(): void
     {
         // Revert to original constraint (without 'pendiente')
-        DB::statement("ALTER TABLE importaciones DROP CONSTRAINT IF EXISTS importaciones_estado_check");
+        DB::statement('ALTER TABLE importaciones DROP CONSTRAINT IF EXISTS importaciones_estado_check');
         DB::statement("ALTER TABLE importaciones ADD CONSTRAINT importaciones_estado_check CHECK (estado IN ('procesando', 'completado', 'fallido'))");
     }
 };

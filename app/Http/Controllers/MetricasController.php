@@ -8,7 +8,7 @@ use Illuminate\Http\Request;
 
 /**
  * Controller para métricas y analytics del dashboard.
- * 
+ *
  * Proporciona endpoints para:
  * - Dashboard completo de métricas
  * - Métricas específicas (aperturas, clicks, envíos, etc.)
@@ -23,9 +23,9 @@ class MetricasController extends Controller
 
     /**
      * Dashboard completo de métricas
-     * 
+     *
      * GET /api/metricas/dashboard
-     * 
+     *
      * Query params:
      * - dias: Período en días (default: 30)
      */
@@ -44,7 +44,7 @@ class MetricasController extends Controller
 
     /**
      * Resumen de KPIs principales
-     * 
+     *
      * GET /api/metricas/resumen
      */
     public function resumen(Request $request): JsonResponse
@@ -60,7 +60,7 @@ class MetricasController extends Controller
 
     /**
      * Métricas de aperturas de email
-     * 
+     *
      * GET /api/metricas/aperturas
      */
     public function aperturas(Request $request): JsonResponse
@@ -76,7 +76,7 @@ class MetricasController extends Controller
 
     /**
      * Métricas de clicks
-     * 
+     *
      * GET /api/metricas/clicks
      */
     public function clicks(Request $request): JsonResponse
@@ -92,7 +92,7 @@ class MetricasController extends Controller
 
     /**
      * Métricas de envíos
-     * 
+     *
      * GET /api/metricas/envios
      */
     public function envios(Request $request): JsonResponse
@@ -108,7 +108,7 @@ class MetricasController extends Controller
 
     /**
      * Métricas de desuscripciones
-     * 
+     *
      * GET /api/metricas/desuscripciones
      */
     public function desuscripciones(Request $request): JsonResponse
@@ -124,7 +124,7 @@ class MetricasController extends Controller
 
     /**
      * Métricas de conversiones
-     * 
+     *
      * GET /api/metricas/conversiones
      */
     public function conversiones(Request $request): JsonResponse
@@ -140,7 +140,7 @@ class MetricasController extends Controller
 
     /**
      * Top flujos por rendimiento
-     * 
+     *
      * GET /api/metricas/top-flujos
      */
     public function topFlujos(Request $request): JsonResponse
@@ -157,7 +157,7 @@ class MetricasController extends Controller
 
     /**
      * Tendencias comparativas
-     * 
+     *
      * GET /api/metricas/tendencias
      */
     public function tendencias(Request $request): JsonResponse
@@ -173,7 +173,7 @@ class MetricasController extends Controller
 
     /**
      * Invalida el cache de métricas (para refresh manual)
-     * 
+     *
      * POST /api/metricas/refresh
      */
     public function refresh(): JsonResponse
