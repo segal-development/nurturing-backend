@@ -136,7 +136,7 @@ class EnviarEtapaJob implements ShouldQueue
                 chunkIndex: $chunkIndex,
                 totalChunks: $totalChunks,
                 branches: $this->branches
-            )->onQueue('envios');
+            )->onConnection('database')->onQueue('envios');
         }
         
         // Actualizar contador
@@ -334,6 +334,7 @@ class EnviarEtapaJob implements ShouldQueue
         // problemas de serialización con Laravel 12 + SerializableClosure
         $batch = Bus::batch($jobs)
             ->name($batchName)
+            ->onConnection('database')
             ->onQueue('envios')
             ->allowFailures()
             ->then(new BatchCompletedCallback($callbackData))

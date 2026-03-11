@@ -105,6 +105,7 @@ class EnviarEtapaChunkJob implements ShouldQueue
 
         $batch = Bus::batch($jobs)
             ->name($batchName)
+            ->onConnection('database')
             ->onQueue('envios')
             ->allowFailures()
             ->dispatch();
