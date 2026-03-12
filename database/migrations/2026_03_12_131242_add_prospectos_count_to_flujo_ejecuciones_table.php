@@ -20,10 +20,10 @@ return new class extends Migration
             $table->unsignedInteger('prospectos_count')->default(0)->after('prospectos_ids');
         });
 
-        // Backfill flujo_ejecuciones
+        // Backfill flujo_ejecuciones (PostgreSQL usa jsonb_array_length)
         DB::statement('
             UPDATE flujo_ejecuciones 
-            SET prospectos_count = JSON_LENGTH(prospectos_ids) 
+            SET prospectos_count = jsonb_array_length(prospectos_ids::jsonb) 
             WHERE prospectos_ids IS NOT NULL
         ');
 
@@ -32,10 +32,10 @@ return new class extends Migration
             $table->unsignedInteger('prospectos_count')->default(0)->after('prospectos_ids');
         });
 
-        // Backfill flujo_ejecucion_etapas
+        // Backfill flujo_ejecucion_etapas (PostgreSQL usa jsonb_array_length)
         DB::statement('
             UPDATE flujo_ejecucion_etapas 
-            SET prospectos_count = JSON_LENGTH(prospectos_ids) 
+            SET prospectos_count = jsonb_array_length(prospectos_ids::jsonb) 
             WHERE prospectos_ids IS NOT NULL
         ');
     }
