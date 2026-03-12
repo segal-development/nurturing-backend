@@ -17,6 +17,7 @@ class FlujoEjecucion extends Model
         'flujo_id',
         'origen_id',
         'prospectos_ids',
+        'prospectos_count',
         'fecha_inicio_programada',
         'fecha_inicio_real',
         'fecha_fin',

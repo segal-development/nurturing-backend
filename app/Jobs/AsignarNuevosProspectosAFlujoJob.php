@@ -274,6 +274,7 @@ class AsignarNuevosProspectosAFlujoJob implements ShouldQueue
                 'flujo_id' => $flujo->id,
                 'origen_id' => null, // Auto-asignación no tiene origen específico
                 'prospectos_ids' => $prospectoIds,
+                'prospectos_count' => count($prospectoIds),
                 'fecha_inicio_programada' => $fechaInicio,
                 'fecha_inicio_real' => $fechaInicio,
                 'estado' => 'in_progress',
@@ -348,6 +349,7 @@ class AsignarNuevosProspectosAFlujoJob implements ShouldQueue
             // La primera etapa necesita los prospectos_ids
             if (! $primeraCreada) {
                 $etapaData['prospectos_ids'] = $prospectoIds;
+                $etapaData['prospectos_count'] = count($prospectoIds);
                 $primeraCreada = true;
             }
 

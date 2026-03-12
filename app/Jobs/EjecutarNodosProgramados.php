@@ -95,9 +95,17 @@ class EjecutarNodosProgramados implements ShouldQueue
      * CRÍTICO para volúmenes grandes (large_volume_chunked) que no tienen
      * callback global - el cron debe detectar cuando terminaron.
      */
+    /**
+     * Verifica etapas en estado 'executing' para detectar si ya terminaron.
+     * Optimizado: 1 query con eager loading en lugar de N+1 queries.
+     */
     private function verificarEtapasEjecutando(): void
     {
-        $ejecucionesConEtapasEjecutando = FlujoEjecucion::conEtapasEjecutando()->get();
+        // 1 sola query: traer ejecuciones con sus etapas en executing (eager loaded)
+        $ejecucionesConEtapasEjecutando = FlujoEjecucion::where('estado', 'in_progress')
+            ->whereHas('etapas', fn ($q) => $q->where('estado', 'executing'))
+            ->with(['etapas' => fn ($q) => $q->where('estado', 'executing')])
+            ->get();
 
         if ($ejecucionesConEtapasEjecutando->isEmpty()) {
             return;
@@ -108,11 +116,8 @@ class EjecutarNodosProgramados implements ShouldQueue
         ]);
 
         foreach ($ejecucionesConEtapasEjecutando as $ejecucion) {
-            $etapasEjecutando = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
-                ->where('estado', 'executing')
-                ->get();
-
-            foreach ($etapasEjecutando as $etapa) {
+            // Las etapas ya vienen cargadas por el eager loading
+            foreach ($ejecucion->etapas as $etapa) {
                 $this->verificarSiEtapaTermino($etapa, $ejecucion);
             }
         }
@@ -909,6 +914,7 @@ class EjecutarNodosProgramados implements ShouldQueue
         // Preparar datos para la etapa
         $etapaData = [
             'prospectos_ids' => $prospectoIds,
+            'prospectos_count' => count($prospectoIds),
             'estado' => 'pending',
         ];
 

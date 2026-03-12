@@ -360,6 +360,7 @@ class VerificarCondicionJob implements ShouldQueue
         if ($etapaExistente) {
             $etapaExistente->update([
                 'prospectos_ids' => $prospectoIds,
+                'prospectos_count' => count($prospectoIds),
                 'estado' => 'pending',
             ]);
             $nuevaEtapa = $etapaExistente;
@@ -375,6 +376,7 @@ class VerificarCondicionJob implements ShouldQueue
                 'etapa_id' => null,
                 'node_id' => $siguienteNodeId,
                 'prospectos_ids' => $prospectoIds,
+                'prospectos_count' => count($prospectoIds),
                 'fecha_programada' => $fechaProgramada,
                 'estado' => 'pending',
             ]);

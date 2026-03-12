@@ -17,6 +17,7 @@ class FlujoEjecucionEtapa extends Model
         'etapa_id',
         'node_id',
         'prospectos_ids',  // Prospectos que deben procesarse en esta etapa
+        'prospectos_count', // Cache del count para evitar cargar el JSON completo
         'fecha_programada',
         'fecha_ejecucion',
         'estado',

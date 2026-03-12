@@ -117,16 +117,23 @@ class FlujoController extends Controller
 
         $flujo->load([
             'tipoProspecto',
-            'user',
+            'user:id,name,email',
             'prospectosEnFlujo' => function ($query) {
-                $query->with('prospecto')->latest()->limit(100);
+                // Optimizado: solo campos necesarios del prospecto para la vista
+                $query->with(['prospecto' => function ($q) {
+                    $q->select('id', 'nombre', 'email', 'telefono', 'tipo_prospecto_id', 'created_at');
+                }])->latest()->limit(100);
             },
             'flujoEtapas',
             'flujoCondiciones',
             'flujoRamificaciones',
             'flujoNodosFinales',
             'ejecuciones' => function ($query) {
-                $query->latest()->limit(50);
+                // Solo campos esenciales de ejecuciones, sin prospectos_ids (JSON grande)
+                $query->select([
+                    'id', 'flujo_id', 'origen_id', 'estado', 'prospectos_count',
+                    'nodo_actual', 'proximo_nodo', 'fecha_proximo_nodo', 'created_at',
+                ])->latest()->limit(50);
             },
         ]);
 
@@ -235,10 +242,8 @@ class FlujoController extends Controller
             DB::beginTransaction();
 
             // Contar datos antes de eliminar para el mensaje
-            $totalProspectos = $flujo->prospectosEnFlujo()->count();
-            $totalEtapas = $flujo->flujoEtapas()->count();
-            $totalCondiciones = $flujo->flujoCondiciones()->count();
-            $totalEjecuciones = $flujo->ejecuciones()->count();
+            // Optimizado: 1 query con withCount en lugar de 4 queries separadas
+            $flujo->loadCount(['prospectosEnFlujo', 'flujoEtapas', 'flujoCondiciones', 'ejecuciones']);
 
             // Las foreign keys con onDelete('cascade') eliminarán automáticamente:
             // - flujo_etapas
@@ -256,10 +261,10 @@ class FlujoController extends Controller
             return response()->json([
                 'mensaje' => 'Flujo eliminado exitosamente',
                 'detalles' => [
-                    'prospectos_desvinculados' => $totalProspectos,
-                    'etapas_eliminadas' => $totalEtapas,
-                    'condiciones_eliminadas' => $totalCondiciones,
-                    'ejecuciones_eliminadas' => $totalEjecuciones,
+                    'prospectos_desvinculados' => $flujo->prospectos_en_flujo_count,
+                    'etapas_eliminadas' => $flujo->flujo_etapas_count,
+                    'condiciones_eliminadas' => $flujo->flujo_condiciones_count,
+                    'ejecuciones_eliminadas' => $flujo->ejecuciones_count,
                 ],
             ]);
         } catch (\Exception $e) {
@@ -1439,28 +1444,36 @@ class FlujoController extends Controller
 
     /**
      * Asigna prospectos de forma síncrona (para cantidades pequeñas).
+     * Optimizado: usa bulk insert en lugar de N queries individuales.
      */
     private function asignarProspectosSync(Flujo $flujo, array $prospectoIds, string $canalAsignado): array
     {
-        $conteo = ['total' => 0, 'email' => 0, 'sms' => 0, 'is_async' => false];
+        $totalProspectos = count($prospectoIds);
+        $now = now();
 
-        foreach ($prospectoIds as $prospectoId) {
-            ProspectoEnFlujo::create([
-                'flujo_id' => $flujo->id,
-                'prospecto_id' => $prospectoId,
-                'canal_asignado' => $canalAsignado,
-                'estado' => 'pendiente',
-                'etapa_actual_id' => null,
-                'fecha_inicio' => now(),
-            ]);
+        // Bulk insert: 1 query en lugar de N queries
+        $registros = array_map(fn ($prospectoId) => [
+            'flujo_id' => $flujo->id,
+            'prospecto_id' => $prospectoId,
+            'canal_asignado' => $canalAsignado,
+            'estado' => 'pendiente',
+            'etapa_actual_id' => null,
+            'fecha_inicio' => $now,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ], $prospectoIds);
 
-            $conteo['total']++;
-            $conteo[$canalAsignado]++;
-        }
+        // insertOrIgnore evita duplicados sin fallar
+        ProspectoEnFlujo::insertOrIgnore($registros);
 
         $flujo->update(['estado_procesamiento' => 'completado']);
 
-        return $conteo;
+        return [
+            'total' => $totalProspectos,
+            'email' => $canalAsignado === 'email' ? $totalProspectos : 0,
+            'sms' => $canalAsignado === 'sms' ? $totalProspectos : 0,
+            'is_async' => false,
+        ];
     }
 
     /**
@@ -1671,36 +1684,43 @@ class FlujoController extends Controller
     /**
      * Guardar la estructura del FlowBuilder en la base de datos.
      */
+    /**
+     * Guarda la estructura del FlowBuilder usando bulk inserts.
+     * Optimizado: 4 queries en lugar de N queries por elemento.
+     */
     protected function guardarEstructuraFlowBuilder(Flujo $flujo, array $structure): void
     {
-        // Guardar etapas (stages)
-        if (isset($structure['stages']) && is_array($structure['stages'])) {
-            foreach ($structure['stages'] as $stage) {
-                \App\Models\FlujoEtapa::create([
-                    'id' => $stage['id'],
-                    'flujo_id' => $flujo->id,
-                    'orden' => $stage['orden'] ?? 0,
-                    'label' => $stage['label'] ?? '',
-                    'dia_envio' => $stage['dia_envio'] ?? 0,
-                    'tipo_mensaje' => $stage['tipo_mensaje'] ?? 'email',
-                    'plantilla_mensaje' => $stage['plantilla_mensaje'] ?? '',
-                    'plantilla_id' => $stage['plantilla_id'] ?? null,
-                    'plantilla_id_email' => $stage['plantilla_id_email'] ?? null,
-                    'plantilla_type' => $stage['plantilla_type'] ?? 'inline',
-                    'fecha_inicio_personalizada' => $stage['fecha_inicio_personalizada'] ?? null,
-                    'activo' => $stage['activo'] ?? true,
-                ]);
-            }
+        $now = now();
+
+        // 1. Bulk insert etapas (stages)
+        if (! empty($structure['stages'])) {
+            $etapasData = array_map(fn ($stage) => [
+                'id' => $stage['id'],
+                'flujo_id' => $flujo->id,
+                'orden' => $stage['orden'] ?? 0,
+                'label' => $stage['label'] ?? '',
+                'dia_envio' => $stage['dia_envio'] ?? 0,
+                'tipo_mensaje' => $stage['tipo_mensaje'] ?? 'email',
+                'plantilla_mensaje' => $stage['plantilla_mensaje'] ?? '',
+                'plantilla_id' => $stage['plantilla_id'] ?? null,
+                'plantilla_id_email' => $stage['plantilla_id_email'] ?? null,
+                'plantilla_type' => $stage['plantilla_type'] ?? 'inline',
+                'fecha_inicio_personalizada' => $stage['fecha_inicio_personalizada'] ?? null,
+                'activo' => $stage['activo'] ?? true,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ], $structure['stages']);
+
+            \App\Models\FlujoEtapa::insert($etapasData);
         }
 
-        // Guardar condiciones (conditions)
-        if (isset($structure['conditions']) && is_array($structure['conditions'])) {
-            foreach ($structure['conditions'] as $condition) {
-                // Inferir check_param según condition_type si no viene
+        // 2. Bulk insert condiciones (conditions)
+        if (! empty($structure['conditions'])) {
+            $condicionesData = array_map(function ($condition) use ($flujo, $now) {
                 $conditionType = $condition['condition_type'] ?? 'email_opened';
                 $defaultCheckParam = $this->getDefaultCheckParamForConditionType($conditionType);
 
-                FlujoCondicion::create([
+                return [
                     'id' => $condition['id'],
                     'flujo_id' => $flujo->id,
                     'label' => $condition['label'] ?? '',
@@ -1709,53 +1729,64 @@ class FlujoController extends Controller
                     'condition_label' => $condition['condition_label'] ?? '',
                     'yes_label' => $condition['yes_label'] ?? 'Sí',
                     'no_label' => $condition['no_label'] ?? 'No',
-                    // Campos de evaluación para VerificarCondicionJob
                     'check_param' => $condition['check_param'] ?? $defaultCheckParam,
                     'check_operator' => $condition['check_operator'] ?? '>',
                     'check_value' => $condition['check_value'] ?? '0',
-                ]);
-            }
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ];
+            }, $structure['conditions']);
+
+            FlujoCondicion::insert($condicionesData);
         }
 
-        // Guardar ramificaciones (branches)
-        if (isset($structure['branches']) && is_array($structure['branches'])) {
-            foreach ($structure['branches'] as $branch) {
-                \App\Models\FlujoRamificacion::create([
-                    'flujo_id' => $flujo->id,
-                    'edge_id' => $branch['edge_id'] ?? '',
-                    'source_node_id' => $branch['source_node_id'] ?? '',
-                    'target_node_id' => $branch['target_node_id'] ?? '',
-                    'source_handle' => $branch['source_handle'] ?? null,
-                    'target_handle' => $branch['target_handle'] ?? null,
-                    'condition_branch' => $branch['condition_branch'] ?? null,
-                ]);
-            }
+        // 3. Bulk insert ramificaciones (branches)
+        if (! empty($structure['branches'])) {
+            $branchesData = array_map(fn ($branch) => [
+                'flujo_id' => $flujo->id,
+                'edge_id' => $branch['edge_id'] ?? '',
+                'source_node_id' => $branch['source_node_id'] ?? '',
+                'target_node_id' => $branch['target_node_id'] ?? '',
+                'source_handle' => $branch['source_handle'] ?? null,
+                'target_handle' => $branch['target_handle'] ?? null,
+                'condition_branch' => $branch['condition_branch'] ?? null,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ], $structure['branches']);
+
+            \App\Models\FlujoRamificacion::insert($branchesData);
         }
 
-        // Guardar nodos finales (end_nodes)
-        if (isset($structure['end_nodes']) && is_array($structure['end_nodes'])) {
+        // 4. Bulk insert nodos finales (end_nodes)
+        if (! empty($structure['end_nodes'])) {
+            $endNodesData = [];
+
             foreach ($structure['end_nodes'] as $endNode) {
-                // ✅ Soportar end_node como string (ID) o como objeto
+                // Soportar end_node como string (ID) o como objeto
                 if (is_string($endNode)) {
-                    // Frontend envía array de strings: ["end-1"]
                     $endNodeId = $endNode;
                     $label = 'Fin';
                     $description = null;
                 } else {
-                    // Frontend envía array de objetos: [{"id": "end-1", "data": {...}}]
                     $endNodeId = $endNode['id'] ?? null;
                     $label = $endNode['data']['label'] ?? 'Fin';
                     $description = $endNode['data']['description'] ?? null;
                 }
 
                 if ($endNodeId) {
-                    \App\Models\FlujoNodoFinal::create([
+                    $endNodesData[] = [
                         'node_id' => $endNodeId,
                         'flujo_id' => $flujo->id,
                         'label' => $label,
                         'description' => $description,
-                    ]);
+                        'created_at' => $now,
+                        'updated_at' => $now,
+                    ];
                 }
+            }
+
+            if (! empty($endNodesData)) {
+                \App\Models\FlujoNodoFinal::insert($endNodesData);
             }
         }
     }
@@ -1783,10 +1814,23 @@ class FlujoController extends Controller
      */
     public function cohortesActivas(Flujo $flujo): JsonResponse
     {
-        // Obtener todas las ejecuciones activas (in_progress o paused)
+        // Obtener ejecuciones activas SIN cargar prospectos_ids (evita memory exhaustion)
+        // Usamos prospectos_count en lugar de contar el JSON en memoria
         $ejecucionesActivas = $flujo->ejecuciones()
             ->whereIn('estado', ['in_progress', 'paused'])
+            ->select([
+                'id',
+                'flujo_id',
+                'estado',
+                'prospectos_count',
+                'nodo_actual',
+                'proximo_nodo',
+                'fecha_proximo_nodo',
+                'config',
+                'created_at',
+            ])
             ->with(['etapas' => function ($query) {
+                // NO cargar prospectos_ids de etapas - usar prospectos_count
                 $query->select([
                     'id',
                     'flujo_ejecucion_id',
@@ -1794,7 +1838,7 @@ class FlujoController extends Controller
                     'estado',
                     'fecha_programada',
                     'fecha_ejecucion',
-                    'prospectos_ids',
+                    'prospectos_count',
                 ]);
             }])
             ->orderBy('created_at', 'desc')
@@ -1811,11 +1855,9 @@ class FlujoController extends Controller
             ]);
         }
 
-        // Construir resumen de cada cohorte
+        // Construir resumen de cada cohorte (usando prospectos_count, no el JSON)
         $cohortes = $ejecucionesActivas->map(function ($ejecucion) {
-            $prospectosCount = is_array($ejecucion->prospectos_ids)
-                ? count($ejecucion->prospectos_ids)
-                : ($ejecucion->prospectos_count ?? 0);
+            $prospectosCount = $ejecucion->prospectos_count ?? 0;
 
             // Calcular progreso basado en etapas
             $etapasTotal = $ejecucion->etapas->count();
@@ -1868,12 +1910,12 @@ class FlujoController extends Controller
 
                 $resumenPorNodo[$nodeId]['total_cohortes']++;
 
-                // Contar prospectos de esta etapa
-                $prospectosEtapa = is_array($etapa->prospectos_ids) ? count($etapa->prospectos_ids) : 0;
+                // Usar prospectos_count (columna) en lugar de contar el JSON en memoria
+                $prospectosEtapa = $etapa->prospectos_count ?? 0;
 
-                // Si no tiene prospectos_ids, usar los de la ejecución (para primera etapa)
-                if ($prospectosEtapa === 0 && is_array($ejecucion->prospectos_ids)) {
-                    $prospectosEtapa = count($ejecucion->prospectos_ids);
+                // Si la etapa no tiene count, usar el de la ejecución (para primera etapa)
+                if ($prospectosEtapa === 0) {
+                    $prospectosEtapa = $ejecucion->prospectos_count ?? 0;
                 }
 
                 $resumenPorNodo[$nodeId]['total_prospectos'] += $prospectosEtapa;

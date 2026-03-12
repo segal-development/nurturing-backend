@@ -162,6 +162,7 @@ class BatchCompletedCallback
                 'etapa_id' => null,
                 'node_id' => $targetNodeId,
                 'prospectos_ids' => $prospectoIds,
+                'prospectos_count' => count($prospectoIds),
                 'fecha_programada' => $fechaVerificacion,
                 'estado' => 'pending',
                 'response_athenacampaign' => [
@@ -174,6 +175,7 @@ class BatchCompletedCallback
         } else {
             $condicionEtapa->update([
                 'prospectos_ids' => $prospectoIds,
+                'prospectos_count' => count($prospectoIds),
                 'fecha_programada' => $fechaVerificacion,
                 'response_athenacampaign' => [
                     'pending_condition' => true,
@@ -221,13 +223,15 @@ class BatchCompletedCallback
                 'etapa_id' => null,
                 'node_id' => $targetNodeId,
                 'prospectos_ids' => $prospectoIds,
+                'prospectos_count' => count($prospectoIds),
                 'fecha_programada' => $fechaProgramada,
                 'estado' => 'pending',
             ]);
         } else {
-            // Solo actualizar prospectos_ids, NO sobreescribir fecha_programada
+            // Solo actualizar prospectos_ids y count, NO sobreescribir fecha_programada
             $siguienteEtapaEjecucion->update([
                 'prospectos_ids' => $prospectoIds,
+                'prospectos_count' => count($prospectoIds),
             ]);
         }
 
