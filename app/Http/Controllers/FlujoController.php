@@ -1774,4 +1774,143 @@ class FlujoController extends Controller
             default => 'Views',
         };
     }
+
+    /**
+     * Obtiene el resumen de cohortes activas para un flujo.
+     *
+     * Retorna información sobre todas las ejecuciones activas (cohortes) del flujo,
+     * con estadísticas agregadas por nodo para mostrar en la UI.
+     */
+    public function cohortesActivas(Flujo $flujo): JsonResponse
+    {
+        // Obtener todas las ejecuciones activas (in_progress o paused)
+        $ejecucionesActivas = $flujo->ejecuciones()
+            ->whereIn('estado', ['in_progress', 'paused'])
+            ->with(['etapas' => function ($query) {
+                $query->select([
+                    'id',
+                    'flujo_ejecucion_id',
+                    'node_id',
+                    'estado',
+                    'fecha_programada',
+                    'fecha_ejecucion',
+                    'prospectos_ids',
+                ]);
+            }])
+            ->orderBy('created_at', 'desc')
+            ->get();
+
+        if ($ejecucionesActivas->isEmpty()) {
+            return response()->json([
+                'error' => false,
+                'data' => [
+                    'total_cohortes' => 0,
+                    'cohortes' => [],
+                    'resumen_por_nodo' => [],
+                ],
+            ]);
+        }
+
+        // Construir resumen de cada cohorte
+        $cohortes = $ejecucionesActivas->map(function ($ejecucion) {
+            $prospectosCount = is_array($ejecucion->prospectos_ids)
+                ? count($ejecucion->prospectos_ids)
+                : ($ejecucion->prospectos_count ?? 0);
+
+            // Calcular progreso basado en etapas
+            $etapasTotal = $ejecucion->etapas->count();
+            $etapasCompletadas = $ejecucion->etapas->where('estado', 'completed')->count();
+            $etapasEjecutando = $ejecucion->etapas->where('estado', 'executing')->count();
+            $progreso = $etapasTotal > 0 ? round(($etapasCompletadas / $etapasTotal) * 100) : 0;
+
+            // Determinar estado legible
+            $estadoLegible = match ($ejecucion->estado) {
+                'in_progress' => $etapasEjecutando > 0 ? 'Procesando' : 'En progreso',
+                'paused' => 'Pausado',
+                default => $ejecucion->estado,
+            };
+
+            return [
+                'id' => $ejecucion->id,
+                'created_at' => $ejecucion->created_at->toISOString(),
+                'estado' => $ejecucion->estado,
+                'estado_legible' => $estadoLegible,
+                'prospectos_count' => $prospectosCount,
+                'progreso' => $progreso,
+                'etapas_completadas' => $etapasCompletadas,
+                'etapas_total' => $etapasTotal,
+                'nodo_actual' => $ejecucion->nodo_actual,
+                'proximo_nodo' => $ejecucion->proximo_nodo,
+                'fecha_proximo_nodo' => $ejecucion->fecha_proximo_nodo?->toISOString(),
+                'origen' => $ejecucion->config['created_from'] ?? 'manual',
+            ];
+        });
+
+        // Construir resumen por nodo (para mostrar en cada StageNode)
+        $resumenPorNodo = [];
+
+        foreach ($ejecucionesActivas as $ejecucion) {
+            foreach ($ejecucion->etapas as $etapa) {
+                $nodeId = $etapa->node_id;
+
+                if (! isset($resumenPorNodo[$nodeId])) {
+                    $resumenPorNodo[$nodeId] = [
+                        'node_id' => $nodeId,
+                        'total_cohortes' => 0,
+                        'cohortes_completadas' => 0,
+                        'cohortes_procesando' => 0,
+                        'cohortes_pendientes' => 0,
+                        'total_prospectos' => 0,
+                        'prospectos_procesados' => 0,
+                        'detalle_cohortes' => [],
+                    ];
+                }
+
+                $resumenPorNodo[$nodeId]['total_cohortes']++;
+
+                // Contar prospectos de esta etapa
+                $prospectosEtapa = is_array($etapa->prospectos_ids) ? count($etapa->prospectos_ids) : 0;
+
+                // Si no tiene prospectos_ids, usar los de la ejecución (para primera etapa)
+                if ($prospectosEtapa === 0 && is_array($ejecucion->prospectos_ids)) {
+                    $prospectosEtapa = count($ejecucion->prospectos_ids);
+                }
+
+                $resumenPorNodo[$nodeId]['total_prospectos'] += $prospectosEtapa;
+
+                // Clasificar por estado
+                switch ($etapa->estado) {
+                    case 'completed':
+                        $resumenPorNodo[$nodeId]['cohortes_completadas']++;
+                        $resumenPorNodo[$nodeId]['prospectos_procesados'] += $prospectosEtapa;
+                        break;
+                    case 'executing':
+                        $resumenPorNodo[$nodeId]['cohortes_procesando']++;
+                        break;
+                    case 'pending':
+                    case 'paused':
+                        $resumenPorNodo[$nodeId]['cohortes_pendientes']++;
+                        break;
+                }
+
+                // Agregar detalle de esta cohorte
+                $resumenPorNodo[$nodeId]['detalle_cohortes'][] = [
+                    'ejecucion_id' => $ejecucion->id,
+                    'estado' => $etapa->estado,
+                    'prospectos' => $prospectosEtapa,
+                    'fecha_programada' => $etapa->fecha_programada?->toISOString(),
+                    'created_at' => $ejecucion->created_at->toISOString(),
+                ];
+            }
+        }
+
+        return response()->json([
+            'error' => false,
+            'data' => [
+                'total_cohortes' => $ejecucionesActivas->count(),
+                'cohortes' => $cohortes,
+                'resumen_por_nodo' => $resumenPorNodo,
+            ],
+        ]);
+    }
 }
