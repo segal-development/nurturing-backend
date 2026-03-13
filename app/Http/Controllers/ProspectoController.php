@@ -550,13 +550,31 @@ class ProspectoController extends Controller
                         $nuevosUltimoSync = $metadata['nuevos'] ?? 0;
                     }
 
-                    // Para lotes Sysgal, agregar desglose por nivel de deuda y fecha último sync
+                    // Para el lote principal SYSGAL, calcular totales incluyendo sub-lotes
                     $desglosePorNivelDeuda = null;
                     $fechaUltimoSync = null;
-                    if (str_contains(strtolower($lote->nombre), 'sysgal')) {
-                        $importacionIds = $lote->importaciones->pluck('id')->toArray();
-                        if (! empty($importacionIds)) {
-                            $desglosePorNivelDeuda = $this->calcularDesglosePorNivelDeuda($importacionIds);
+                    if ($lote->nombre === 'SYSGAL') {
+                        // Obtener IDs de todos los sub-lotes de Sysgal
+                        $todosLosLotesSysgal = \App\Models\Lote::where(function ($q) {
+                            $q->where('nombre', 'SYSGAL')
+                                ->orWhere('nombre', 'like', 'SG\\_NA\\_%')
+                                ->orWhere('nombre', 'like', 'SG\\_NC\\_%')
+                                ->orWhere('nombre', 'like', 'SYSGAL\\_%');
+                        })->pluck('id')->toArray();
+
+                        // Calcular total de prospectos de todos los sub-lotes
+                        $totalProspectos = \App\Models\Prospecto::whereHas(
+                            'importacion',
+                            fn ($q) => $q->whereIn('lote_id', $todosLosLotesSysgal)
+                        )->count();
+
+                        // Obtener todas las importaciones de todos los sub-lotes para el desglose
+                        $todasLasImportaciones = \App\Models\Importacion::whereIn('lote_id', $todosLosLotesSysgal)
+                            ->pluck('id')
+                            ->toArray();
+
+                        if (! empty($todasLasImportaciones)) {
+                            $desglosePorNivelDeuda = $this->calcularDesglosePorNivelDeuda($todasLasImportaciones);
                         }
 
                         // Obtener fecha del último sync desde ExternalApiSource
