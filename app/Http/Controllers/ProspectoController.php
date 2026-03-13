@@ -506,6 +506,15 @@ class ProspectoController extends Controller
                         $nuevosUltimoSync = $metadata['nuevos'] ?? 0;
                     }
 
+                    // Para lotes Sysgal, agregar desglose por nivel de deuda
+                    $desglosePorNivelDeuda = null;
+                    if (str_contains(strtolower($lote->nombre), 'sysgal')) {
+                        $importacionIds = $lote->importaciones->pluck('id')->toArray();
+                        if (! empty($importacionIds)) {
+                            $desglosePorNivelDeuda = $this->calcularDesglosePorNivelDeuda($importacionIds);
+                        }
+                    }
+
                     return [
                         'id' => $lote->id,
                         'nombre' => $lote->nombre,
@@ -515,6 +524,7 @@ class ProspectoController extends Controller
                         'total_registros' => $lote->total_registros,
                         'registros_exitosos' => $lote->registros_exitosos,
                         'nuevos_ultimo_sync' => $nuevosUltimoSync,
+                        'desglose_nivel_deuda' => $desglosePorNivelDeuda,
                         'created_at' => $lote->created_at?->timezone('America/Santiago')->format('d/m/Y H:i:s'),
                         'importaciones' => $lote->importaciones->map(fn ($i) => [
                             'id' => $i->id,
@@ -567,6 +577,40 @@ class ProspectoController extends Controller
         return response()->json([
             'data' => $data,
         ]);
+    }
+
+    /**
+     * Calcula el desglose de prospectos por nivel de deuda para un conjunto de importaciones.
+     * Agrupa null, vacío y sin_informacion como "baja".
+     *
+     * @param  array  $importacionIds  IDs de las importaciones a analizar
+     * @return array{baja: int, media: int, alta: int, total: int}
+     */
+    private function calcularDesglosePorNivelDeuda(array $importacionIds): array
+    {
+        // Query optimizada usando conditional aggregation
+        $result = Prospecto::query()
+            ->whereIn('importacion_id', $importacionIds)
+            ->selectRaw("
+                COUNT(*) as total,
+                COUNT(CASE 
+                    WHEN metadata->>'nivel_deuda' IS NULL 
+                      OR metadata->>'nivel_deuda' = '' 
+                      OR metadata->>'nivel_deuda' = 'sin_informacion'
+                      OR metadata->>'nivel_deuda' = 'baja'
+                    THEN 1 
+                END) as baja,
+                COUNT(CASE WHEN metadata->>'nivel_deuda' = 'media' THEN 1 END) as media,
+                COUNT(CASE WHEN metadata->>'nivel_deuda' = 'alta' THEN 1 END) as alta
+            ")
+            ->first();
+
+        return [
+            'baja' => (int) ($result->baja ?? 0),
+            'media' => (int) ($result->media ?? 0),
+            'alta' => (int) ($result->alta ?? 0),
+            'total' => (int) ($result->total ?? 0),
+        ];
     }
 
     // =========================================================================
