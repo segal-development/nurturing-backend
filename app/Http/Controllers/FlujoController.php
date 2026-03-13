@@ -2003,13 +2003,13 @@ class FlujoController extends Controller
     private function calcularNuevosSysgalPorFlujo(Flujo $flujo): ?array
     {
         // Mapeo de flujos de segmento a niveles de deuda
-        // Flujo 39 (Segmento 1) → deuda baja/sin_info/null
+        // Flujo 39 (Segmento 1) → deuda baja
         // Flujo 40 (Segmento 2) → deuda media
         // Flujo 41 (Segmento 3) → deuda alta
         $flujosSegmento = [
-            39 => ['baja', 'sin_informacion', null],
-            40 => ['media'],
-            41 => ['alta'],
+            39 => 'baja',
+            40 => 'media',
+            41 => 'alta',
         ];
 
         // Si no es un flujo de segmento Sysgal, no mostrar esta info
@@ -2017,32 +2017,34 @@ class FlujoController extends Controller
             return null;
         }
 
-        $nivelesDeuda = $flujosSegmento[$flujo->id];
+        $nivelDeudaKey = $flujosSegmento[$flujo->id];
 
-        // Obtener fecha del último sync de Sysgal
-        $sysgalSource = \App\Models\ExternalApiSource::where('name', 'sysgal')->first();
-        if (! $sysgalSource || ! $sysgalSource->last_synced_at) {
+        // Obtener la última importación del lote SYSGAL
+        $loteSysgal = \App\Models\Lote::where('nombre', 'SYSGAL')->first();
+        if (! $loteSysgal) {
             return null;
         }
 
-        $fechaSync = $sysgalSource->last_synced_at;
+        $ultimaImportacion = $loteSysgal->importaciones()->orderBy('created_at', 'desc')->first();
+        if (! $ultimaImportacion) {
+            return null;
+        }
 
-        // Contar prospectos NUEVOS (created_at = fecha del sync) con el nivel de deuda correspondiente
-        $query = \App\Models\Prospecto::whereRaw("metadata->>'source' = 'sysgal'")
-            ->whereDate('created_at', $fechaSync->format('Y-m-d'));
+        $metadata = is_array($ultimaImportacion->metadata)
+            ? $ultimaImportacion->metadata
+            : json_decode($ultimaImportacion->metadata, true);
 
-        // Filtrar por nivel de deuda
-        $query->where(function ($q) use ($nivelesDeuda) {
-            foreach ($nivelesDeuda as $nivel) {
-                if ($nivel === null) {
-                    $q->orWhereRaw("metadata->>'nivel_deuda' IS NULL");
-                } else {
-                    $q->orWhereRaw("metadata->>'nivel_deuda' = ?", [$nivel]);
-                }
-            }
-        });
+        // Verificar si existe el desglose de nuevos por nivel
+        $nuevosPorNivel = $metadata['nuevos_por_nivel'] ?? null;
+        $count = 0;
 
-        $count = $query->count();
+        if ($nuevosPorNivel && isset($nuevosPorNivel[$nivelDeudaKey])) {
+            $count = $nuevosPorNivel[$nivelDeudaKey];
+        }
+
+        // Obtener fecha del último sync
+        $sysgalSource = \App\Models\ExternalApiSource::where('name', 'sysgal')->first();
+        $fechaSync = $sysgalSource?->last_synced_at ?? $ultimaImportacion->created_at;
 
         // Determinar label del nivel de deuda
         $nivelLabel = match ($flujo->id) {
