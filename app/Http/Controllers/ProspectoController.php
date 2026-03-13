@@ -487,10 +487,10 @@ class ProspectoController extends Controller
     {
         $data = \Illuminate\Support\Facades\Cache::remember('prospectos:opciones_filtrado', 300, function () {
             // Sub-lotes de SYSGAL que deben ocultarse (se muestran como parte del lote principal SYSGAL)
-            // Incluye todos los sub-estados de "No Agendados" (SG NA) y "No Cerrados" (SG NC)
+            // Incluye todos los sub-estados de "No Agendados" (SG_NA_*) y "No Cerrados" (SG_NC_*)
             $subLotesSysgalOcultos = [
-                'SYSGAL NO CERRADOS',
-                'SYSGAL NO AGENDADOS',
+                'SYSGAL_NO_CERRADOS',
+                'SYSGAL_NO_AGENDADOS',
             ];
 
             // Obtener todos los lotes con sus importaciones y conteo de prospectos
@@ -500,9 +500,9 @@ class ProspectoController extends Controller
                 }])
                 // Filtrar sub-lotes de SYSGAL por nombre exacto
                 ->whereNotIn('nombre', $subLotesSysgalOcultos)
-                // Filtrar todos los sub-lotes que empiezan con "SG NA" o "SG NC"
-                ->where('nombre', 'not like', 'SG NA %')
-                ->where('nombre', 'not like', 'SG NC %')
+                // Filtrar todos los sub-lotes que empiezan con "SG_NA_" o "SG_NC_"
+                ->where('nombre', 'not like', 'SG\_NA\_%')
+                ->where('nombre', 'not like', 'SG\_NC\_%')
                 ->orderBy('created_at', 'desc')
                 ->get()
                 ->map(function ($lote) {
