@@ -517,12 +517,21 @@ class ProspectoController extends Controller
                         $nuevosUltimoSync = $metadata['nuevos'] ?? 0;
                     }
 
-                    // Para lotes Sysgal, agregar desglose por nivel de deuda
+                    // Para lotes Sysgal, agregar desglose por nivel de deuda y fecha último sync
                     $desglosePorNivelDeuda = null;
+                    $fechaUltimoSync = null;
                     if (str_contains(strtolower($lote->nombre), 'sysgal')) {
                         $importacionIds = $lote->importaciones->pluck('id')->toArray();
                         if (! empty($importacionIds)) {
                             $desglosePorNivelDeuda = $this->calcularDesglosePorNivelDeuda($importacionIds);
+                        }
+
+                        // Obtener fecha del último sync desde ExternalApiSource
+                        $sysgalSource = \App\Models\ExternalApiSource::where('name', 'sysgal')->first();
+                        if ($sysgalSource && $sysgalSource->last_synced_at) {
+                            $fechaUltimoSync = $sysgalSource->last_synced_at
+                                ->timezone('America/Santiago')
+                                ->format('d/m/Y H:i');
                         }
                     }
 
@@ -536,6 +545,7 @@ class ProspectoController extends Controller
                         'registros_exitosos' => $lote->registros_exitosos,
                         'nuevos_ultimo_sync' => $nuevosUltimoSync,
                         'desglose_nivel_deuda' => $desglosePorNivelDeuda,
+                        'fecha_ultimo_sync' => $fechaUltimoSync,
                         'created_at' => $lote->created_at?->timezone('America/Santiago')->format('d/m/Y H:i:s'),
                         'importaciones' => $lote->importaciones->map(fn ($i) => [
                             'id' => $i->id,
