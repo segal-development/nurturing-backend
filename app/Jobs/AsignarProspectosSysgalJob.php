@@ -153,6 +153,8 @@ class AsignarProspectosSysgalJob implements ShouldQueue
 
     /**
      * Procesa un grupo de prospectos para un flujo específico.
+     * IMPORTANTE: Crea una NUEVA ejecución (cohorte) para que los prospectos
+     * empiecen desde la primera etapa del flujo.
      *
      * @param  array<int, Prospecto>  $prospectos
      * @return array{asignados: int, agregados_a_ejecucion: int}
@@ -184,14 +186,11 @@ class AsignarProspectosSysgalJob implements ShouldQueue
             return ['asignados' => 0, 'agregados_a_ejecucion' => 0];
         }
 
-        // 2. Buscar ejecución activa existente
-        $ejecucionActiva = FlujoEjecucion::where('flujo_id', $flujoId)
-            ->where('estado', 'in_progress')
-            ->orderBy('created_at', 'desc')
-            ->first();
+        // 2. Crear NUEVA ejecución para que empiecen desde la primera etapa
+        $ejecucionCreada = $this->crearNuevaEjecucion($flujo, $prospectoIds, $nivelDeuda);
 
-        if (! $ejecucionActiva) {
-            Log::warning("No hay ejecución activa para flujo {$flujoId}, los prospectos quedan asignados pero no en ejecución", [
+        if (! $ejecucionCreada) {
+            Log::warning("No se pudo crear ejecución para flujo {$flujoId}, prospectos quedan asignados pero no en ejecución", [
                 'flujo_id' => $flujoId,
                 'asignados' => $asignados,
             ]);
@@ -199,114 +198,209 @@ class AsignarProspectosSysgalJob implements ShouldQueue
             return ['asignados' => $asignados, 'agregados_a_ejecucion' => 0];
         }
 
-        // 3. Agregar prospectos a la ejecución existente
-        $agregados = $this->agregarAEjecucionExistente($ejecucionActiva, $prospectoIds);
-
-        return ['asignados' => $asignados, 'agregados_a_ejecucion' => $agregados];
+        return ['asignados' => $asignados, 'agregados_a_ejecucion' => count($prospectoIds)];
     }
 
     /**
-     * Agrega prospectos a una ejecución existente.
-     *
-     * Los nuevos prospectos se agregan a:
-     * 1. prospectos_ids de la FlujoEjecucion
-     * 2. prospectos_ids de la primera etapa pendiente (para que se envíen en el próximo nodo)
+     * Crea una NUEVA ejecución para los prospectos nuevos.
+     * Así empiezan desde la primera etapa del flujo.
      */
-    private function agregarAEjecucionExistente(FlujoEjecucion $ejecucion, array $nuevosProspectoIds): int
+    private function crearNuevaEjecucion(Flujo $flujo, array $prospectoIds, string $nivelDeuda): bool
     {
-        $cantidadNuevos = count($nuevosProspectoIds);
+        try {
+            $configStructure = $flujo->config_structure;
 
-        // Obtener prospectos actuales de la ejecución
-        $prospectosActuales = $ejecucion->prospectos_ids ?? [];
+            if (empty($configStructure) || empty($configStructure['stages'])) {
+                Log::error("Flujo {$flujo->id} no tiene config_structure válido");
 
-        // Merge evitando duplicados
-        $prospectosActualizados = array_values(array_unique(
-            array_merge($prospectosActuales, $nuevosProspectoIds)
-        ));
+                return false;
+            }
 
-        // Actualizar la ejecución
-        $ejecucion->update([
-            'prospectos_ids' => $prospectosActualizados,
-            'config' => array_merge($ejecucion->config ?? [], [
-                'last_auto_assign' => now()->toISOString(),
-                'last_auto_assign_count' => $cantidadNuevos,
-                'total_prospectos' => count($prospectosActualizados),
-            ]),
-        ]);
+            $stages = $configStructure['stages'] ?? [];
+            $branches = $configStructure['branches'] ?? [];
 
-        Log::info('Prospectos agregados a ejecución existente', [
-            'ejecucion_id' => $ejecucion->id,
-            'flujo_id' => $ejecucion->flujo_id,
-            'prospectos_anteriores' => count($prospectosActuales),
-            'prospectos_nuevos' => $cantidadNuevos,
-            'prospectos_total' => count($prospectosActualizados),
-        ]);
+            // Buscar el nodo inicial (start)
+            $startNodeId = null;
+            foreach ($stages as $stage) {
+                if (($stage['type'] ?? '') === 'initial' || ($stage['type'] ?? '') === 'start') {
+                    $startNodeId = $stage['id'];
+                    break;
+                }
+            }
 
-        // Buscar la próxima etapa pendiente para agregar los prospectos
-        $proximaEtapaPendiente = $this->buscarProximaEtapaPendiente($ejecucion);
+            if (! $startNodeId) {
+                Log::error("Flujo {$flujo->id} no tiene nodo inicial definido");
 
-        if ($proximaEtapaPendiente) {
-            $this->agregarProspectosAEtapa($proximaEtapaPendiente, $nuevosProspectoIds);
-        } else {
-            Log::warning('No hay etapa pendiente para agregar nuevos prospectos', [
-                'ejecucion_id' => $ejecucion->id,
+                return false;
+            }
+
+            // Buscar la primera etapa después del start
+            $primeraConexion = collect($branches)->firstWhere('source_node_id', $startNodeId);
+
+            if (! $primeraConexion) {
+                // Fallback: primera etapa por orden
+                $primeraEtapa = collect($stages)
+                    ->filter(fn ($s) => in_array($s['type'] ?? '', ['email', 'sms', 'stage']))
+                    ->sortBy('orden')
+                    ->first();
+
+                if (! $primeraEtapa) {
+                    Log::error("Flujo {$flujo->id} no tiene etapas ejecutables");
+
+                    return false;
+                }
+
+                $primeraEtapaId = $primeraEtapa['id'];
+            } else {
+                $primeraEtapaId = $primeraConexion['target_node_id'];
+            }
+
+            $primeraEtapa = collect($stages)->firstWhere('id', $primeraEtapaId);
+
+            if (! $primeraEtapa) {
+                Log::error("No se encontró la primera etapa {$primeraEtapaId} en el flujo");
+
+                return false;
+            }
+
+            // Calcular fechas - empezar desde ahora
+            $fechaInicio = now();
+            $tiempoEsperaPrimeraEtapa = $primeraEtapa['tiempo_espera'] ?? 0;
+            $fechaEjecucionPrimeraEtapa = $fechaInicio->copy()->addDays($tiempoEsperaPrimeraEtapa);
+
+            // Crear la ejecución
+            $ejecucion = FlujoEjecucion::create([
+                'flujo_id' => $flujo->id,
+                'origen_id' => null,
+                'prospectos_ids' => $prospectoIds,
+                'prospectos_count' => count($prospectoIds),
+                'fecha_inicio_programada' => $fechaInicio,
+                'fecha_inicio_real' => $fechaInicio,
+                'estado' => 'in_progress',
+                'nodo_actual' => null,
+                'proximo_nodo' => $primeraEtapaId,
+                'fecha_proximo_nodo' => $fechaEjecucionPrimeraEtapa,
+                'config' => [
+                    'created_from' => 'auto_asignar_sysgal',
+                    'nivel_deuda' => $nivelDeuda,
+                    'job_run_at' => now()->toISOString(),
+                    'total_prospectos' => count($prospectoIds),
+                ],
             ]);
+
+            Log::info('Nueva FlujoEjecucion creada para prospectos Sysgal', [
+                'ejecucion_id' => $ejecucion->id,
+                'flujo_id' => $flujo->id,
+                'nivel_deuda' => $nivelDeuda,
+                'prospectos_count' => count($prospectoIds),
+                'primera_etapa_id' => $primeraEtapaId,
+                'fecha_proximo_nodo' => $fechaEjecucionPrimeraEtapa,
+            ]);
+
+            // Crear FlujoEjecucionEtapa para cada nodo del flujo
+            $this->crearEtapasEjecucion($ejecucion, $stages, $branches, $primeraEtapaId, $fechaInicio, $prospectoIds);
+
+            return true;
+        } catch (\Exception $e) {
+            Log::error("Error creando FlujoEjecucion para flujo {$flujo->id}", [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return false;
+        }
+    }
+
+    /**
+     * Crea los registros de FlujoEjecucionEtapa para cada nodo del flujo.
+     */
+    private function crearEtapasEjecucion(
+        FlujoEjecucion $ejecucion,
+        array $stages,
+        array $branches,
+        string $primeraEtapaId,
+        \Carbon\Carbon $fechaInicio,
+        array $prospectoIds
+    ): void {
+        // Construir el orden de ejecución siguiendo las conexiones
+        $ordenEjecucion = $this->construirOrdenEjecucion($stages, $branches, $primeraEtapaId);
+
+        $fechaBase = $fechaInicio->copy();
+        $primeraCreada = false;
+
+        foreach ($ordenEjecucion as $stageId) {
+            $stage = collect($stages)->firstWhere('id', $stageId);
+            if (! $stage) {
+                continue;
+            }
+
+            // Calcular fecha programada acumulativa
+            $tiempoEspera = $stage['tiempo_espera'] ?? 0;
+            $fechaProgramada = $fechaBase->copy()->addDays($tiempoEspera);
+
+            $etapaData = [
+                'flujo_ejecucion_id' => $ejecucion->id,
+                'etapa_id' => null,
+                'node_id' => $stageId,
+                'fecha_programada' => $fechaProgramada,
+                'estado' => 'pending',
+                'ejecutado' => false,
+            ];
+
+            // La primera etapa necesita los prospectos_ids
+            if (! $primeraCreada) {
+                $etapaData['prospectos_ids'] = $prospectoIds;
+                $etapaData['prospectos_count'] = count($prospectoIds);
+                $primeraCreada = true;
+            }
+
+            FlujoEjecucionEtapa::create($etapaData);
+
+            // La fecha base para la siguiente etapa es la fecha programada de esta
+            $fechaBase = $fechaProgramada->copy();
         }
 
-        return $cantidadNuevos;
+        Log::info('Etapas de ejecución creadas', [
+            'ejecucion_id' => $ejecucion->id,
+            'total_etapas' => count($ordenEjecucion),
+        ]);
     }
 
     /**
-     * Busca la próxima etapa pendiente de una ejecución.
-     *
-     * Prioridad:
-     * 1. Etapa con node_id = proximo_nodo de la ejecución
-     * 2. Primera etapa con estado = 'pending'
+     * Construye el orden de ejecución siguiendo las conexiones del flujo.
      */
-    private function buscarProximaEtapaPendiente(FlujoEjecucion $ejecucion): ?FlujoEjecucionEtapa
+    private function construirOrdenEjecucion(array $stages, array $branches, string $primeraEtapaId): array
     {
-        // Primero buscar por proximo_nodo
-        if ($ejecucion->proximo_nodo) {
-            $etapa = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
-                ->where('node_id', $ejecucion->proximo_nodo)
-                ->where('estado', 'pending')
-                ->first();
+        $orden = [];
+        $visitados = [];
+        $nodoActual = $primeraEtapaId;
 
-            if ($etapa) {
-                return $etapa;
+        while ($nodoActual && ! in_array($nodoActual, $visitados)) {
+            $stage = collect($stages)->firstWhere('id', $nodoActual);
+
+            if (! $stage) {
+                break;
+            }
+
+            $visitados[] = $nodoActual;
+
+            // Solo agregar nodos ejecutables (no start, no end)
+            $tipo = $stage['type'] ?? null;
+            if (in_array($tipo, ['email', 'sms', 'stage', 'condition'])) {
+                $orden[] = $nodoActual;
+            }
+
+            // Buscar la siguiente conexión
+            $siguienteConexion = collect($branches)->firstWhere('source_node_id', $nodoActual);
+
+            if ($siguienteConexion) {
+                $nodoActual = $siguienteConexion['target_node_id'];
+            } else {
+                break;
             }
         }
 
-        // Fallback: primera etapa pendiente por fecha
-        return FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
-            ->where('estado', 'pending')
-            ->orderBy('fecha_programada', 'asc')
-            ->first();
-    }
-
-    /**
-     * Agrega prospectos a una etapa existente.
-     */
-    private function agregarProspectosAEtapa(FlujoEjecucionEtapa $etapa, array $nuevosProspectoIds): void
-    {
-        $prospectosActuales = $etapa->prospectos_ids ?? [];
-
-        // Merge evitando duplicados
-        $prospectosActualizados = array_values(array_unique(
-            array_merge($prospectosActuales, $nuevosProspectoIds)
-        ));
-
-        $etapa->update([
-            'prospectos_ids' => $prospectosActualizados,
-        ]);
-
-        Log::info('Prospectos agregados a etapa pendiente', [
-            'etapa_id' => $etapa->id,
-            'node_id' => $etapa->node_id,
-            'prospectos_anteriores' => count($prospectosActuales),
-            'prospectos_nuevos' => count($nuevosProspectoIds),
-            'prospectos_total' => count($prospectosActualizados),
-        ]);
+        return $orden;
     }
 
     /**
