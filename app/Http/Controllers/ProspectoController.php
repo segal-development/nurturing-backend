@@ -17,6 +17,36 @@ class ProspectoController extends Controller
     ) {}
 
     /**
+     * Expande los lote_ids para incluir sub-lotes de Sysgal.
+     * Si se selecciona el lote SYSGAL, automáticamente incluye todos los sub-lotes
+     * (SG_NA_*, SG_NC_*, SYSGAL_NO_*).
+     *
+     * @param  array<int>  $loteIds
+     * @return array<int>
+     */
+    private function expandirLotesSysgal(array $loteIds): array
+    {
+        // Buscar si alguno de los lotes seleccionados es el lote principal SYSGAL
+        $loteSysgalPrincipal = \App\Models\Lote::whereIn('id', $loteIds)
+            ->where('nombre', 'SYSGAL')
+            ->first();
+
+        if (! $loteSysgalPrincipal) {
+            return $loteIds;
+        }
+
+        // Obtener todos los sub-lotes de Sysgal
+        $subLotesSysgal = \App\Models\Lote::where(function ($q) {
+            $q->where('nombre', 'like', 'SG\\_NA\\_%')
+                ->orWhere('nombre', 'like', 'SG\\_NC\\_%')
+                ->orWhere('nombre', 'like', 'SYSGAL\\_%');
+        })->pluck('id')->toArray();
+
+        // Combinar y eliminar duplicados
+        return array_unique(array_merge($loteIds, $subLotesSysgal));
+    }
+
+    /**
      * Get count of prospectos matching filters (without loading data).
      *
      * OPTIMIZADO: Usa JOINs directos en vez de queries separadas para filtros.
@@ -27,11 +57,12 @@ class ProspectoController extends Controller
 
         // Support multiple lote_ids (array) - NEW
         if ($request->filled('lote_ids') && is_array($request->input('lote_ids'))) {
-            $loteIds = $request->input('lote_ids');
+            $loteIds = $this->expandirLotesSysgal($request->input('lote_ids'));
             $query->whereHas('importacion', fn ($q) => $q->whereIn('lote_id', $loteIds));
         } elseif ($request->filled('lote_id')) {
             // Fallback to single lote_id for backward compatibility
-            $query->whereHas('importacion', fn ($q) => $q->where('lote_id', $request->input('lote_id')));
+            $loteIds = $this->expandirLotesSysgal([(int) $request->input('lote_id')]);
+            $query->whereHas('importacion', fn ($q) => $q->whereIn('lote_id', $loteIds));
         }
 
         if ($request->filled('importacion_id')) {
@@ -122,7 +153,7 @@ class ProspectoController extends Controller
     {
         // Support multiple lote_ids (array)
         if ($request->filled('lote_ids') && is_array($request->input('lote_ids'))) {
-            $loteIds = $request->input('lote_ids');
+            $loteIds = $this->expandirLotesSysgal($request->input('lote_ids'));
             $query->whereHas('importacion', fn ($q) => $q->whereIn('lote_id', $loteIds));
 
             return;
@@ -133,8 +164,9 @@ class ProspectoController extends Controller
             return;
         }
 
-        // OPTIMIZADO: whereHas genera un JOIN más eficiente que pluck + whereIn
-        $query->whereHas('importacion', fn ($q) => $q->where('lote_id', $request->input('lote_id')));
+        // Expandir lotes Sysgal si es necesario
+        $loteIds = $this->expandirLotesSysgal([(int) $request->input('lote_id')]);
+        $query->whereHas('importacion', fn ($q) => $q->whereIn('lote_id', $loteIds));
     }
 
     private function applyImportacionFilter(\Illuminate\Database\Eloquent\Builder $query, Request $request): void
@@ -278,14 +310,14 @@ class ProspectoController extends Controller
     {
         $query = Prospecto::query()->with(['tipoProspecto', 'importacion']);
 
-        // Filtrar por múltiples lotes (array) - NEW
+        // Filtrar por múltiples lotes (array) - expandir Sysgal si es necesario
         if ($request->filled('lote_ids') && is_array($request->input('lote_ids'))) {
-            $loteIds = $request->input('lote_ids');
+            $loteIds = $this->expandirLotesSysgal($request->input('lote_ids'));
             $query->whereHas('importacion', fn ($q) => $q->whereIn('lote_id', $loteIds));
         } elseif ($request->filled('lote_id')) {
-            // Fallback to single lote_id for backward compatibility
-            // OPTIMIZADO: JOIN directo en vez de 2 queries (pluck + whereIn)
-            $query->whereHas('importacion', fn ($q) => $q->where('lote_id', $request->input('lote_id')));
+            // Fallback to single lote_id - expandir Sysgal si es necesario
+            $loteIds = $this->expandirLotesSysgal([(int) $request->input('lote_id')]);
+            $query->whereHas('importacion', fn ($q) => $q->whereIn('lote_id', $loteIds));
         }
 
         // Filtrar por importación específica (ID) - mantener compatibilidad
@@ -756,9 +788,9 @@ class ProspectoController extends Controller
             ->whereRaw("metadata->>'{$campo}' IS NOT NULL")
             ->whereRaw("metadata->>'{$campo}' != ''");
 
-        // Filtrar por lotes si se especifican
+        // Filtrar por lotes si se especifican - expandir Sysgal si es necesario
         if ($request->filled('lote_ids') && is_array($request->input('lote_ids'))) {
-            $loteIds = $request->input('lote_ids');
+            $loteIds = $this->expandirLotesSysgal($request->input('lote_ids'));
             $query->whereHas('importacion', fn ($q) => $q->whereIn('lote_id', $loteIds));
         }
 
