@@ -486,11 +486,22 @@ class ProspectoController extends Controller
     public function opcionesFiltrado(): JsonResponse
     {
         $data = \Illuminate\Support\Facades\Cache::remember('prospectos:opciones_filtrado', 300, function () {
+            // Sub-lotes de SYSGAL que deben ocultarse (se muestran como parte del lote principal SYSGAL)
+            $subLotesSysgalOcultos = [
+                'SYSGAL NO CERRADOS',
+                'SYSGAL NO AGENDADOS',
+                'SG NA por confirmar reunion',
+                'SG NA gestionado por ac',
+                'SG NA responde whatsapp',
+            ];
+
             // Obtener todos los lotes con sus importaciones y conteo de prospectos
             $lotes = \App\Models\Lote::query()
                 ->with(['importaciones' => function ($query) {
                     $query->withCount('prospectos')->orderBy('created_at', 'desc');
                 }])
+                // Filtrar sub-lotes de SYSGAL
+                ->whereNotIn('nombre', $subLotesSysgalOcultos)
                 ->orderBy('created_at', 'desc')
                 ->get()
                 ->map(function ($lote) {
