@@ -543,11 +543,13 @@ class ProspectoController extends Controller
                     // Obtener "nuevos" de la última importación desde metadata
                     $ultimaImportacion = $lote->importaciones->first();
                     $nuevosUltimoSync = 0;
+                    $nuevosPorNivel = null;
                     if ($ultimaImportacion && $ultimaImportacion->metadata) {
                         $metadata = is_array($ultimaImportacion->metadata)
                             ? $ultimaImportacion->metadata
                             : json_decode($ultimaImportacion->metadata, true);
                         $nuevosUltimoSync = $metadata['nuevos'] ?? 0;
+                        $nuevosPorNivel = $metadata['nuevos_por_nivel'] ?? null;
                     }
 
                     // Para el lote principal SYSGAL, calcular totales incluyendo sub-lotes
@@ -595,6 +597,7 @@ class ProspectoController extends Controller
                         'total_registros' => $lote->total_registros,
                         'registros_exitosos' => $lote->registros_exitosos,
                         'nuevos_ultimo_sync' => $nuevosUltimoSync,
+                        'nuevos_por_nivel' => $nuevosPorNivel,
                         'desglose_nivel_deuda' => $desglosePorNivelDeuda,
                         'fecha_ultimo_sync' => $fechaUltimoSync,
                         'created_at' => $lote->created_at?->timezone('America/Santiago')->format('d/m/Y H:i:s'),

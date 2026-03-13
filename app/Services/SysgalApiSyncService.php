@@ -333,6 +333,7 @@ class SysgalApiSyncService
         $actualizados = 0;
         $omitidosEnFlujo = 0;
         $errores = [];
+        $nuevosPorNivel = ['baja' => 0, 'media' => 0, 'alta' => 0];
 
         $createBatch = [];
         $updateBatch = [];
@@ -380,6 +381,17 @@ class SysgalApiSyncService
                     $createBatch[] = $prospectoData;
                     $nuevos++;
 
+                    // Contar nuevos por nivel de deuda
+                    $nivelDeuda = $prospectoData['metadata']['nivel_deuda'] ?? null;
+                    if ($nivelDeuda === 'alta') {
+                        $nuevosPorNivel['alta'] = ($nuevosPorNivel['alta'] ?? 0) + 1;
+                    } elseif ($nivelDeuda === 'media') {
+                        $nuevosPorNivel['media'] = ($nuevosPorNivel['media'] ?? 0) + 1;
+                    } else {
+                        // baja, sin_informacion, null → todos van a "baja"
+                        $nuevosPorNivel['baja'] = ($nuevosPorNivel['baja'] ?? 0) + 1;
+                    }
+
                     // Registrar en cache para detectar duplicados dentro del mismo sync
                     $this->cacheService->registerNewProspecto($email, $telefono);
                 }
@@ -416,6 +428,7 @@ class SysgalApiSyncService
             'exitosos' => $exitosos,
             'fallidos' => $fallidos,
             'nuevos' => $nuevos,
+            'nuevos_por_nivel' => $nuevosPorNivel,
             'actualizados' => $actualizados,
             'omitidos_en_flujo' => $omitidosEnFlujo,
             'errores' => $errores,
@@ -818,6 +831,7 @@ class SysgalApiSyncService
             'estado' => 'completado',
             'metadata' => array_merge($importacion->metadata ?? [], [
                 'nuevos' => $result['nuevos'],
+                'nuevos_por_nivel' => $result['nuevos_por_nivel'] ?? null,
                 'actualizados' => $result['actualizados'],
                 'omitidos_en_flujo' => $result['omitidos_en_flujo'],
                 'errores' => array_slice($result['errores'], 0, 100),
