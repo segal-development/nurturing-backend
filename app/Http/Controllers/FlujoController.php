@@ -1981,6 +1981,9 @@ class FlujoController extends Controller
             })
             ->values();
 
+        // Calcular prospectos nuevos del último sync de Sysgal para este flujo
+        $nuevosUltimoSync = $this->calcularNuevosSysgalPorFlujo($flujo);
+
         return response()->json([
             'error' => false,
             'data' => [
@@ -1988,7 +1991,73 @@ class FlujoController extends Controller
                 'cohortes' => $cohortes,
                 'resumen_por_nodo' => $resumenPorNodo,
                 'ultimos_ingresos' => $ultimosIngresos,
+                'nuevos_ultimo_sync' => $nuevosUltimoSync,
             ],
         ]);
+    }
+
+    /**
+     * Calcula cuántos prospectos NUEVOS de Sysgal se agregaron en el último sync
+     * para el nivel de deuda que corresponde a este flujo.
+     */
+    private function calcularNuevosSysgalPorFlujo(Flujo $flujo): ?array
+    {
+        // Mapeo de flujos de segmento a niveles de deuda
+        // Flujo 39 (Segmento 1) → deuda baja/sin_info/null
+        // Flujo 40 (Segmento 2) → deuda media
+        // Flujo 41 (Segmento 3) → deuda alta
+        $flujosSegmento = [
+            39 => ['baja', 'sin_informacion', null],
+            40 => ['media'],
+            41 => ['alta'],
+        ];
+
+        // Si no es un flujo de segmento Sysgal, no mostrar esta info
+        if (! isset($flujosSegmento[$flujo->id])) {
+            return null;
+        }
+
+        $nivelesDeuda = $flujosSegmento[$flujo->id];
+
+        // Obtener fecha del último sync de Sysgal
+        $sysgalSource = \App\Models\ExternalApiSource::where('name', 'sysgal')->first();
+        if (! $sysgalSource || ! $sysgalSource->last_synced_at) {
+            return null;
+        }
+
+        $fechaSync = $sysgalSource->last_synced_at;
+
+        // Contar prospectos NUEVOS (created_at = fecha del sync) con el nivel de deuda correspondiente
+        $query = \App\Models\Prospecto::whereRaw("metadata->>'source' = 'sysgal'")
+            ->whereDate('created_at', $fechaSync->format('Y-m-d'));
+
+        // Filtrar por nivel de deuda
+        $query->where(function ($q) use ($nivelesDeuda) {
+            foreach ($nivelesDeuda as $nivel) {
+                if ($nivel === null) {
+                    $q->orWhereRaw("metadata->>'nivel_deuda' IS NULL");
+                } else {
+                    $q->orWhereRaw("metadata->>'nivel_deuda' = ?", [$nivel]);
+                }
+            }
+        });
+
+        $count = $query->count();
+
+        // Determinar label del nivel de deuda
+        $nivelLabel = match ($flujo->id) {
+            39 => 'Deuda Baja',
+            40 => 'Deuda Media',
+            41 => 'Deuda Alta',
+            default => 'Sysgal',
+        };
+
+        return [
+            'count' => $count,
+            'fecha' => $fechaSync->toISOString(),
+            'fecha_legible' => $fechaSync->timezone('America/Santiago')->format('d/m/Y H:i'),
+            'nivel_deuda' => $nivelLabel,
+            'origen' => 'Sysgal',
+        ];
     }
 }
