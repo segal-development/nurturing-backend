@@ -1946,12 +1946,48 @@ class FlujoController extends Controller
             }
         }
 
+        // Construir lista de últimos ingresos (para mostrar en panel lateral)
+        // Muestra las cohortes más recientes con su fecha y cantidad de prospectos
+        $ultimosIngresos = $ejecucionesActivas
+            ->sortByDesc('created_at')
+            ->take(5)
+            ->map(function ($ejecucion) {
+                $config = $ejecucion->config ?? [];
+                $origen = $config['created_from'] ?? 'manual';
+                $nivelDeuda = $config['nivel_deuda'] ?? null;
+
+                // Determinar label legible del origen
+                $origenLabel = match ($origen) {
+                    'auto_asignar_sysgal' => 'Sysgal',
+                    'manual' => 'Manual',
+                    'import' => 'Importación',
+                    default => ucfirst($origen),
+                };
+
+                // Agregar nivel de deuda si existe
+                if ($nivelDeuda) {
+                    $origenLabel .= ' ('.ucfirst($nivelDeuda).')';
+                }
+
+                return [
+                    'ejecucion_id' => $ejecucion->id,
+                    'fecha' => $ejecucion->created_at->toISOString(),
+                    'fecha_legible' => $ejecucion->created_at->format('d/m/Y H:i'),
+                    'prospectos_count' => $ejecucion->prospectos_count ?? 0,
+                    'origen' => $origen,
+                    'origen_label' => $origenLabel,
+                    'estado' => $ejecucion->estado,
+                ];
+            })
+            ->values();
+
         return response()->json([
             'error' => false,
             'data' => [
                 'total_cohortes' => $ejecucionesActivas->count(),
                 'cohortes' => $cohortes,
                 'resumen_por_nodo' => $resumenPorNodo,
+                'ultimos_ingresos' => $ultimosIngresos,
             ],
         ]);
     }
