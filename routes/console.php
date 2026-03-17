@@ -259,3 +259,20 @@ Schedule::job(new \App\Jobs\AsignarProspectosSysgalJob)
     ->onFailure(function () {
         Log::error('Scheduler: Falló la auto-asignación de prospectos Sysgal');
     });
+
+// ============================================================================
+// AUTO-ASIGNACIÓN DE NUEVOS PROSPECTOS A FLUJOS CON auto_asignar_nuevos = true
+// Todos los viernes a las 7:30 AM (30 min después del sync de Sysgal).
+// Busca flujos activos con auto_asignar_nuevos=true y asigna prospectos nuevos
+// que coincidan con lotes_ids (prioridad) o el origen del flujo.
+// ============================================================================
+Schedule::job(new \App\Jobs\AsignarNuevosProspectosAFlujoJob)
+    ->weeklyOn(5, '07:30') // Viernes a las 7:30 AM
+    ->name('auto-asignar-nuevos-prospectos')
+    ->withoutOverlapping()
+    ->onSuccess(function () {
+        Log::info('Scheduler: Auto-asignación de nuevos prospectos a flujos completada');
+    })
+    ->onFailure(function () {
+        Log::error('Scheduler: Falló la auto-asignación de nuevos prospectos a flujos');
+    });

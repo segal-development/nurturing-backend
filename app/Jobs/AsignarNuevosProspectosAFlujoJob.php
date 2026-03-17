@@ -82,6 +82,7 @@ class AsignarNuevosProspectosAFlujoJob implements ShouldQueue
     {
         Log::info("Procesando flujo: {$flujo->nombre}", [
             'flujo_id' => $flujo->id,
+            'lotes_ids' => $flujo->lotes_ids,
             'origen' => $flujo->origen,
         ]);
 
@@ -133,7 +134,12 @@ class AsignarNuevosProspectosAFlujoJob implements ShouldQueue
     }
 
     /**
-     * Busca prospectos del mismo origen que aún no están en el flujo.
+     * Busca prospectos que aún no están en el flujo.
+     *
+     * Prioridad de filtros:
+     * 1. Si lotes_ids está definido → filtra por esos lotes específicos
+     * 2. Si origen está definido → filtra por origen de importación
+     * 3. Si ninguno está definido → no retorna prospectos (seguridad)
      *
      * OPTIMIZADO: Usa NOT EXISTS subquery en vez de pluck + whereNotIn.
      * Antes: Cargaba todos los IDs de prospectos_en_flujo en memoria (300k+ IDs)
@@ -141,9 +147,26 @@ class AsignarNuevosProspectosAFlujoJob implements ShouldQueue
      */
     private function buscarProspectosNuevos(Flujo $flujo)
     {
+        // Log filter criteria for debugging
+        Log::info("Buscando prospectos nuevos para flujo {$flujo->id}", [
+            'lotes_ids' => $flujo->lotes_ids,
+            'origen' => $flujo->origen,
+            'filtro_usado' => ! empty($flujo->lotes_ids) ? 'lotes_ids' : ($flujo->origen ? 'origen' : 'ninguno'),
+        ]);
+
         return Prospecto::query()
             ->whereHas('importacion', function ($q) use ($flujo) {
-                $q->where('origen', $flujo->origen);
+                if (! empty($flujo->lotes_ids)) {
+                    // Filtrar por lotes específicos
+                    $q->whereIn('lote_id', $flujo->lotes_ids);
+                } elseif ($flujo->origen) {
+                    // Fallback: filtrar por origen
+                    $q->where('origen', $flujo->origen);
+                } else {
+                    // Sin filtro definido = no retornar prospectos
+                    Log::warning("Flujo {$flujo->id} no tiene lotes_ids ni origen definido");
+                    $q->whereRaw('1 = 0');
+                }
             })
             ->whereDoesntHave('prospectosEnFlujo', function ($q) use ($flujo) {
                 $q->where('flujo_id', $flujo->id);

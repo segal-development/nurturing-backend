@@ -18,6 +18,7 @@ class Flujo extends Model
         'tipo_prospecto_id',
         'origen_id',
         'origen',
+        'lotes_ids',
         'nombre',
         'descripcion',
         'canal_envio',
@@ -35,10 +36,19 @@ class Flujo extends Model
         return [
             'activo' => 'boolean',
             'auto_asignar_nuevos' => 'boolean',
+            'lotes_ids' => 'array',
             'metadata' => 'array',
             'config_visual' => 'array',
             'config_structure' => 'array',
         ];
+    }
+
+    /**
+     * Check if the flow should filter prospects by specific lote IDs.
+     */
+    public function usarFiltroLotesIds(): bool
+    {
+        return ! empty($this->lotes_ids);
     }
 
     public function tipoProspecto(): BelongsTo
