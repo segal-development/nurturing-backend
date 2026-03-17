@@ -3,7 +3,7 @@
 namespace App\Services;
 
 use App\Contracts\EmailServiceInterface;
-use App\Models\Envio;
+use App\Models\Prospecto;
 use Illuminate\Support\Str;
 
 class FakeEmailService implements EmailServiceInterface
@@ -11,9 +11,13 @@ class FakeEmailService implements EmailServiceInterface
     /**
      * Simulate sending an email (for development/testing).
      *
-     * @return array{success: bool, message_id: string|null, error: string|null}
+     * @param  Prospecto  $prospecto  The recipient
+     * @param  string  $asunto  Email subject
+     * @param  string  $contenido  Email body (HTML or plain text)
+     * @param  bool  $esHtml  Whether content is HTML
+     * @return array{success: bool, message_id: ?string, error: ?string}
      */
-    public function send(Envio $envio): array
+    public function send(Prospecto $prospecto, string $asunto, string $contenido, bool $esHtml): array
     {
         // Simulate a small delay
         usleep(50000); // 50ms

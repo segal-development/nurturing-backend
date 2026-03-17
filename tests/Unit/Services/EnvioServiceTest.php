@@ -9,6 +9,11 @@ use App\Models\ProspectoEnFlujo;
 use App\Models\TipoProspecto;
 use App\Models\User;
 use App\Services\AthenaCampaignService;
+use App\Services\DesuscripcionService;
+use App\Services\Email\CertificadaEmailService;
+use App\Services\Email\EmailProviderResolver;
+use App\Services\Email\SmtpEmailService;
+use App\Services\EmailValidationService;
 use App\Services\EnvioService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Mail;
@@ -36,7 +41,18 @@ class EnvioServiceTest extends TestCase
         Mail::fake();
 
         $this->athenaService = Mockery::mock(AthenaCampaignService::class);
-        $this->envioService = new EnvioService($this->athenaService);
+        $desuscripcionService = $this->app->make(DesuscripcionService::class);
+        $emailValidationService = $this->app->make(EmailValidationService::class);
+        $emailProviderResolver = new EmailProviderResolver(
+            new SmtpEmailService,
+            new CertificadaEmailService,
+        );
+        $this->envioService = new EnvioService(
+            $this->athenaService,
+            $desuscripcionService,
+            $emailValidationService,
+            $emailProviderResolver,
+        );
 
         $this->tipoProspecto = TipoProspecto::factory()->create();
         $this->user = User::factory()->create();

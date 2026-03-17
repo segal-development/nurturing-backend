@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Envio;
 use App\Models\Prospecto;
+use App\Services\Email\EmailProviderResolver;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
@@ -12,7 +13,8 @@ class EnvioService
     public function __construct(
         private AthenaCampaignService $athenaService,
         private DesuscripcionService $desuscripcionService,
-        private EmailValidationService $emailValidationService
+        private EmailValidationService $emailValidationService,
+        private EmailProviderResolver $emailProviderResolver,
     ) {}
 
     /**
@@ -368,12 +370,35 @@ class EnvioService
                 $envio->update(['contenido_enviado' => $contenidoFinal]);
             }
 
-            $this->enviarPorSmtp($prospecto, $asunto, $contenidoFinal, $esHtml);
+            // Resolve which email provider to use based on prospect's lote
+            $emailService = $this->emailProviderResolver->resolve($prospecto);
+            $providerName = $this->emailProviderResolver->getProviderName($prospecto);
+
+            $result = $emailService->send($prospecto, $asunto, $contenidoFinal, $esHtml);
+
+            // Update the envio with provider info
+            $envio->email_provider = $providerName;
+            if ($result['message_id']) {
+                $envio->external_message_id = $result['message_id'];
+            }
+
+            if (! $result['success']) {
+                $envio->estado = 'fallido';
+                $envio->metadata = array_merge($envio->metadata ?? [], [
+                    'error' => $result['error'],
+                ]);
+                $envio->save();
+                throw new \Exception("Failed to send email: {$result['error']}");
+            }
+
+            $envio->save();
             $envio->marcarComoEnviado();
 
             Log::info('EnvioService: Email enviado', [
                 'email' => $prospecto->email,
                 'envio_id' => $envio->id,
+                'provider' => $providerName,
+                'message_id' => $result['message_id'] ?? null,
             ]);
 
             return [
@@ -474,27 +499,8 @@ class EnvioService
         ]);
     }
 
-    /**
-     * Envía el email usando SMTP de Laravel
-     */
-    private function enviarPorSmtp(
-        Prospecto $prospecto,
-        string $asunto,
-        string $contenido,
-        bool $esHtml
-    ): void {
-        if ($esHtml) {
-            \Mail::html($contenido, function ($message) use ($prospecto, $asunto) {
-                $message->to($prospecto->email, $prospecto->nombre)
-                    ->subject($asunto);
-            });
-        } else {
-            \Mail::raw($contenido, function ($message) use ($prospecto, $asunto) {
-                $message->to($prospecto->email, $prospecto->nombre)
-                    ->subject($asunto);
-            });
-        }
-    }
+    // NOTE: enviarPorSmtp() removed - now using EmailProviderResolver to determine
+    // the appropriate email service (SmtpEmailService or CertificadaEmailService)
 
     /**
      * Envía SMS a prospectos (modo síncrono - usar solo para volúmenes pequeños)

@@ -25,6 +25,8 @@ class Envio extends Model
         'tracking_token',
         'athena_message_id',
         'athena_synced_at',
+        'external_message_id',
+        'email_provider',
         'estado',
         'fecha_programada',
         'fecha_enviado',

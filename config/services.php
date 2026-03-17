@@ -44,4 +44,13 @@ return [
         'api_token' => env('SMS_API_TOKEN'),
     ],
 
+    'certificada' => [
+        'api_key' => env('CERTIFICADA_API_KEY'),
+        'base_url' => env('CERTIFICADA_BASE_URL', 'https://sistema.certificada.cl/api'),
+        'sender_email' => env('CERTIFICADA_SENDER_EMAIL', 'info@informescomercialesb2b.cl'),
+        'sender_name' => env('CERTIFICADA_SENDER_NAME', 'Informes Comerciales'),
+        'enabled' => env('CERTIFICADA_ENABLED', true),
+        'timeout' => env('CERTIFICADA_TIMEOUT', 30),
+    ],
+
 ];
