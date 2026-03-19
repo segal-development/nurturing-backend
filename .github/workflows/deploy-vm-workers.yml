@@ -1,0 +1,131 @@
+# =============================================================================
+# CI/CD Pipeline para Nurturing Workers en VM (GCE)
+# Despliega a la VM nurturing-worker via SSH
+# =============================================================================
+#
+# Triggers:
+#   - Push a 'staging' (paths: app/Jobs/**, app/Services/**, config/**)
+#   - Manual dispatch
+#
+# La VM nurturing-worker corre los queue workers para envío de SMS/Email
+# usando Supervisor. Este workflow:
+#   1. Conecta via SSH
+#   2. Hace git pull
+#   3. Cachea config
+#   4. Verifica configuración (fail-fast si hay errores)
+#   5. Reinicia workers
+#
+# =============================================================================
+
+name: Deploy Workers to VM
+
+on:
+  push:
+    branches:
+      - staging
+    paths:
+      - 'app/Jobs/**'
+      - 'app/Services/**'
+      - 'app/Events/**'
+      - 'app/Listeners/**'
+      - 'config/**'
+      - '.github/workflows/deploy-vm-workers.yml'
+  workflow_dispatch:
+    inputs:
+      skip_verify:
+        description: 'Skip config verification'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  VM_NAME: nurturing-worker
+  VM_ZONE: us-central1-a
+  VM_USER: mtoro6
+  DEPLOY_PATH: /home/mtoro6/nurturing-backend
+
+jobs:
+  deploy:
+    name: Deploy to VM Workers
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Deploy to VM
+        run: |
+          gcloud compute ssh ${{ env.VM_USER }}@${{ env.VM_NAME }} \
+            --zone ${{ env.VM_ZONE }} \
+            --command "
+              set -e
+              echo '=============================================='
+              echo '=== Deploying Nurturing Workers to VM      ==='
+              echo '=============================================='
+              echo ''
+              
+              cd ${{ env.DEPLOY_PATH }}
+              
+              echo '[1/4] Pulling latest code...'
+              git fetch origin staging
+              git reset --hard origin/staging
+              echo ''
+              
+              echo '[2/4] Caching configuration...'
+              php artisan config:cache
+              php artisan route:cache
+              echo ''
+              
+              echo '[3/4] Verifying configuration...'
+              php artisan envio:verify-config || {
+                echo ''
+                echo '=============================================='
+                echo 'ERROR: Configuration verification failed!'
+                echo 'Workers NOT restarted to prevent issues.'
+                echo '=============================================='
+                exit 1
+              }
+              echo ''
+              
+              echo '[4/4] Restarting workers...'
+              sudo supervisorctl restart all
+              sleep 3
+              sudo supervisorctl status
+              echo ''
+              
+              echo '=============================================='
+              echo '=== Deploy completed successfully!         ==='
+              echo '=============================================='
+            "
+
+      - name: Summary
+        if: success()
+        run: |
+          echo "## ✅ VM Workers Deployed!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**VM:** ${{ env.VM_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Path:** ${{ env.DEPLOY_PATH }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Workers restarted with latest code and verified configuration." >> $GITHUB_STEP_SUMMARY
+
+      - name: Summary on Failure
+        if: failure()
+        run: |
+          echo "## ❌ VM Workers Deploy Failed!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Check the logs above for details." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Common issues:" >> $GITHUB_STEP_SUMMARY
+          echo "- Missing environment variables in .env" >> $GITHUB_STEP_SUMMARY
+          echo "- Config cache out of sync" >> $GITHUB_STEP_SUMMARY
+          echo "- SSH connection issues" >> $GITHUB_STEP_SUMMARY
