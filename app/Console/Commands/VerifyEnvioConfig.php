@@ -90,20 +90,38 @@ class VerifyEnvioConfig extends Command
         $this->info('');
         $this->info('Email Configuration:');
 
-        $apiKey = config('services.athenacampaign.api_key');
-        if (empty($apiKey)) {
-            $this->errors[] = 'ATHENACAMPAIGN_API_KEY no está configurado';
-            $this->error('  [ERROR] ATHENACAMPAIGN_API_KEY: NO CONFIGURADO');
-        } else {
-            $this->line('  [OK] ATHENACAMPAIGN_API_KEY: '.substr($apiKey, 0, 10).'...');
-        }
+        // Check if using SMTP (Laravel's default mail driver)
+        $mailDriver = config('mail.default');
+        $this->line("  [OK] Mail driver: {$mailDriver}");
 
-        $baseUrl = config('services.athenacampaign.base_url');
-        if (empty($baseUrl)) {
-            $this->warnings[] = 'ATHENACAMPAIGN_BASE_URL no está configurado (usando default)';
-            $this->warn('  [WARN] ATHENACAMPAIGN_BASE_URL: Usando default');
+        if ($mailDriver === 'smtp') {
+            // Verify SMTP configuration
+            $smtpHost = config('mail.mailers.smtp.host');
+            $smtpPort = config('mail.mailers.smtp.port');
+
+            if (empty($smtpHost)) {
+                $this->errors[] = 'MAIL_HOST no está configurado';
+                $this->error('  [ERROR] MAIL_HOST: NO CONFIGURADO');
+            } else {
+                $this->line("  [OK] SMTP Host: {$smtpHost}:{$smtpPort}");
+            }
+
+            $smtpUser = config('mail.mailers.smtp.username');
+            if (empty($smtpUser)) {
+                $this->warnings[] = 'MAIL_USERNAME no está configurado';
+                $this->warn('  [WARN] MAIL_USERNAME: No configurado');
+            } else {
+                $this->line('  [OK] SMTP User: '.substr($smtpUser, 0, 15).'...');
+            }
         } else {
-            $this->line('  [OK] ATHENACAMPAIGN_BASE_URL: '.$baseUrl);
+            // Check AthenaCampaign API if not using SMTP
+            $apiKey = config('services.athenacampaign.api_key');
+            if (empty($apiKey)) {
+                $this->warnings[] = 'ATHENACAMPAIGN_API_KEY no está configurado (puede no ser necesario si usa SMTP)';
+                $this->warn('  [WARN] ATHENACAMPAIGN_API_KEY: No configurado');
+            } else {
+                $this->line('  [OK] ATHENACAMPAIGN_API_KEY: '.substr($apiKey, 0, 10).'...');
+            }
         }
     }
 
