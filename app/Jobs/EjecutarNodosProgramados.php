@@ -911,6 +911,21 @@ class EjecutarNodosProgramados implements ShouldQueue
             ]);
         }
 
+        // ✅ FIX: Si la etapa ya existe, MERGE prospectos en lugar de sobrescribir
+        // Esto soporta múltiples inputs al mismo nodo (ej: múltiples condiciones YES → mismo retarget)
+        if ($siguienteEtapa) {
+            $existingProspectos = $siguienteEtapa->prospectos_ids ?? [];
+            $mergedProspectos = array_values(array_unique(array_merge($existingProspectos, $prospectoIds)));
+
+            Log::info("EjecutarNodosProgramados: Merging prospects for node {$siguienteNodoId}", [
+                'existing_count' => count($existingProspectos),
+                'new_count' => count($prospectoIds),
+                'merged_count' => count($mergedProspectos),
+            ]);
+
+            $prospectoIds = $mergedProspectos;
+        }
+
         // Preparar datos para la etapa
         $etapaData = [
             'prospectos_ids' => $prospectoIds,

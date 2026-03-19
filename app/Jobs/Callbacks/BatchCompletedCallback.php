@@ -173,9 +173,19 @@ class BatchCompletedCallback
                 ],
             ]);
         } else {
+            // ✅ FIX: MERGE prospectos en lugar de sobrescribir (soporta múltiples inputs al mismo nodo)
+            $existingProspectos = $condicionEtapa->prospectos_ids ?? [];
+            $mergedProspectos = array_values(array_unique(array_merge($existingProspectos, $prospectoIds)));
+
+            Log::info("BatchCompletedCallback: Merging prospects for condition node {$targetNodeId}", [
+                'existing_count' => count($existingProspectos),
+                'new_count' => count($prospectoIds),
+                'merged_count' => count($mergedProspectos),
+            ]);
+
             $condicionEtapa->update([
-                'prospectos_ids' => $prospectoIds,
-                'prospectos_count' => count($prospectoIds),
+                'prospectos_ids' => $mergedProspectos,
+                'prospectos_count' => count($mergedProspectos),
                 'fecha_programada' => $fechaVerificacion,
                 'response_athenacampaign' => [
                     'pending_condition' => true,
@@ -228,10 +238,20 @@ class BatchCompletedCallback
                 'estado' => 'pending',
             ]);
         } else {
+            // ✅ FIX: MERGE prospectos en lugar de sobrescribir (soporta múltiples inputs al mismo nodo)
+            $existingProspectos = $siguienteEtapaEjecucion->prospectos_ids ?? [];
+            $mergedProspectos = array_values(array_unique(array_merge($existingProspectos, $prospectoIds)));
+
+            Log::info("BatchCompletedCallback: Merging prospects for stage node {$targetNodeId}", [
+                'existing_count' => count($existingProspectos),
+                'new_count' => count($prospectoIds),
+                'merged_count' => count($mergedProspectos),
+            ]);
+
             // Solo actualizar prospectos_ids y count, NO sobreescribir fecha_programada
             $siguienteEtapaEjecucion->update([
-                'prospectos_ids' => $prospectoIds,
-                'prospectos_count' => count($prospectoIds),
+                'prospectos_ids' => $mergedProspectos,
+                'prospectos_count' => count($mergedProspectos),
             ]);
         }
 

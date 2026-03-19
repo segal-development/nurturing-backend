@@ -357,17 +357,27 @@ class VerificarCondicionJob implements ShouldQueue
         }
 
         // Crear o actualizar etapa con prospectos filtrados
+        // ✅ FIX: MERGE prospectos en lugar de sobrescribir (soporta múltiples inputs al mismo nodo)
         if ($etapaExistente) {
+            $existingProspectos = $etapaExistente->prospectos_ids ?? [];
+            $mergedProspectos = array_values(array_unique(array_merge($existingProspectos, $prospectoIds)));
+
+            Log::info("VerificarCondicionJob: Merging prospects for node {$siguienteNodeId}", [
+                'existing_count' => count($existingProspectos),
+                'new_count' => count($prospectoIds),
+                'merged_count' => count($mergedProspectos),
+            ]);
+
             $etapaExistente->update([
-                'prospectos_ids' => $prospectoIds,
-                'prospectos_count' => count($prospectoIds),
+                'prospectos_ids' => $mergedProspectos,
+                'prospectos_count' => count($mergedProspectos),
                 'estado' => 'pending',
             ]);
             $nuevaEtapa = $etapaExistente;
             Log::info("VerificarCondicionJob: Etapa existente actualizada para rama {$rama}", [
                 'etapa_id' => $nuevaEtapa->id,
                 'node_id' => $siguienteNodeId,
-                'prospectos_count' => count($prospectoIds),
+                'prospectos_count' => count($mergedProspectos),
                 'fecha_programada_preservada' => $fechaProgramada,
             ]);
         } else {
