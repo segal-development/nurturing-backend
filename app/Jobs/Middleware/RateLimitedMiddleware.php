@@ -96,7 +96,8 @@ class RateLimitedMiddleware
     {
         $message = strtolower($e->getMessage());
 
-        // Errores de validación que NO deben contar para circuit breaker
+        // Errores de validación/configuración que NO deben contar para circuit breaker
+        // Estos errores requieren intervención manual, no reintentos
         $validationErrors = [
             'no tiene email',
             'email válido',
@@ -105,6 +106,11 @@ class RateLimitedMiddleware
             'prospecto inactivo',
             'desuscrito',
             'unsubscribed',
+            // Errores de configuración (requieren fix manual, no reintentos)
+            'no configurado',
+            'config:cache',
+            'api_token',
+            'sms_api_token',
         ];
 
         foreach ($validationErrors as $validationError) {
@@ -123,6 +129,7 @@ class RateLimitedMiddleware
             'quota',
             'rate limit',
             'too many',
+            // SMTP error codes
             '421',
             '450',
             '451',
@@ -133,6 +140,15 @@ class RateLimitedMiddleware
             '552',
             '553',
             '554',
+            // HTTP error codes (SMS API)
+            'http 400',
+            'http 401',
+            'http 403',
+            'http 429',
+            'http 500',
+            'http 502',
+            'http 503',
+            'http 504',
         ];
 
         foreach ($providerErrors as $providerError) {

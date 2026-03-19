@@ -82,6 +82,9 @@ class EnviarSmsEtapaProspectoJob implements ShouldBeUnique, ShouldQueue
      */
     public function handle(EnvioService $envioService): void
     {
+        // Fail fast: validar configuración crítica antes de intentar enviar
+        $this->validateSmsConfiguration();
+
         if ($this->shouldSkipBatchJob()) {
             return;
         }
@@ -119,6 +122,33 @@ class EnviarSmsEtapaProspectoJob implements ShouldBeUnique, ShouldQueue
             }
         } finally {
             $lock->release();
+        }
+    }
+
+    /**
+     * Valida que la configuración de SMS esté correcta.
+     *
+     * Falla inmediatamente si falta configuración crítica, evitando
+     * miles de jobs fallidos innecesariamente.
+     *
+     * @throws \RuntimeException Si falta configuración crítica
+     */
+    private function validateSmsConfiguration(): void
+    {
+        $token = config('services.sms.api_token');
+
+        if (empty($token)) {
+            $errorMsg = 'SMS_API_TOKEN no configurado. Ejecutar: php artisan config:cache && sudo supervisorctl restart nurturing-worker:*';
+
+            Log::critical('EnviarSmsEtapaProspectoJob: Configuración de SMS inválida', [
+                'error' => $errorMsg,
+                'prospecto_en_flujo_id' => $this->prospectoEnFlujoId,
+                'etapa_ejecucion_id' => $this->etapaEjecucionId,
+            ]);
+
+            // Este error NO debe reintentar - es un problema de configuración
+            // que requiere intervención manual
+            throw new \RuntimeException($errorMsg);
         }
     }
 

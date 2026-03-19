@@ -90,6 +90,9 @@ class EnviarEmailEtapaProspectoJob implements ShouldBeUnique, ShouldQueue
      */
     public function handle(EnvioService $envioService): void
     {
+        // Fail fast: validar configuración crítica antes de intentar enviar
+        $this->validateEmailConfiguration();
+
         if ($this->shouldSkipBatchJob()) {
             return;
         }
@@ -129,6 +132,33 @@ class EnviarEmailEtapaProspectoJob implements ShouldBeUnique, ShouldQueue
             }
         } finally {
             $lock->release();
+        }
+    }
+
+    /**
+     * Valida que la configuración de Email esté correcta.
+     *
+     * Falla inmediatamente si falta configuración crítica, evitando
+     * miles de jobs fallidos innecesariamente.
+     *
+     * @throws \RuntimeException Si falta configuración crítica
+     */
+    private function validateEmailConfiguration(): void
+    {
+        $apiKey = config('services.athenacampaign.api_key');
+
+        if (empty($apiKey)) {
+            $errorMsg = 'ATHENACAMPAIGN_API_KEY no configurado. Ejecutar: php artisan config:cache && sudo supervisorctl restart nurturing-worker:*';
+
+            Log::critical('EnviarEmailEtapaProspectoJob: Configuración de Email inválida', [
+                'error' => $errorMsg,
+                'prospecto_en_flujo_id' => $this->prospectoEnFlujoId,
+                'etapa_ejecucion_id' => $this->etapaEjecucionId,
+            ]);
+
+            // Este error NO debe reintentar - es un problema de configuración
+            // que requiere intervención manual
+            throw new \RuntimeException($errorMsg);
         }
     }
 

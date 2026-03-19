@@ -24,6 +24,24 @@ class AthenaCampaignService
     }
 
     /**
+     * Getter para verificar si el token SMS está configurado.
+     * Usado por el comando envio:verify-config.
+     */
+    public function getSmsToken(): ?string
+    {
+        return $this->smsApiToken;
+    }
+
+    /**
+     * Getter para verificar si el API key de email está configurado.
+     * Usado por el comando envio:verify-config.
+     */
+    public function getEmailApiKey(): string
+    {
+        return $this->apiKey;
+    }
+
+    /**
      * Obtiene estadísticas de un mensaje enviado
      *
      * GET /getstatisticsbyid?messageID={messageID}
