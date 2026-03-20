@@ -99,23 +99,36 @@ class AsignarNuevosProspectosAFlujoJob implements ShouldQueue
             return ['asignados' => 0, 'ejecucion_creada' => false];
         }
 
-        // Buscar prospectos del mismo origen que NO están en este flujo
-        $prospectosNuevos = $this->buscarProspectosNuevos($flujo);
+        // Build the query for new prospects (not yet in this flujo)
+        $query = $this->buildProspectosNuevosQuery($flujo);
 
-        if ($prospectosNuevos->isEmpty()) {
+        if ($query === null) {
+            return ['asignados' => 0, 'ejecucion_creada' => false];
+        }
+
+        // Count first to avoid loading everything into memory unnecessarily
+        $totalNuevos = $query->count();
+
+        if ($totalNuevos === 0) {
             Log::info("No hay prospectos nuevos para flujo {$flujo->id}");
 
             return ['asignados' => 0, 'ejecucion_creada' => false];
         }
 
-        Log::info("Encontrados {$prospectosNuevos->count()} prospectos nuevos para flujo {$flujo->id}");
+        Log::info("Encontrados {$totalNuevos} prospectos nuevos para flujo {$flujo->id}");
 
         // Determinar canal basado en el flujo
         $canalAsignado = $this->determinarCanal($flujo);
 
-        // Asignar en batches a prospecto_en_flujo
-        $prospectoIds = $prospectosNuevos->pluck('id')->toArray();
-        $asignados = $this->asignarProspectos($flujo, $prospectosNuevos, $canalAsignado);
+        // Collect IDs and assign in chunks to avoid memory issues with 87k+ prospects
+        $prospectoIds = [];
+        $asignados = 0;
+
+        $query->select('id', 'email', 'telefono')
+            ->chunkById(self::BATCH_SIZE, function ($batch) use ($flujo, $canalAsignado, &$prospectoIds, &$asignados) {
+                $prospectoIds = array_merge($prospectoIds, $batch->pluck('id')->toArray());
+                $asignados += $this->asignarBatch($flujo, $batch, $canalAsignado);
+            });
 
         if ($asignados === 0) {
             Log::warning("No se pudo asignar ningún prospecto al flujo {$flujo->id}");
@@ -125,7 +138,7 @@ class AsignarNuevosProspectosAFlujoJob implements ShouldQueue
 
         Log::info("Asignados {$asignados} prospectos al flujo {$flujo->id}");
 
-        // ✅ NUEVO: Crear FlujoEjecucion para esta cohorte
+        // Crear FlujoEjecucion para esta cohorte
         $ejecucionCreada = $this->crearEjecucion($flujo, $prospectoIds, $configStructure);
 
         return [
@@ -135,20 +148,23 @@ class AsignarNuevosProspectosAFlujoJob implements ShouldQueue
     }
 
     /**
-     * Busca prospectos que aún no están en el flujo.
+     * Builds the query for prospects not yet in the flujo.
+     *
+     * Returns the query builder (NOT a collection) so the caller can use
+     * chunkById() to process results without loading 87k+ models into memory.
      *
      * Prioridad de filtros:
      * 1. Si lotes_ids está definido → filtra por esos lotes específicos
      * 2. Si origen está definido → filtra por origen de importación
      * 3. Si ninguno está definido → no retorna prospectos (seguridad)
      *
-     * OPTIMIZADO: Usa NOT EXISTS subquery en vez de pluck + whereNotIn.
-     * Antes: Cargaba todos los IDs de prospectos_en_flujo en memoria (300k+ IDs)
-     * Ahora: La DB maneja la exclusión internamente, sin cargar IDs en PHP
+     * Uses NOT EXISTS subquery for the "not already in flujo" check —
+     * the DB handles the exclusion internally without parameter overhead.
+     *
+     * @return \Illuminate\Database\Eloquent\Builder|null
      */
-    private function buscarProspectosNuevos(Flujo $flujo)
+    private function buildProspectosNuevosQuery(Flujo $flujo)
     {
-        // Log filter criteria for debugging
         Log::info("Buscando prospectos nuevos para flujo {$flujo->id}", [
             'lotes_ids' => $flujo->lotes_ids,
             'origen' => $flujo->origen,
@@ -175,7 +191,7 @@ class AsignarNuevosProspectosAFlujoJob implements ShouldQueue
         if (! $hasImportacionFilter && ! $flujo->usarFiltroNivelDeuda()) {
             Log::warning("Flujo {$flujo->id} no tiene lotes_ids, origen, ni nivel_deuda_target definido");
 
-            return collect();
+            return null;
         }
 
         // Warn when only nivel_deuda_target is set (no origen/lotes_ids)
@@ -204,62 +220,58 @@ class AsignarNuevosProspectosAFlujoJob implements ShouldQueue
             ->whereDoesntHave('prospectosEnFlujo', function ($q) use ($flujo) {
                 $q->where('flujo_id', $flujo->id);
             })
-            ->where('estado', 'activo')
-            ->select('id', 'email', 'telefono')
-            ->get();
+            ->where('estado', 'activo');
     }
 
     /**
-     * Asigna los prospectos al flujo.
+     * Asigna un batch de prospectos al flujo.
+     *
+     * Called per-chunk from procesarFlujo() — each batch is already ≤ BATCH_SIZE.
      * Ya NO necesita etapa_actual_id (legacy) - el Flow Builder maneja el progreso.
      */
-    private function asignarProspectos(Flujo $flujo, $prospectos, string $canalAsignado): int
+    private function asignarBatch(Flujo $flujo, $batch, string $canalAsignado): int
     {
         $asignados = 0;
         $now = now();
+        $inserts = [];
 
-        // Procesar en batches para evitar memory issues
-        $prospectos->chunk(self::BATCH_SIZE)->each(function ($batch) use ($flujo, $canalAsignado, $now, &$asignados) {
-            $inserts = [];
+        foreach ($batch as $prospecto) {
+            $inserts[] = [
+                'flujo_id' => $flujo->id,
+                'prospecto_id' => $prospecto->id,
+                'canal_asignado' => $canalAsignado,
+                'estado' => 'pendiente',
+                'etapa_actual_id' => null, // Flow Builder no usa esto
+                'fecha_inicio' => $now,
+                'completado' => false,
+                'cancelado' => false,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ];
+        }
 
-            foreach ($batch as $prospecto) {
-                $inserts[] = [
-                    'flujo_id' => $flujo->id,
-                    'prospecto_id' => $prospecto->id,
-                    'canal_asignado' => $canalAsignado,
-                    'estado' => 'pendiente',
-                    'etapa_actual_id' => null, // Flow Builder no usa esto
-                    'fecha_inicio' => $now,
-                    'completado' => false,
-                    'cancelado' => false,
-                    'created_at' => $now,
-                    'updated_at' => $now,
-                ];
-            }
+        try {
+            DB::table('prospecto_en_flujo')->insert($inserts);
+            $asignados += count($inserts);
+        } catch (\Exception $e) {
+            Log::error('Error insertando batch de prospectos', [
+                'flujo_id' => $flujo->id,
+                'error' => $e->getMessage(),
+            ]);
 
-            try {
-                DB::table('prospecto_en_flujo')->insert($inserts);
-                $asignados += count($inserts);
-            } catch (\Exception $e) {
-                Log::error('Error insertando batch de prospectos', [
-                    'flujo_id' => $flujo->id,
-                    'error' => $e->getMessage(),
-                ]);
-
-                // Insertar uno por uno si falla el batch (duplicados, etc)
-                foreach ($inserts as $insert) {
-                    try {
-                        DB::table('prospecto_en_flujo')->insert($insert);
-                        $asignados++;
-                    } catch (\Exception $individualError) {
-                        Log::debug('Error insertando prospecto individual', [
-                            'prospecto_id' => $insert['prospecto_id'],
-                            'error' => $individualError->getMessage(),
-                        ]);
-                    }
+            // Insertar uno por uno si falla el batch (duplicados, etc)
+            foreach ($inserts as $insert) {
+                try {
+                    DB::table('prospecto_en_flujo')->insert($insert);
+                    $asignados++;
+                } catch (\Exception $individualError) {
+                    Log::debug('Error insertando prospecto individual', [
+                        'prospecto_id' => $insert['prospecto_id'],
+                        'error' => $individualError->getMessage(),
+                    ]);
                 }
             }
-        });
+        }
 
         return $asignados;
     }

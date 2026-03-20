@@ -72,11 +72,48 @@ class AsignarNuevosProspectosCommand extends Command
 
     private function contarProspectosNuevos(Flujo $flujo): int
     {
-        $prospectosEnFlujo = $flujo->prospectosEnFlujo()->pluck('prospecto_id');
+        $query = \App\Models\Prospecto::query();
 
-        return \App\Models\Prospecto::query()
-            ->whereHas('importacion', fn ($q) => $q->where('origen', $flujo->origen))
-            ->whereNotIn('id', $prospectosEnFlujo)
+        // Filter by importacion (lotes_ids or origen) — mirrors job logic
+        $hasImportacionFilter = ! empty($flujo->lotes_ids) || ! empty($flujo->origen);
+
+        if ($hasImportacionFilter) {
+            $query->whereHas('importacion', function ($q) use ($flujo) {
+                if (! empty($flujo->lotes_ids)) {
+                    $q->whereIn('lote_id', $flujo->lotes_ids);
+                } elseif ($flujo->origen) {
+                    $q->where('origen', $flujo->origen);
+                }
+            });
+        }
+
+        if (! $hasImportacionFilter && ! $flujo->usarFiltroNivelDeuda()) {
+            return 0;
+        }
+
+        // Filter by nivel_deuda when flujo has nivel_deuda_target set
+        if ($flujo->usarFiltroNivelDeuda()) {
+            $nivelDeudaTarget = $flujo->nivel_deuda_target;
+            $query->where(function ($q) use ($nivelDeudaTarget) {
+                $q->whereIn(
+                    \Illuminate\Support\Facades\DB::raw("metadata->>'nivel_deuda'"),
+                    $nivelDeudaTarget
+                );
+
+                if (in_array('sin_informacion', $nivelDeudaTarget)) {
+                    $q->orWhereNull(\Illuminate\Support\Facades\DB::raw("metadata->>'nivel_deuda'"));
+                    $q->orWhere(\Illuminate\Support\Facades\DB::raw("metadata->>'nivel_deuda'"), '');
+                }
+            });
+        }
+
+        // Use NOT EXISTS subquery instead of whereNotIn with plucked IDs
+        // Before: pluck() loaded 87k+ IDs into memory, whereNotIn created 87k+ parameter bindings
+        // After: DB handles the exclusion via subquery — zero parameter overhead
+        return $query
+            ->whereDoesntHave('prospectosEnFlujo', function ($q) use ($flujo) {
+                $q->where('flujo_id', $flujo->id);
+            })
             ->where('estado', 'activo')
             ->count();
     }
