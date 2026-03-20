@@ -1919,6 +1919,7 @@ class FlujoController extends Controller
                         'cohortes_pendientes' => 0,
                         'total_prospectos' => 0,
                         'prospectos_procesados' => 0,
+                        'prospectos_pendientes' => 0,
                         'detalle_cohortes' => [],
                     ];
                 }
@@ -1947,6 +1948,7 @@ class FlujoController extends Controller
                     case 'pending':
                     case 'paused':
                         $resumenPorNodo[$nodeId]['cohortes_pendientes']++;
+                        $resumenPorNodo[$nodeId]['prospectos_pendientes'] += $prospectosEtapa;
                         break;
                 }
 
