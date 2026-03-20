@@ -19,6 +19,7 @@ class Flujo extends Model
         'origen_id',
         'origen',
         'lotes_ids',
+        'nivel_deuda_target',
         'nombre',
         'descripcion',
         'canal_envio',
@@ -37,6 +38,7 @@ class Flujo extends Model
             'activo' => 'boolean',
             'auto_asignar_nuevos' => 'boolean',
             'lotes_ids' => 'array',
+            'nivel_deuda_target' => 'array',
             'metadata' => 'array',
             'config_visual' => 'array',
             'config_structure' => 'array',
@@ -49,6 +51,14 @@ class Flujo extends Model
     public function usarFiltroLotesIds(): bool
     {
         return ! empty($this->lotes_ids);
+    }
+
+    /**
+     * Check if the flow should filter prospects by nivel_deuda.
+     */
+    public function usarFiltroNivelDeuda(): bool
+    {
+        return ! empty($this->nivel_deuda_target);
     }
 
     public function tipoProspecto(): BelongsTo

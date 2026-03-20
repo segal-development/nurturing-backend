@@ -179,6 +179,8 @@ class FlujoController extends Controller
             'canal_envio' => 'sometimes|in:email,sms,ambos',
             'activo' => 'sometimes|boolean',
             'auto_asignar_nuevos' => 'sometimes|boolean',
+            'nivel_deuda_target' => 'sometimes|nullable|array',
+            'nivel_deuda_target.*' => 'string|in:baja,media,alta,sin_informacion',
             'config_visual' => 'sometimes|array',
             'config_visual.nodes' => 'sometimes|array',
             'config_visual.edges' => 'sometimes|array',
@@ -188,6 +190,11 @@ class FlujoController extends Controller
             'config_structure.branches' => 'sometimes|array',
             'config_structure.end_nodes' => 'sometimes|array',
         ]);
+
+        // Normalize empty array to null for nivel_deuda_target
+        if ($request->has('nivel_deuda_target') && is_array($request->input('nivel_deuda_target')) && empty($request->input('nivel_deuda_target'))) {
+            $request->merge(['nivel_deuda_target' => null]);
+        }
 
         try {
             DB::beginTransaction();
@@ -199,6 +206,7 @@ class FlujoController extends Controller
                 'canal_envio',
                 'activo',
                 'auto_asignar_nuevos',
+                'nivel_deuda_target',
                 'config_visual',
                 'config_structure',
             ]));
@@ -1310,6 +1318,12 @@ class FlujoController extends Controller
         TipoProspecto $tipoProspecto,
         CanalEnvio $canalEnvio
     ): Flujo {
+        // Normalize empty array to null for nivel_deuda_target
+        $nivelDeudaTarget = $request->input('nivel_deuda_target');
+        if (is_array($nivelDeudaTarget) && empty($nivelDeudaTarget)) {
+            $nivelDeudaTarget = null;
+        }
+
         return Flujo::create([
             'tipo_prospecto_id' => $tipoProspecto->id,
             'origen_id' => $request->input('origen_id'),
@@ -1321,6 +1335,7 @@ class FlujoController extends Controller
             'user_id' => $request->user()->id,
             'config_visual' => $request->input('visual'),
             'config_structure' => $request->input('structure'),
+            'nivel_deuda_target' => $nivelDeudaTarget,
         ]);
     }
 

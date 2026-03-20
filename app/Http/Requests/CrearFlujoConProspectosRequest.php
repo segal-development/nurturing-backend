@@ -69,6 +69,10 @@ class CrearFlujoConProspectosRequest extends FormRequest
             'visual' => ['nullable', 'array'],
             'structure' => ['nullable', 'array'],
 
+            // Nivel de deuda target
+            'nivel_deuda_target' => ['nullable', 'array'],
+            'nivel_deuda_target.*' => ['string', 'in:baja,media,alta,sin_informacion', 'distinct'],
+
             // Metadata
             'metadata' => ['nullable', 'array'],
         ];

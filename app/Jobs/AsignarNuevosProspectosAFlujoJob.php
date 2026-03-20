@@ -84,6 +84,7 @@ class AsignarNuevosProspectosAFlujoJob implements ShouldQueue
             'flujo_id' => $flujo->id,
             'lotes_ids' => $flujo->lotes_ids,
             'origen' => $flujo->origen,
+            'nivel_deuda_target' => $flujo->nivel_deuda_target,
         ]);
 
         // ✅ Verificar que el flujo tenga config_structure (Flow Builder)
@@ -151,23 +152,55 @@ class AsignarNuevosProspectosAFlujoJob implements ShouldQueue
         Log::info("Buscando prospectos nuevos para flujo {$flujo->id}", [
             'lotes_ids' => $flujo->lotes_ids,
             'origen' => $flujo->origen,
+            'nivel_deuda_target' => $flujo->nivel_deuda_target,
             'filtro_usado' => ! empty($flujo->lotes_ids) ? 'lotes_ids' : ($flujo->origen ? 'origen' : 'ninguno'),
         ]);
 
-        return Prospecto::query()
-            ->whereHas('importacion', function ($q) use ($flujo) {
+        $query = Prospecto::query();
+
+        // Filter by importacion (lotes_ids or origen)
+        $hasImportacionFilter = ! empty($flujo->lotes_ids) || ! empty($flujo->origen);
+
+        if ($hasImportacionFilter) {
+            $query->whereHas('importacion', function ($q) use ($flujo) {
                 if (! empty($flujo->lotes_ids)) {
-                    // Filtrar por lotes específicos
                     $q->whereIn('lote_id', $flujo->lotes_ids);
                 } elseif ($flujo->origen) {
-                    // Fallback: filtrar por origen
                     $q->where('origen', $flujo->origen);
-                } else {
-                    // Sin filtro definido = no retornar prospectos
-                    Log::warning("Flujo {$flujo->id} no tiene lotes_ids ni origen definido");
-                    $q->whereRaw('1 = 0');
                 }
-            })
+            });
+        }
+
+        // Safety guard: if no filtering criteria at all, don't return prospects
+        if (! $hasImportacionFilter && ! $flujo->usarFiltroNivelDeuda()) {
+            Log::warning("Flujo {$flujo->id} no tiene lotes_ids, origen, ni nivel_deuda_target definido");
+
+            return collect();
+        }
+
+        // Warn when only nivel_deuda_target is set (no origen/lotes_ids)
+        if (! $hasImportacionFilter && $flujo->usarFiltroNivelDeuda()) {
+            Log::warning("Flujo {$flujo->id} solo tiene nivel_deuda_target definido (sin lotes_ids ni origen), filtrando todos los prospectos por nivel_deuda");
+        }
+
+        // Filter by nivel_deuda when flujo has nivel_deuda_target set
+        if ($flujo->usarFiltroNivelDeuda()) {
+            $nivelDeudaTarget = $flujo->nivel_deuda_target;
+            $query->where(function ($q) use ($nivelDeudaTarget) {
+                $q->whereIn(
+                    DB::raw("metadata->>'nivel_deuda'"),
+                    $nivelDeudaTarget
+                );
+
+                // If 'sin_informacion' is in target, also include NULL nivel_deuda
+                if (in_array('sin_informacion', $nivelDeudaTarget)) {
+                    $q->orWhereNull(DB::raw("metadata->>'nivel_deuda'"));
+                    $q->orWhere(DB::raw("metadata->>'nivel_deuda'"), '');
+                }
+            });
+        }
+
+        return $query
             ->whereDoesntHave('prospectosEnFlujo', function ($q) use ($flujo) {
                 $q->where('flujo_id', $flujo->id);
             })
@@ -308,6 +341,7 @@ class AsignarNuevosProspectosAFlujoJob implements ShouldQueue
                     'created_from' => 'auto_asignar_nuevos',
                     'job_run_at' => now()->toISOString(),
                     'total_prospectos' => count($prospectoIds),
+                    'nivel_deuda_target' => $flujo->nivel_deuda_target,
                 ],
             ]);
 
