@@ -81,7 +81,7 @@ class SyncExternalApiJob implements ShouldQueue
      */
     private function isSysgalSource(ExternalApiSource $source): bool
     {
-        return str_starts_with($source->name, 'sysgal_');
+        return $source->name === 'sysgal' || str_starts_with($source->name, 'sysgal_');
     }
 
     /**
