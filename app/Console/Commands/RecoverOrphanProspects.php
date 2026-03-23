@@ -47,17 +47,23 @@ class RecoverOrphanProspects extends Command
         $this->line("Found {$prospectsInExecution->count()} prospects already in execution.");
 
         // Step 2: Find orphan prospects (pendiente + not in any execution)
+        // Use a subquery approach to avoid the 65535 parameter limit in PostgreSQL
         $orphansQuery = ProspectoEnFlujo::query()
             ->where('estado', 'pendiente')
-            ->whereNull('etapa_actual_id')
-            ->whereNotIn('prospecto_id', $prospectsInExecution);
+            ->whereNull('etapa_actual_id');
 
         if ($flujoIdFilter) {
             $orphansQuery->where('flujo_id', $flujoIdFilter);
             $this->line("Filtering by flujo_id: {$flujoIdFilter}");
         }
 
-        $orphans = $orphansQuery->get();
+        // Get all matching records first, then filter in PHP to avoid parameter limit
+        $allPendingProspects = $orphansQuery->get();
+
+        // Filter out prospects that are already in an execution (in-memory filtering)
+        $orphans = $allPendingProspects->filter(function ($prospecto) use ($prospectsInExecution) {
+            return ! $prospectsInExecution->contains($prospecto->prospecto_id);
+        });
 
         if ($orphans->isEmpty()) {
             $this->info('No orphan prospects found.');
@@ -159,15 +165,25 @@ class RecoverOrphanProspects extends Command
         $prospectIds = $orphanProspects->pluck('prospecto_id')->toArray();
 
         // Check if ANY of these prospects are already in an execution for this flujo
-        $existingExecution = FlujoEjecucion::where('flujo_id', $flujoId)
-            ->where('estado', '!=', 'failed')
-            ->get()
-            ->filter(function ($ejecucion) use ($prospectIds) {
-                $ejecucionProspectos = $ejecucion->prospectos_ids ?? [];
+        // Process in chunks to avoid PostgreSQL parameter limit (65535)
+        $existingExecution = null;
+        $prospectChunks = array_chunk($prospectIds, 5000);
 
-                return count(array_intersect($ejecucionProspectos, $prospectIds)) > 0;
-            })
-            ->first();
+        foreach ($prospectChunks as $chunk) {
+            $existingExecution = FlujoEjecucion::where('flujo_id', $flujoId)
+                ->where('estado', '!=', 'failed')
+                ->get()
+                ->filter(function ($ejecucion) use ($chunk) {
+                    $ejecucionProspectos = $ejecucion->prospectos_ids ?? [];
+
+                    return count(array_intersect($ejecucionProspectos, $chunk)) > 0;
+                })
+                ->first();
+
+            if ($existingExecution) {
+                break;
+            }
+        }
 
         if ($existingExecution) {
             $this->warn("  SKIPPED: Some prospects already have an execution (#{$existingExecution->id})");
@@ -216,15 +232,19 @@ class RecoverOrphanProspects extends Command
 
             $this->line("  Created FlujoEjecucionEtapa #{$etapa->id} (node: {$firstStage['id']})");
 
-            // Update prospecto_en_flujo records
-            $updated = ProspectoEnFlujo::whereIn('prospecto_id', $prospectIds)
-                ->where('flujo_id', $flujoId)
-                ->update([
-                    'estado' => 'en_proceso',
-                    'fecha_inicio' => now(),
-                ]);
+            // Update prospecto_en_flujo records in chunks to avoid PostgreSQL parameter limit
+            $totalUpdated = 0;
+            foreach ($prospectChunks as $chunk) {
+                $updated = ProspectoEnFlujo::whereIn('prospecto_id', $chunk)
+                    ->where('flujo_id', $flujoId)
+                    ->update([
+                        'estado' => 'en_proceso',
+                        'fecha_inicio' => now(),
+                    ]);
+                $totalUpdated += $updated;
+            }
 
-            $this->line("  Updated {$updated} prospecto_en_flujo records to 'en_proceso'");
+            $this->line("  Updated {$totalUpdated} prospecto_en_flujo records to 'en_proceso'");
 
             DB::commit();
 
