@@ -104,12 +104,12 @@ class RecoverOrphanProspects extends Command
      */
     private function getProspectsAlreadyInExecution(): \Illuminate\Support\Collection
     {
-        // PostgreSQL specific: unnest jsonb array to get individual IDs
+        // PostgreSQL: cast json to jsonb first, then use jsonb_array_elements_text
         $result = DB::select("
-            SELECT DISTINCT jsonb_array_elements_text(prospectos_ids)::bigint as prospecto_id
+            SELECT DISTINCT jsonb_array_elements_text(prospectos_ids::jsonb)::bigint as prospecto_id
             FROM flujo_ejecuciones
             WHERE prospectos_ids IS NOT NULL
-              AND prospectos_ids != '[]'::jsonb
+              AND prospectos_ids::text != '[]'
         ");
 
         return collect($result)->pluck('prospecto_id');
