@@ -22,6 +22,7 @@ class FlujoEjecucion extends Model
         'fecha_inicio_real',
         'fecha_fin',
         'estado',
+        'es_perpetuo',
         'nodo_actual',
         'proximo_nodo',
         'fecha_proximo_nodo',
@@ -41,6 +42,7 @@ class FlujoEjecucion extends Model
         return [
             'prospectos_ids' => 'array',
             'config' => 'array',
+            'es_perpetuo' => 'boolean',
             'fecha_inicio_programada' => 'datetime',
             'fecha_inicio_real' => 'datetime',
             'fecha_fin' => 'datetime',
@@ -133,5 +135,14 @@ class FlujoEjecucion extends Model
             ->whereHas('etapas', function ($q) {
                 $q->where('estado', 'executing');
             });
+    }
+
+    /**
+     * Scope para ejecuciones perpetuas.
+     * New prospects are added to these executions instead of creating new ones.
+     */
+    public function scopePerpetuas($query)
+    {
+        return $query->where('es_perpetuo', true);
     }
 }

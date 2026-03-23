@@ -10,6 +10,7 @@ use App\Models\FlujoEjecucionEtapa;
 use App\Models\FlujoEtapa;
 use App\Models\FlujoJob;
 use App\Models\ProspectoEnFlujo;
+use App\Services\StageOrderResolver;
 use Illuminate\Bus\Batch;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -427,6 +428,7 @@ class EnviarEtapaJob implements ShouldQueue
     {
         $tipoMensaje = $this->stage['tipo_mensaje'] ?? 'email';
         $flujoId = $ejecucion->flujo_id;
+        $currentNodeId = $this->stage['id'] ?? null;
 
         // Obtener IDs existentes
         $existingIds = ProspectoEnFlujo::where('flujo_id', $flujoId)
@@ -460,10 +462,40 @@ class EnviarEtapaJob implements ShouldQueue
             }
         }
 
-        return ProspectoEnFlujo::where('flujo_id', $flujoId)
+        // Build base query for prospects in this flow
+        $query = ProspectoEnFlujo::where('flujo_id', $flujoId)
             ->whereIn('prospecto_id', $this->prospectoIds)
-            ->cursor()
-            ->collect();
+            ->where('cancelado', false)
+            ->where('completado', false);
+
+        // Apply stage-based filtering for perpetual executions
+        if ($currentNodeId && $ejecucion->es_perpetuo) {
+            $resolver = app(StageOrderResolver::class);
+            $previousStageNodeId = $resolver->getPreviousStage($ejecucion->flujo, $currentNodeId);
+
+            if ($previousStageNodeId === null) {
+                // First stage: only prospects with NULL ultima_etapa_node_id (new prospects)
+                $query->whereNull('ultima_etapa_node_id');
+            } else {
+                // Subsequent stages: only prospects who completed the previous stage
+                $query->where('ultima_etapa_node_id', $previousStageNodeId);
+            }
+
+            $filteredCount = $query->count();
+            $totalCount = count($this->prospectoIds);
+
+            Log::info('EnviarEtapaJob: Stage filtering applied (perpetual execution)', [
+                'flujo_ejecucion_id' => $this->flujoEjecucionId,
+                'current_node_id' => $currentNodeId,
+                'previous_node_id' => $previousStageNodeId,
+                'is_first_stage' => $previousStageNodeId === null,
+                'total_prospectos' => $totalCount,
+                'eligible_prospectos' => $filteredCount,
+                'filtered_out' => $totalCount - $filteredCount,
+            ]);
+        }
+
+        return $query->cursor()->collect();
     }
 
     // NOTA: Los métodos procesarSiguientePaso, finalizarFlujo, findTargetNode,

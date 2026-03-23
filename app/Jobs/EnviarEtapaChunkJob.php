@@ -6,6 +6,7 @@ use App\Models\FlujoEjecucion;
 use App\Models\FlujoEjecucionEtapa;
 use App\Models\FlujoEtapa;
 use App\Models\ProspectoEnFlujo;
+use App\Services\StageOrderResolver;
 use Illuminate\Bus\Batch;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -128,13 +129,44 @@ class EnviarEtapaChunkJob implements ShouldQueue
     /**
      * Obtiene los prospectos para este chunk desde la BD.
      * Usa offset/limit para no cargar todo en memoria.
+     * For perpetual executions, also applies stage-based filtering.
      */
     private function obtenerProspectosChunk(): \Illuminate\Support\Collection
     {
         $tipoMensaje = $this->stage['tipo_mensaje'] ?? 'email';
+        $currentNodeId = $this->stage['id'] ?? null;
 
-        // Primero obtener los IDs de prospectos asignados al flujo en este rango
-        $prospectoIds = ProspectoEnFlujo::where('flujo_id', $this->flujoId)
+        // Load the execution to check if it's perpetual
+        $ejecucion = FlujoEjecucion::find($this->flujoEjecucionId);
+
+        // Build base query
+        $baseQuery = ProspectoEnFlujo::where('flujo_id', $this->flujoId)
+            ->where('cancelado', false)
+            ->where('completado', false);
+
+        // Apply stage-based filtering for perpetual executions
+        if ($currentNodeId && $ejecucion && $ejecucion->es_perpetuo) {
+            $resolver = app(StageOrderResolver::class);
+            $previousStageNodeId = $resolver->getPreviousStage($ejecucion->flujo, $currentNodeId);
+
+            if ($previousStageNodeId === null) {
+                // First stage: only prospects with NULL ultima_etapa_node_id (new prospects)
+                $baseQuery->whereNull('ultima_etapa_node_id');
+            } else {
+                // Subsequent stages: only prospects who completed the previous stage
+                $baseQuery->where('ultima_etapa_node_id', $previousStageNodeId);
+            }
+
+            Log::info('EnviarEtapaChunkJob: Stage filtering applied (perpetual execution)', [
+                'chunk_index' => $this->chunkIndex,
+                'current_node_id' => $currentNodeId,
+                'previous_node_id' => $previousStageNodeId,
+                'is_first_stage' => $previousStageNodeId === null,
+            ]);
+        }
+
+        // Get prospect IDs for this chunk with filtering applied
+        $prospectoIds = (clone $baseQuery)
             ->orderBy('id')
             ->skip($this->offset)
             ->take($this->limit)
@@ -145,7 +177,7 @@ class EnviarEtapaChunkJob implements ShouldQueue
             return collect();
         }
 
-        // Crear registros en ProspectoEnFlujo si no existen
+        // Crear registros en ProspectoEnFlujo si no existen (should not happen for filtered perpetual)
         $existingIds = ProspectoEnFlujo::where('flujo_id', $this->flujoId)
             ->whereIn('prospecto_id', $prospectoIds)
             ->pluck('prospecto_id')
@@ -175,6 +207,8 @@ class EnviarEtapaChunkJob implements ShouldQueue
         // Obtener los ProspectoEnFlujo para este chunk
         return ProspectoEnFlujo::where('flujo_id', $this->flujoId)
             ->whereIn('prospecto_id', $prospectoIds)
+            ->where('cancelado', false)
+            ->where('completado', false)
             ->get();
     }
 

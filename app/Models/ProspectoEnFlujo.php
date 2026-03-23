@@ -18,6 +18,7 @@ class ProspectoEnFlujo extends Model
         'canal_asignado',
         'estado',
         'etapa_actual_id',
+        'ultima_etapa_node_id',
         'fecha_inicio',
         'fecha_proxima_etapa',
         'completado',
@@ -69,6 +70,20 @@ class ProspectoEnFlujo extends Model
     public function scopePorFlujo($query, int $flujoId)
     {
         return $query->where('flujo_id', $flujoId);
+    }
+
+    /**
+     * Scope to filter by ultima_etapa_node_id.
+     *
+     * @param  string|null  $nodeId  The node_id to filter by (null = no stage completed)
+     */
+    public function scopePorEtapa($query, ?string $nodeId)
+    {
+        if ($nodeId === null) {
+            return $query->whereNull('ultima_etapa_node_id');
+        }
+
+        return $query->where('ultima_etapa_node_id', $nodeId);
     }
 
     public function scopePorCanal($query, string $canal)
