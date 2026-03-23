@@ -23,6 +23,7 @@ class PlantillaDefensoriaSeeder extends Seeder
     {
         $this->seedSmsTemplates();
         $this->seedEmailTemplates();
+        $this->seedRetargetTemplates();
 
         $this->command->info('Plantillas de Defensoría del Deudor creadas exitosamente.');
     }
@@ -207,6 +208,53 @@ class PlantillaDefensoriaSeeder extends Seeder
         }
 
         $this->command->info('  - '.count($emailTemplates).' plantillas Email creadas');
+    }
+
+    /**
+     * Seed Retarget templates (2 SMS + 1 Email)
+     */
+    private function seedRetargetTemplates(): void
+    {
+        // SMS Retarget (+3 días)
+        Plantilla::firstOrCreate(
+            ['nombre' => 'DEF-SMS-RETARGET-D003'],
+            [
+                'descripcion' => 'Flujo Defensoría del Deudor - Retarget +3 días',
+                'tipo' => 'sms',
+                'contenido' => 'Defensoría: Empezaste a revisar tu situación pero no completaste. Seguí aquí: '.self::LINK_SMS,
+                'asunto' => null,
+                'componentes' => null,
+                'activo' => true,
+            ]
+        );
+
+        // Email Retarget (+7 días)
+        Plantilla::firstOrCreate(
+            ['nombre' => 'DEF-EMAIL-RETARGET-D007'],
+            [
+                'descripcion' => 'Flujo Defensoría del Deudor - Retarget +7 días',
+                'tipo' => 'email',
+                'contenido' => null,
+                'asunto' => 'No te quedes a medias — completá tu revisión',
+                'componentes' => $this->buildEmailComponents('Vimos que empezaste a revisar tu situación comercial pero no llegaste a agendar.\n\nTu consulta sigue disponible y es gratuita.'),
+                'activo' => true,
+            ]
+        );
+
+        // SMS Cierre (+15 días)
+        Plantilla::firstOrCreate(
+            ['nombre' => 'DEF-SMS-CIERRE-D015'],
+            [
+                'descripcion' => 'Flujo Defensoría del Deudor - Cierre +15 días',
+                'tipo' => 'sms',
+                'contenido' => 'Defensoría: Última oportunidad para completar tu revisión gratuita. Ingresá aquí: '.self::LINK_SMS,
+                'asunto' => null,
+                'componentes' => null,
+                'activo' => true,
+            ]
+        );
+
+        $this->command->info('  - 3 plantillas Retarget creadas');
     }
 
     /**
