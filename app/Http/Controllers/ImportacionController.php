@@ -32,8 +32,8 @@ class ImportacionController extends Controller
     // CONFIGURACION
     // =========================================================================
 
-    /** Tamaño máximo para procesamiento directo (5MB) */
-    private const DIRECT_PROCESSING_THRESHOLD_BYTES = 5 * 1024 * 1024;
+    /** Tamaño máximo para procesamiento directo (500KB - forzar background para evitar timeout en Cloud Run) */
+    private const DIRECT_PROCESSING_THRESHOLD_BYTES = 500 * 1024;
 
     /** Threshold para force complete (95% procesado) */
     private const FORCE_COMPLETE_THRESHOLD = 0.95;
