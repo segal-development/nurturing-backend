@@ -22,9 +22,8 @@ use Maatwebsite\Excel\Facades\Excel;
 /**
  * Controller para gestión de importaciones de prospectos.
  *
- * Soporta dos modos de procesamiento:
- * - Directo: archivos pequeños (<5MB) se procesan inmediatamente
- * - Background: archivos grandes se suben a Cloud Storage y procesan via Job
+ * IMPORTANTE: Todos los archivos se procesan en background para evitar
+ * timeouts en Cloud Run. El threshold está en 0 para forzar async siempre.
  */
 class ImportacionController extends Controller
 {
@@ -32,8 +31,12 @@ class ImportacionController extends Controller
     // CONFIGURACION
     // =========================================================================
 
-    /** Tamaño máximo para procesamiento directo (500KB - forzar background para evitar timeout en Cloud Run) */
-    private const DIRECT_PROCESSING_THRESHOLD_BYTES = 500 * 1024;
+    /** 
+     * Threshold = 0: TODOS los archivos van a background processing.
+     * Esto evita 504 Gateway Timeout en Cloud Run cuando archivos 
+     * tienen muchos registros aunque sean pequeños en tamaño.
+     */
+    private const DIRECT_PROCESSING_THRESHOLD_BYTES = 0;
 
     /** Threshold para force complete (95% procesado) */
     private const FORCE_COMPLETE_THRESHOLD = 0.95;

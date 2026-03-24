@@ -81,12 +81,39 @@ jobs:
               git reset --hard origin/staging
               echo ''
               
-              echo '[2/4] Caching configuration...'
+              echo '[2/4] Verificando variables GCS...'
+              REQUIRED_VARS='GOOGLE_CLOUD_PROJECT_ID GOOGLE_CLOUD_STORAGE_BUCKET FILESYSTEM_DISK'
+              MISSING_VARS=''
+              for VAR in \$REQUIRED_VARS; do
+                if ! grep -q \"^\$VAR=\" .env; then
+                  MISSING_VARS=\"\$MISSING_VARS \$VAR\"
+                fi
+              done
+              
+              if [ -n \"\$MISSING_VARS\" ]; then
+                echo ''
+                echo '=============================================='
+                echo 'WARNING: Missing GCS variables in .env:'
+                echo \"\$MISSING_VARS\"
+                echo ''
+                echo 'Adding required variables...'
+                echo 'GOOGLE_CLOUD_PROJECT_ID=grupo-segal' >> .env
+                echo 'GOOGLE_CLOUD_STORAGE_BUCKET=nurturing-imports-qa' >> .env
+                echo 'FILESYSTEM_DISK=gcs' >> .env
+                echo 'Variables added successfully.'
+                echo '=============================================='
+                echo ''
+              else
+                echo 'All GCS variables present.'
+              fi
+              echo ''
+              
+              echo '[3/5] Caching configuration...'
               php artisan config:cache
               php artisan route:cache
               echo ''
               
-              echo '[3/4] Verifying configuration...'
+              echo '[4/5] Verifying configuration...'
               php artisan envio:verify-config || {
                 echo ''
                 echo '=============================================='
@@ -97,7 +124,7 @@ jobs:
               }
               echo ''
               
-              echo '[4/4] Restarting workers...'
+              echo '[5/5] Restarting workers...'
               sudo supervisorctl restart all
               sleep 3
               sudo supervisorctl status
