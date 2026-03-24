@@ -3,7 +3,9 @@
 namespace App\Services;
 
 use App\Models\Envio;
+use App\Models\FlujoEjecucionEtapa;
 use App\Models\Prospecto;
+use App\Models\ProspectoEnFlujo;
 use App\Services\Email\EmailProviderResolver;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -394,6 +396,9 @@ class EnvioService
             $envio->save();
             $envio->marcarComoEnviado();
 
+            // Update prospect progress tracking after successful send
+            $this->actualizarProgresoProspecto($prospectoEnFlujo, $etapaEjecucionId);
+
             Log::info('EnvioService: Email enviado', [
                 'email' => $prospecto->email,
                 'envio_id' => $envio->id,
@@ -633,6 +638,9 @@ class EnvioService
 
             $envio->marcarComoEnviado();
 
+            // Update prospect progress tracking after successful send
+            $this->actualizarProgresoProspecto($prospectoEnFlujo, $etapaEjecucionId);
+
             Log::info('EnvioService: SMS enviado', [
                 'telefono' => $prospecto->telefono,
                 'envio_id' => $envio->id,
@@ -724,5 +732,47 @@ class EnvioService
 
         // Truncar y agregar "..." al final
         return mb_substr($contenido, 0, $maxLength - 3).'...';
+    }
+
+    /**
+     * Updates the prospect's progress tracking after a successful send.
+     *
+     * This method is called after a successful email or SMS send to record
+     * which stage the prospect has completed. This enables:
+     * - Filtering in EnviarEtapaJob to only send to eligible prospects
+     * - Catch-up jobs to advance behind-prospects through missed stages
+     *
+     * @param  ProspectoEnFlujo  $prospectoEnFlujo  The prospect in flow
+     * @param  int|null  $etapaEjecucionId  The execution stage ID
+     */
+    private function actualizarProgresoProspecto(
+        ProspectoEnFlujo $prospectoEnFlujo,
+        ?int $etapaEjecucionId
+    ): void {
+        if (! $etapaEjecucionId) {
+            return;
+        }
+
+        $etapaEjecucion = FlujoEjecucionEtapa::find($etapaEjecucionId);
+
+        if (! $etapaEjecucion || ! $etapaEjecucion->node_id) {
+            Log::debug('EnvioService: No se pudo actualizar progreso, etapa o node_id no encontrado', [
+                'prospecto_en_flujo_id' => $prospectoEnFlujo->id,
+                'etapa_ejecucion_id' => $etapaEjecucionId,
+            ]);
+
+            return;
+        }
+
+        // Update the prospect's progress to this stage
+        $prospectoEnFlujo->update([
+            'ultima_etapa_node_id' => $etapaEjecucion->node_id,
+        ]);
+
+        Log::debug('EnvioService: Progreso de prospecto actualizado', [
+            'prospecto_id' => $prospectoEnFlujo->prospecto_id,
+            'flujo_id' => $prospectoEnFlujo->flujo_id,
+            'ultima_etapa_node_id' => $etapaEjecucion->node_id,
+        ]);
     }
 }

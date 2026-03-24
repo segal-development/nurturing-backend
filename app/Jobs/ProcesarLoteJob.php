@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Jobs;
 
+use App\Models\Flujo;
+use App\Models\FlujoEjecucion;
 use App\Models\Importacion;
 use App\Models\Lote;
 use App\Services\Import\ProspectoImportService;
@@ -13,6 +15,7 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 
@@ -363,6 +366,11 @@ class ProcesarLoteJob implements ShouldQueue
 
         $this->marcarLoteComoFinalizado($lote, $estadoFinal);
         $this->logLoteFinalizado($lote, $estadoFinal);
+
+        // Auto-assign new prospects to perpetual flows
+        if ($estadoFinal === 'completado') {
+            $this->dispatchAsignacionAutomatica($lote);
+        }
     }
 
     private function todasFinalizadas(Collection $importaciones): bool
@@ -387,6 +395,84 @@ class ProcesarLoteJob implements ShouldQueue
                 'finalizado_por' => 'lote_job',
             ]),
         ]);
+    }
+
+    /**
+     * Dispatch auto-assignment job for flows that use this lote.
+     *
+     * Finds flows with:
+     * - auto_asignar_nuevos = true
+     * - lotes_ids containing this lote
+     * - Has a perpetual execution (es_perpetuo = true)
+     *
+     * Then dispatches AsignarProspectosAEjecucionPerpetua for each flow.
+     */
+    private function dispatchAsignacionAutomatica(Lote $lote): void
+    {
+        // Find flows that use this lote and have auto_asignar_nuevos enabled
+        $flujos = Flujo::where('activo', true)
+            ->where('auto_asignar_nuevos', true)
+            ->whereJsonContains('lotes_ids', $lote->id)
+            ->get();
+
+        if ($flujos->isEmpty()) {
+            Log::debug('ProcesarLoteJob: No hay flujos con auto_asignar_nuevos para este lote', [
+                'lote_id' => $lote->id,
+            ]);
+
+            return;
+        }
+
+        // Get all prospect IDs from this lote's successful importaciones
+        $prospectoIds = $this->obtenerProspectosDelLote($lote);
+
+        if (empty($prospectoIds)) {
+            Log::debug('ProcesarLoteJob: No hay prospectos nuevos en el lote', [
+                'lote_id' => $lote->id,
+            ]);
+
+            return;
+        }
+
+        foreach ($flujos as $flujo) {
+            // Check if this flow has a perpetual execution
+            $tieneEjecucionPerpetua = FlujoEjecucion::where('flujo_id', $flujo->id)
+                ->where('es_perpetuo', true)
+                ->exists();
+
+            // Only dispatch for flows with perpetual executions or that should create one
+            // The job will create one if it doesn't exist
+            Log::info('ProcesarLoteJob: Dispatching AsignarProspectosAEjecucionPerpetua', [
+                'flujo_id' => $flujo->id,
+                'flujo_nombre' => $flujo->nombre,
+                'lote_id' => $lote->id,
+                'prospectos_count' => count($prospectoIds),
+                'tiene_ejecucion_perpetua' => $tieneEjecucionPerpetua,
+            ]);
+
+            AsignarProspectosAEjecucionPerpetua::dispatch(
+                $flujo->id,
+                $prospectoIds,
+                $lote->id
+            );
+        }
+    }
+
+    /**
+     * Get all prospect IDs from completed importaciones in the lote.
+     *
+     * @return array<int>
+     */
+    private function obtenerProspectosDelLote(Lote $lote): array
+    {
+        return DB::table('prospecto_importaciones')
+            ->join('importaciones', 'importaciones.id', '=', 'prospecto_importaciones.importacion_id')
+            ->where('importaciones.lote_id', $lote->id)
+            ->where('importaciones.estado', 'completado')
+            ->pluck('prospecto_importaciones.prospecto_id')
+            ->unique()
+            ->values()
+            ->toArray();
     }
 
     // =========================================================================
