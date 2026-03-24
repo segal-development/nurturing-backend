@@ -95,18 +95,19 @@ class RecoverStuckImportations extends Command
 
         if ($result['recovered'] === 0) {
             $this->info('No se encontraron importaciones stuck para recuperar.');
+        } else {
+            $this->info("Recuperadas: {$result['recovered']} importación(es)");
 
-            return self::SUCCESS;
+            foreach ($result['importaciones'] as $id) {
+                $this->line("  - Importación #{$id} re-encolada");
+            }
+
+            $this->newLine();
+            $this->info('Recovery completado exitosamente.');
         }
 
-        $this->info("Recuperadas: {$result['recovered']} importación(es)");
-
-        foreach ($result['importaciones'] as $id) {
-            $this->line("  - Importación #{$id} re-encolada");
-        }
-
-        $this->newLine();
-        $this->info('Recovery completado exitosamente.');
+        // Cache the last recovery run timestamp for health endpoint monitoring
+        cache()->put('import_recovery_last_run', now()->toIso8601String(), now()->addHours(1));
 
         return self::SUCCESS;
     }

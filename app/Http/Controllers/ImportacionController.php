@@ -31,9 +31,9 @@ class ImportacionController extends Controller
     // CONFIGURACION
     // =========================================================================
 
-    /** 
+    /**
      * Threshold = 0: TODOS los archivos van a background processing.
-     * Esto evita 504 Gateway Timeout en Cloud Run cuando archivos 
+     * Esto evita 504 Gateway Timeout en Cloud Run cuando archivos
      * tienen muchos registros aunque sean pequeños en tamaño.
      */
     private const DIRECT_PROCESSING_THRESHOLD_BYTES = 0;
@@ -141,20 +141,83 @@ class ImportacionController extends Controller
     // =========================================================================
 
     /**
-     * Health check y estadísticas del sistema de importaciones.
+     * Health check endpoint for monitoring stuck imports.
+     *
+     * Returns a standardized health response with metrics about import processing.
+     * Status levels:
+     * - critical: stuck imports detected (needs immediate attention)
+     * - degraded: queue backlog > 100 jobs (system under stress)
+     * - healthy: everything normal
      */
     public function health(): JsonResponse
     {
-        $stats = $this->getRecoveryService()->getHealthStats();
-        $hasStuck = $stats['stuck_count'] > 0;
+        $stuckImports = $this->getStuckImportsCount();
+        $oldestProcessingMinutes = $this->getOldestProcessingMinutes();
+        $queuedJobs = $this->getQueuedJobsCount();
+        $lastRecoveryRun = cache()->get('import_recovery_last_run');
+
+        $status = $this->determineHealthStatus($stuckImports, $queuedJobs);
 
         return response()->json([
-            'status' => $hasStuck ? 'warning' : 'healthy',
-            'data' => $stats,
-            'message' => $hasStuck
-                ? "Hay {$stats['stuck_count']} importación(es) stuck que requieren atención"
-                : 'Sistema de importaciones funcionando correctamente',
+            'status' => $status,
+            'stuck_imports' => $stuckImports,
+            'oldest_processing_minutes' => $oldestProcessingMinutes,
+            'queued_jobs' => $queuedJobs,
+            'last_recovery_run' => $lastRecoveryRun,
+            'checked_at' => now()->toIso8601String(),
         ]);
+    }
+
+    /**
+     * Count imports stuck in 'procesando' state for more than 10 minutes.
+     */
+    private function getStuckImportsCount(): int
+    {
+        return Importacion::where('estado', 'procesando')
+            ->where('updated_at', '<', now()->subMinutes(10))
+            ->count();
+    }
+
+    /**
+     * Get the age in minutes of the oldest import in 'procesando' state.
+     */
+    private function getOldestProcessingMinutes(): ?int
+    {
+        $oldest = Importacion::where('estado', 'procesando')
+            ->orderBy('updated_at', 'asc')
+            ->first();
+
+        if (! $oldest) {
+            return null;
+        }
+
+        return (int) now()->diffInMinutes($oldest->updated_at);
+    }
+
+    /**
+     * Count queued import jobs (searches for ProcesarImportacionJob in payload).
+     */
+    private function getQueuedJobsCount(): int
+    {
+        return DB::table('jobs')
+            ->where('payload', 'like', '%ProcesarImportacionJob%')
+            ->count();
+    }
+
+    /**
+     * Determine health status based on stuck imports and queue backlog.
+     */
+    private function determineHealthStatus(int $stuckImports, int $queuedJobs): string
+    {
+        if ($stuckImports > 0) {
+            return 'critical';
+        }
+
+        if ($queuedJobs > 100) {
+            return 'degraded';
+        }
+
+        return 'healthy';
     }
 
     /**
