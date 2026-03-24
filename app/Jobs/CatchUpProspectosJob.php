@@ -191,7 +191,7 @@ class CatchUpProspectosJob implements ShouldQueue
         $dispatched = 0;
 
         // Process in chunks to avoid memory issues
-        $query->select('prospecto_id')
+        $query->select(['id', 'prospecto_id'])
             ->chunkById(self::CHUNK_SIZE, function (Collection $prospects) use (
                 $ejecucion,
                 $firstStageId,
@@ -258,7 +258,7 @@ class CatchUpProspectosJob implements ShouldQueue
 
             // Process in chunks
             $dispatchedForStage = 0;
-            $query->select('prospecto_id')
+            $query->select(['id', 'prospecto_id'])
                 ->chunkById(self::CHUNK_SIZE, function (Collection $prospects) use (
                     $ejecucion,
                     $nextStageId,
