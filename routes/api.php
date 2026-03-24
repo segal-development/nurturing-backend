@@ -19,6 +19,7 @@ use App\Http\Controllers\ProspectoController;
 use App\Http\Controllers\TestingController;
 use App\Http\Controllers\TipoProspectoController;
 use App\Http\Controllers\TrackingController;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Route;
 
 // Rutas públicas de autenticación (rate limited: 5/min por IP - prevenir brute force)
@@ -38,6 +39,17 @@ Route::middleware(['cron.secret', 'throttle:cron'])->prefix('cron')->group(funct
     Route::get('/monitor-envios/{ejecucionId}', [TestingController::class, 'monitorEnvios']);
     Route::post('/reiniciar-ejecucion/{ejecucionId}', [TestingController::class, 'reiniciarEjecucion']);
     Route::get('/debug-etapa/{etapaId}', [TestingController::class, 'debugEtapa']);
+
+    // Import recovery - called by Cloud Scheduler every 5 minutes
+    Route::post('/import-recovery', function () {
+        Artisan::call('importaciones:recover', ['--stats' => true]);
+
+        return response()->json([
+            'success' => true,
+            'output' => Artisan::output(),
+            'executed_at' => now()->toIso8601String(),
+        ]);
+    });
 });
 
 // Rutas protegidas con Sanctum (sesión o token)
