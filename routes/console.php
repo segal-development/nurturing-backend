@@ -276,3 +276,27 @@ Schedule::job(new \App\Jobs\AsignarNuevosProspectosAFlujoJob)
     ->onFailure(function () {
         Log::error('Scheduler: Falló la auto-asignación de nuevos prospectos a flujos');
     });
+
+// ============================================================================
+// CATCH-UP DE PROSPECTOS REZAGADOS EN EJECUCIONES PERPETUAS
+// Cada 5 minutos encuentra prospectos que están "atrás" del flujo principal
+// (ultima_etapa_node_id anterior a la etapa actual de la ejecución) y los
+// avanza a través de las etapas perdidas.
+//
+// Casos que maneja:
+// - Prospectos nuevos (ultima_etapa = NULL) que necesitan empezar desde etapa 1
+// - Prospectos importados a mitad del flujo que necesitan catch-up
+// - Prospectos que fallaron en etapas anteriores y necesitan reintentar
+//
+// Usa queue 'catchup' separada para no interferir con envíos principales.
+// ============================================================================
+Schedule::job(new \App\Jobs\CatchUpProspectosJob)
+    ->everyFiveMinutes()
+    ->name('catch-up-prospectos')
+    ->withoutOverlapping()
+    ->onSuccess(function () {
+        Log::info('Scheduler: Catch-up de prospectos rezagados completado');
+    })
+    ->onFailure(function () {
+        Log::error('Scheduler: Falló el catch-up de prospectos rezagados');
+    });
