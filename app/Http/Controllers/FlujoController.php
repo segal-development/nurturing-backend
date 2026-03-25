@@ -1900,14 +1900,20 @@ class FlujoController extends Controller
             ]);
         }
 
+        // Count total stages from the FLUJO's config_structure (not from execution etapas)
+        // This is the actual number of stages defined in the flow builder
+        $etapasTotalFlujo = count($flujo->config_structure['stages'] ?? []);
+
         // Construir resumen de cada cohorte (usando prospectos_count, no el JSON)
-        $cohortes = $ejecucionesActivas->map(function ($ejecucion) {
+        $cohortes = $ejecucionesActivas->map(function ($ejecucion) use ($etapasTotalFlujo) {
             $prospectosCount = $ejecucion->prospectos_count ?? 0;
 
-            // Calcular progreso basado en etapas
-            $etapasTotal = $ejecucion->etapas->count();
+            // Calcular progreso basado en etapas completadas vs total del flujo
+            // $ejecucion->etapas only contains stages that have been REGISTERED for execution
+            // For accurate progress, we need total stages from the FLUJO definition
             $etapasCompletadas = $ejecucion->etapas->where('estado', 'completed')->count();
             $etapasEjecutando = $ejecucion->etapas->where('estado', 'executing')->count();
+            $etapasTotal = $etapasTotalFlujo > 0 ? $etapasTotalFlujo : $ejecucion->etapas->count();
             $progreso = $etapasTotal > 0 ? round(($etapasCompletadas / $etapasTotal) * 100) : 0;
 
             // Determinar estado legible
