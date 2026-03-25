@@ -526,9 +526,10 @@ class FlujoEjecucionController extends Controller
         });
 
         // Calcular progreso general
-        // Use total stages from the FLUJO's config_structure, not from execution etapas
+        // Use max() to handle cases where flow was modified after execution started
         $etapasTotalFlujo = count($flujo->config_structure['stages'] ?? []);
-        $totalEtapas = $etapasTotalFlujo > 0 ? $etapasTotalFlujo : $ejecucion->etapas->count();
+        $etapasEnEjecucionCount = $ejecucion->etapas->count();
+        $totalEtapas = max($etapasTotalFlujo, $etapasEnEjecucionCount);
         $etapasCompletadas = $ejecucion->etapas->where('estado', 'completed')->count();
         $etapasFallidas = $ejecucion->etapas->where('estado', 'failed')->count();
         $etapasEnEjecucion = $ejecucion->etapas->where('estado', 'executing')->count();
@@ -655,8 +656,8 @@ class FlujoEjecucionController extends Controller
                     'completadas' => $etapasCompletadas,
                     'fallidas' => $etapasFallidas,
                     'en_ejecucion' => $etapasEnEjecucion,
-                    'pendientes' => $totalEtapas - $etapasCompletadas - $etapasFallidas - $etapasEnEjecucion,
-                    'porcentaje' => $totalEtapas > 0 ? round(($etapasCompletadas / $totalEtapas) * 100, 2) : 0,
+                    'pendientes' => max(0, $totalEtapas - $etapasCompletadas - $etapasFallidas - $etapasEnEjecucion),
+                    'porcentaje' => $totalEtapas > 0 ? min(100, round(($etapasCompletadas / $totalEtapas) * 100, 2)) : 0,
                 ],
                 'progreso_envios' => $progresoEnvios,
                 'etapas' => $etapasConEstadisticas,
@@ -717,16 +718,17 @@ class FlujoEjecucionController extends Controller
         $progresoEnvios = null;
         if ($ejecucion) {
             // Use total stages from the FLUJO's config_structure, not from execution etapas
-            // The execution only has stages that have been REGISTERED, not all planned stages
+            // Use max() to handle cases where flow was modified after execution started
             $etapasTotalFlujo = count($flujo->config_structure['stages'] ?? []);
-            $totalEtapas = $etapasTotalFlujo > 0 ? $etapasTotalFlujo : $ejecucion->etapas->count();
+            $etapasEnEjecucionCount = $ejecucion->etapas->count();
+            $totalEtapas = max($etapasTotalFlujo, $etapasEnEjecucionCount);
             $etapasCompletadas = $ejecucion->etapas->where('estado', 'completed')->count();
             $etapasFallidas = $ejecucion->etapas->where('estado', 'failed')->count();
             $etapasEnEjecucion = $ejecucion->etapas->where('estado', 'executing')->count();
-            $etapasPendientes = $totalEtapas - $etapasCompletadas - $etapasFallidas - $etapasEnEjecucion;
+            $etapasPendientes = max(0, $totalEtapas - $etapasCompletadas - $etapasFallidas - $etapasEnEjecucion);
 
             $progreso = [
-                'porcentaje' => $totalEtapas > 0 ? round(($etapasCompletadas / $totalEtapas) * 100, 2) : 0,
+                'porcentaje' => $totalEtapas > 0 ? min(100, round(($etapasCompletadas / $totalEtapas) * 100, 2)) : 0,
                 'completadas' => $etapasCompletadas,
                 'total' => $totalEtapas,
                 'en_ejecucion' => $etapasEnEjecucion,
@@ -1074,14 +1076,17 @@ class FlujoEjecucionController extends Controller
                 }
 
                 // Calcular progreso - use total stages from flujo config_structure
+                // Use max() to handle cases where flow was modified after execution started
+                // (e.g., flow had 6 stages, completed 6, then was reduced to 4 stages)
                 $flujoConfig = $flujos->get($flujoId);
                 $etapasTotalFlujo = count($flujoConfig?->config_structure['stages'] ?? []);
-                $totalEtapas = $etapasTotalFlujo > 0 ? $etapasTotalFlujo : $ejecucion->etapas->count();
+                $etapasEnEjecucion = $ejecucion->etapas->count();
+                $totalEtapas = max($etapasTotalFlujo, $etapasEnEjecucion);
                 $etapasCompletadas = $ejecucion->etapas->where('estado', 'completed')->count();
                 $etapasFallidas = $ejecucion->etapas->where('estado', 'failed')->count();
 
                 $progreso = [
-                    'porcentaje' => $totalEtapas > 0 ? round(($etapasCompletadas / $totalEtapas) * 100, 2) : 0,
+                    'porcentaje' => $totalEtapas > 0 ? min(100, round(($etapasCompletadas / $totalEtapas) * 100, 2)) : 0,
                     'completadas' => $etapasCompletadas,
                     'total' => $totalEtapas,
                     'fallidas' => $etapasFallidas,

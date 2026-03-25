@@ -1909,12 +1909,12 @@ class FlujoController extends Controller
             $prospectosCount = $ejecucion->prospectos_count ?? 0;
 
             // Calcular progreso basado en etapas completadas vs total del flujo
-            // $ejecucion->etapas only contains stages that have been REGISTERED for execution
-            // For accurate progress, we need total stages from the FLUJO definition
+            // Use max() to handle cases where flow was modified after execution started
             $etapasCompletadas = $ejecucion->etapas->where('estado', 'completed')->count();
             $etapasEjecutando = $ejecucion->etapas->where('estado', 'executing')->count();
-            $etapasTotal = $etapasTotalFlujo > 0 ? $etapasTotalFlujo : $ejecucion->etapas->count();
-            $progreso = $etapasTotal > 0 ? round(($etapasCompletadas / $etapasTotal) * 100) : 0;
+            $etapasEnEjecucion = $ejecucion->etapas->count();
+            $etapasTotal = max($etapasTotalFlujo, $etapasEnEjecucion);
+            $progreso = $etapasTotal > 0 ? min(100, round(($etapasCompletadas / $etapasTotal) * 100)) : 0;
 
             // Determinar estado legible
             $estadoLegible = match ($ejecucion->estado) {
