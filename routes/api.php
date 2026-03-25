@@ -28,6 +28,14 @@ Route::middleware('throttle:auth')->group(function () {
     Route::post('/login', [AuthController::class, 'login']);
 });
 
+// Public health check endpoint (no auth required)
+Route::get('/health', function () {
+    return response()->json([
+        'status' => 'ok',
+        'timestamp' => now()->toIso8601String(),
+    ]);
+});
+
 // Rutas para Cloud Scheduler - procesar jobs de la cola
 // Protegidas por un header secreto en lugar de auth
 // Sin rate limit (throttle:cron) porque son internas
@@ -50,6 +58,9 @@ Route::middleware(['cron.secret', 'throttle:cron'])->prefix('cron')->group(funct
             'executed_at' => now()->toIso8601String(),
         ]);
     });
+
+    // Health check for imports - called by monitoring
+    Route::get('/import-health', [ImportacionController::class, 'health']);
 });
 
 // Rutas protegidas con Sanctum (sesión o token)
