@@ -129,6 +129,7 @@ Route::middleware(['auth:sanctum', 'throttle:api'])->group(function () {
     Route::get('/flujos/{flujo}/ejecuciones', [FlujoEjecucionController::class, 'index']);
     Route::get('/flujos/{flujo}/ejecuciones/activa', [FlujoEjecucionController::class, 'getActiveExecution']);
     Route::get('/flujos/{flujo}/ejecuciones/{ejecucion}', [FlujoEjecucionController::class, 'show']);
+    Route::get('/flujos/{flujo}/ejecuciones/{ejecucion}/prospectos', [FlujoEjecucionController::class, 'cohortProspectos']);
     Route::post('/flujos/{flujo}/ejecuciones/{ejecucion}/pausar', [FlujoEjecucionController::class, 'pause']);
     Route::post('/flujos/{flujo}/ejecuciones/{ejecucion}/reanudar', [FlujoEjecucionController::class, 'resume']);
     Route::delete('/flujos/{flujo}/ejecuciones/{ejecucion}', [FlujoEjecucionController::class, 'destroy']);

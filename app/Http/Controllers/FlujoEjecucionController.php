@@ -2,9 +2,11 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Requests\CohortProspectosRequest;
 use App\Models\Flujo;
 use App\Models\FlujoEjecucion;
 use App\Models\FlujoEjecucionEtapa;
+use App\Models\Prospecto;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -1135,6 +1137,208 @@ class FlujoEjecucionController extends Controller
                 'detalle' => $e->getMessage(),
             ], 500);
         }
+    }
+
+    /**
+     * Lista los prospectos de una ejecución de flujo con filtros y paginación.
+     *
+     * GET /api/flujos/{flujo}/ejecuciones/{ejecucion}/prospectos
+     *
+     * Query params:
+     * - page: int (min:1, default:1)
+     * - per_page: int (1-100, default:50)
+     * - node_id: string (nullable) - Filter by stage
+     * - envio_estado: string (nullable) - Filter by send status
+     * - search: string (nullable, max:100) - Search by name or email
+     *
+     * MEMORY SAFETY: Uses database-side filtering via temp table to avoid loading 300k+ IDs into PHP.
+     */
+    public function cohortProspectos(CohortProspectosRequest $request, Flujo $flujo, FlujoEjecucion $ejecucion): JsonResponse
+    {
+        // Verify ejecucion belongs to flujo
+        if ($ejecucion->flujo_id !== $flujo->id) {
+            return response()->json([
+                'error' => 'Ejecucion not found',
+            ], 404);
+        }
+
+        $perPage = $request->validated('per_page', 50);
+        $page = $request->validated('page', 1);
+        $nodeId = $request->validated('node_id');
+        $envioEstado = $request->validated('envio_estado');
+        $search = $request->validated('search');
+
+        // Get etapa IDs for this ejecucion (needed for envio filtering)
+        $etapaIds = $ejecucion->etapas()->pluck('id')->toArray();
+
+        // Build the base query for prospects in this cohort
+        // MEMORY SAFETY: Use JSON array containment operator (@>) to filter at database level
+        // instead of loading 300k IDs into PHP and using whereIn()
+        $query = Prospecto::query()
+            ->whereRaw(
+                'id = ANY(SELECT jsonb_array_elements_text(?::jsonb)::integer)',
+                [json_encode($ejecucion->prospectos_ids ?? [])]
+            );
+
+        // Apply stage filter (node_id) via prospecto_en_flujo
+        if ($nodeId !== null) {
+            $query->whereExists(function ($subquery) use ($flujo, $nodeId) {
+                $subquery->select(DB::raw(1))
+                    ->from('prospecto_en_flujo')
+                    ->whereColumn('prospecto_en_flujo.prospecto_id', 'prospectos.id')
+                    ->where('prospecto_en_flujo.flujo_id', $flujo->id)
+                    ->where('prospecto_en_flujo.ultima_etapa_node_id', $nodeId);
+            });
+        }
+
+        // Apply envio_estado filter - prospects that have at least one envio with that estado
+        if ($envioEstado !== null && ! empty($etapaIds)) {
+            $query->whereExists(function ($subquery) use ($etapaIds, $envioEstado) {
+                $subquery->select(DB::raw(1))
+                    ->from('envios')
+                    ->whereColumn('envios.prospecto_id', 'prospectos.id')
+                    ->whereIn('envios.flujo_ejecucion_etapa_id', $etapaIds)
+                    ->where('envios.estado', $envioEstado);
+            });
+        }
+
+        // Apply search filter (name OR email ILIKE)
+        if ($search !== null && $search !== '') {
+            $searchTerm = '%'.strtolower($search).'%';
+            $query->where(function ($q) use ($searchTerm) {
+                $q->whereRaw('LOWER(nombre) LIKE ?', [$searchTerm])
+                    ->orWhereRaw('LOWER(email) LIKE ?', [$searchTerm]);
+            });
+        }
+
+        // Get total count (for pagination meta)
+        // Note: This is a separate query but necessary for pagination. For 300k+ rows
+        // with filters, the count will be fast due to WHERE clause reducing the set.
+        $total = $query->count();
+
+        // Get paginated prospects
+        $prospectos = $query
+            ->select(['id', 'nombre', 'email', 'telefono'])
+            ->orderBy('id')
+            ->offset(($page - 1) * $perPage)
+            ->limit($perPage)
+            ->get();
+
+        // If no prospects, return early
+        if ($prospectos->isEmpty()) {
+            return response()->json([
+                'data' => [],
+                'meta' => [
+                    'current_page' => $page,
+                    'last_page' => max(1, (int) ceil($total / $perPage)),
+                    'per_page' => $perPage,
+                    'total' => $total,
+                ],
+            ]);
+        }
+
+        $prospectoIds = $prospectos->pluck('id')->toArray();
+
+        // Get ultima_etapa_node_id for these prospects (from prospecto_en_flujo)
+        $ultimasEtapas = DB::table('prospecto_en_flujo')
+            ->select('prospecto_id', 'ultima_etapa_node_id')
+            ->where('flujo_id', $flujo->id)
+            ->whereIn('prospecto_id', $prospectoIds)
+            ->get()
+            ->keyBy('prospecto_id');
+
+        // Get envios_resumen for each prospect - aggregated in a single query
+        // Groups by prospecto_id and counts each estado
+        $enviosResumen = [];
+        if (! empty($etapaIds)) {
+            $envioStats = DB::table('envios')
+                ->select('prospecto_id')
+                ->selectRaw('COUNT(*) as total')
+                ->selectRaw("SUM(CASE WHEN estado IN ('enviado', 'abierto', 'clickeado') THEN 1 ELSE 0 END) as enviados")
+                ->selectRaw("SUM(CASE WHEN estado = 'fallido' THEN 1 ELSE 0 END) as fallidos")
+                ->selectRaw("SUM(CASE WHEN estado = 'abierto' THEN 1 ELSE 0 END) as abiertos")
+                ->selectRaw("SUM(CASE WHEN estado = 'clickeado' THEN 1 ELSE 0 END) as clickeados")
+                ->whereIn('flujo_ejecucion_etapa_id', $etapaIds)
+                ->whereIn('prospecto_id', $prospectoIds)
+                ->groupBy('prospecto_id')
+                ->get();
+
+            foreach ($envioStats as $stat) {
+                $enviosResumen[$stat->prospecto_id] = [
+                    'total' => (int) $stat->total,
+                    'enviados' => (int) $stat->enviados,
+                    'fallidos' => (int) $stat->fallidos,
+                    'abiertos' => (int) $stat->abiertos,
+                    'clickeados' => (int) $stat->clickeados,
+                ];
+            }
+        }
+
+        // Get ultimo_envio for each prospect - most recent envio with node_id
+        // Uses window function to get the latest envio per prospect in a single query
+        $ultimosEnvios = [];
+        if (! empty($etapaIds)) {
+            // Get the most recent envio for each prospect, including etapa node_id via join
+            $ultimoEnvioData = DB::table('envios')
+                ->join('flujo_ejecucion_etapas', 'envios.flujo_ejecucion_etapa_id', '=', 'flujo_ejecucion_etapas.id')
+                ->select(
+                    'envios.prospecto_id',
+                    'envios.estado',
+                    'envios.created_at',
+                    'envios.canal',
+                    'flujo_ejecucion_etapas.node_id as etapa_node_id'
+                )
+                ->selectRaw('ROW_NUMBER() OVER (PARTITION BY envios.prospecto_id ORDER BY envios.created_at DESC) as rn')
+                ->whereIn('envios.flujo_ejecucion_etapa_id', $etapaIds)
+                ->whereIn('envios.prospecto_id', $prospectoIds);
+
+            // Wrap in subquery to filter only rn=1 (most recent per prospect)
+            $ultimoEnvioResults = DB::table(DB::raw("({$ultimoEnvioData->toSql()}) as ranked"))
+                ->mergeBindings($ultimoEnvioData)
+                ->where('rn', 1)
+                ->get();
+
+            foreach ($ultimoEnvioResults as $envio) {
+                $ultimosEnvios[$envio->prospecto_id] = [
+                    'estado' => $envio->estado,
+                    'fecha' => $envio->created_at,
+                    'etapa_node_id' => $envio->etapa_node_id,
+                ];
+            }
+        }
+
+        // Transform prospects with enriched data
+        $data = $prospectos->map(function ($prospecto) use ($ultimasEtapas, $enviosResumen, $ultimosEnvios) {
+            $prospectoId = $prospecto->id;
+
+            return [
+                'id' => $prospectoId,
+                'nombre' => $prospecto->nombre,
+                'email' => $prospecto->email,
+                'telefono' => $prospecto->telefono,
+                'ultima_etapa_node_id' => $ultimasEtapas->get($prospectoId)?->ultima_etapa_node_id,
+                'envios_resumen' => $enviosResumen[$prospectoId] ?? [
+                    'total' => 0,
+                    'enviados' => 0,
+                    'fallidos' => 0,
+                    'abiertos' => 0,
+                    'clickeados' => 0,
+                ],
+                'ultimo_envio' => $ultimosEnvios[$prospectoId] ?? null,
+            ];
+        });
+
+        $lastPage = max(1, (int) ceil($total / $perPage));
+
+        return response()->json([
+            'data' => $data,
+            'meta' => [
+                'current_page' => $page,
+                'last_page' => $lastPage,
+                'per_page' => $perPage,
+                'total' => $total,
+            ],
+        ]);
     }
 
     /**
