@@ -492,15 +492,24 @@ class FlujoEjecucionController extends Controller
         ]);
 
         // Obtener estadísticas de envíos por etapa
+        $etapaIds = $ejecucion->etapas->pluck('id');
         $enviosPorEtapa = \DB::table('envios')
             ->select('flujo_ejecucion_etapa_id', 'estado', \DB::raw('count(*) as total'))
-            ->whereIn('flujo_ejecucion_etapa_id', $ejecucion->etapas->pluck('id'))
+            ->whereIn('flujo_ejecucion_etapa_id', $etapaIds)
             ->groupBy('flujo_ejecucion_etapa_id', 'estado')
             ->get()
             ->groupBy('flujo_ejecucion_etapa_id');
 
+        // Obtener prospectos únicos alcanzados por etapa (envíos exitosos)
+        $prospectosAlcanzados = \DB::table('envios')
+            ->select('flujo_ejecucion_etapa_id', \DB::raw('COUNT(DISTINCT prospecto_id) as total'))
+            ->whereIn('flujo_ejecucion_etapa_id', $etapaIds)
+            ->whereIn('estado', ['enviado', 'abierto', 'clickeado'])
+            ->groupBy('flujo_ejecucion_etapa_id')
+            ->pluck('total', 'flujo_ejecucion_etapa_id');
+
         // Enriquecer etapas con estadísticas
-        $etapasConEstadisticas = $ejecucion->etapas->map(function ($etapa) use ($enviosPorEtapa) {
+        $etapasConEstadisticas = $ejecucion->etapas->map(function ($etapa) use ($enviosPorEtapa, $prospectosAlcanzados) {
             $estadisticas = $enviosPorEtapa->get($etapa->id, collect());
 
             // Conteos por estado
@@ -523,6 +532,8 @@ class FlujoEjecucionController extends Controller
                     'fallido' => $estadisticas->firstWhere('estado', 'fallido')?->total ?? 0,
                     'abierto' => $abierto,
                     'clickeado' => $clickeado,
+                    // Prospectos únicos que recibieron el envío exitosamente
+                    'prospectos_alcanzados' => $prospectosAlcanzados->get($etapa->id, 0),
                 ],
             ];
         });
@@ -706,13 +717,23 @@ class FlujoEjecucionController extends Controller
 
         // Obtener estadísticas de envíos por etapa si hay ejecución activa
         $enviosPorEtapa = collect();
+        $prospectosAlcanzados = collect();
         if ($ejecucion && $ejecucion->etapas->isNotEmpty()) {
+            $etapaIds = $ejecucion->etapas->pluck('id');
             $enviosPorEtapa = \DB::table('envios')
                 ->select('flujo_ejecucion_etapa_id', 'estado', \DB::raw('count(*) as total'))
-                ->whereIn('flujo_ejecucion_etapa_id', $ejecucion->etapas->pluck('id'))
+                ->whereIn('flujo_ejecucion_etapa_id', $etapaIds)
                 ->groupBy('flujo_ejecucion_etapa_id', 'estado')
                 ->get()
                 ->groupBy('flujo_ejecucion_etapa_id');
+
+            // Obtener prospectos únicos alcanzados por etapa (envíos exitosos)
+            $prospectosAlcanzados = \DB::table('envios')
+                ->select('flujo_ejecucion_etapa_id', \DB::raw('COUNT(DISTINCT prospecto_id) as total'))
+                ->whereIn('flujo_ejecucion_etapa_id', $etapaIds)
+                ->whereIn('estado', ['enviado', 'abierto', 'clickeado'])
+                ->groupBy('flujo_ejecucion_etapa_id')
+                ->pluck('total', 'flujo_ejecucion_etapa_id');
         }
 
         // Calcular progreso si hay ejecución activa
@@ -844,7 +865,7 @@ class FlujoEjecucionController extends Controller
                 'error_message' => $ejecucion->error_message,
                 'progreso' => $progreso,
                 'progreso_envios' => $progresoEnvios,
-                'etapas' => $ejecucion->etapas->map(function ($etapa) use ($enviosPorEtapa) {
+                'etapas' => $ejecucion->etapas->map(function ($etapa) use ($enviosPorEtapa, $prospectosAlcanzados) {
                     $estadisticas = $enviosPorEtapa->get($etapa->id, collect());
 
                     // Conteos por estado
@@ -866,6 +887,8 @@ class FlujoEjecucionController extends Controller
                             'fallido' => $estadisticas->firstWhere('estado', 'fallido')?->total ?? 0,
                             'abierto' => $abierto,
                             'clickeado' => $clickeado,
+                            // Prospectos únicos que recibieron el envío exitosamente
+                            'prospectos_alcanzados' => $prospectosAlcanzados->get($etapa->id, 0),
                         ],
                     ];
                 }),
