@@ -526,7 +526,9 @@ class FlujoEjecucionController extends Controller
         });
 
         // Calcular progreso general
-        $totalEtapas = $ejecucion->etapas->count();
+        // Use total stages from the FLUJO's config_structure, not from execution etapas
+        $etapasTotalFlujo = count($flujo->config_structure['stages'] ?? []);
+        $totalEtapas = $etapasTotalFlujo > 0 ? $etapasTotalFlujo : $ejecucion->etapas->count();
         $etapasCompletadas = $ejecucion->etapas->where('estado', 'completed')->count();
         $etapasFallidas = $ejecucion->etapas->where('estado', 'failed')->count();
         $etapasEnEjecucion = $ejecucion->etapas->where('estado', 'executing')->count();
@@ -714,7 +716,10 @@ class FlujoEjecucionController extends Controller
         $progreso = null;
         $progresoEnvios = null;
         if ($ejecucion) {
-            $totalEtapas = $ejecucion->etapas->count();
+            // Use total stages from the FLUJO's config_structure, not from execution etapas
+            // The execution only has stages that have been REGISTERED, not all planned stages
+            $etapasTotalFlujo = count($flujo->config_structure['stages'] ?? []);
+            $totalEtapas = $etapasTotalFlujo > 0 ? $etapasTotalFlujo : $ejecucion->etapas->count();
             $etapasCompletadas = $ejecucion->etapas->where('estado', 'completed')->count();
             $etapasFallidas = $ejecucion->etapas->where('estado', 'failed')->count();
             $etapasEnEjecucion = $ejecucion->etapas->where('estado', 'executing')->count();
@@ -1004,6 +1009,12 @@ class FlujoEjecucionController extends Controller
             // Limitar a 50 flujos por request para evitar sobrecarga
             $flujoIds = array_slice($flujoIds, 0, 50);
 
+            // Query 0: Get flujos with config_structure to know total stages per flow
+            $flujos = Flujo::whereIn('id', $flujoIds)
+                ->select(['id', 'config_structure'])
+                ->get()
+                ->keyBy('id');
+
             // Query 1: Obtener ejecuciones activas (in_progress o paused) para todos los flujos
             $ejecucionesActivas = FlujoEjecucion::whereIn('flujo_id', $flujoIds)
                 ->whereIn('estado', ['in_progress', 'paused'])
@@ -1062,8 +1073,10 @@ class FlujoEjecucionController extends Controller
                     continue;
                 }
 
-                // Calcular progreso
-                $totalEtapas = $ejecucion->etapas->count();
+                // Calcular progreso - use total stages from flujo config_structure
+                $flujoConfig = $flujos->get($flujoId);
+                $etapasTotalFlujo = count($flujoConfig?->config_structure['stages'] ?? []);
+                $totalEtapas = $etapasTotalFlujo > 0 ? $etapasTotalFlujo : $ejecucion->etapas->count();
                 $etapasCompletadas = $ejecucion->etapas->where('estado', 'completed')->count();
                 $etapasFallidas = $ejecucion->etapas->where('estado', 'failed')->count();
 
