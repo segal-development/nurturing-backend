@@ -1324,9 +1324,38 @@ class FlujoController extends Controller
             $nivelDeudaTarget = null;
         }
 
+        // Normalize lotes_ids: ensure it's an array or null
+        $lotesIds = $request->input('lote_ids');
+        if (is_array($lotesIds) && empty($lotesIds)) {
+            $lotesIds = null;
+        }
+
+        // Fallback for origen_id: try origen_id first, then look up by origen_nombre
+        $origenId = $request->input('origen_id');
+        if (empty($origenId) && $request->input('origen_nombre')) {
+            // Try to find lote by origen name to get its ID
+            $lote = \App\Models\Lote::where('nombre', $request->input('origen_nombre'))->first();
+            $origenId = $lote?->id;
+        }
+
+        // Validate initial_node in structure
+        $structure = $request->input('structure');
+        if (! empty($structure) && empty($structure['initial_node'])) {
+            // Try to find initial node from visual config
+            $visual = $request->input('visual');
+            if (! empty($visual['nodes'])) {
+                $initialNode = collect($visual['nodes'])->first(function ($node) {
+                    return ($node['type'] ?? '') === 'initial' || str_starts_with($node['id'] ?? '', 'initial');
+                });
+                if ($initialNode) {
+                    $structure['initial_node'] = $initialNode['id'];
+                }
+            }
+        }
+
         return Flujo::create([
             'tipo_prospecto_id' => $tipoProspecto->id,
-            'origen_id' => $request->input('origen_id'),
+            'origen_id' => $origenId,
             'origen' => $request->input('origen_nombre'),
             'nombre' => $request->input('flujo.nombre'),
             'descripcion' => $request->input('flujo.descripcion'),
@@ -1334,8 +1363,9 @@ class FlujoController extends Controller
             'activo' => $request->input('flujo.activo', true),
             'user_id' => $request->user()->id,
             'config_visual' => $request->input('visual'),
-            'config_structure' => $request->input('structure'),
+            'config_structure' => $structure,
             'nivel_deuda_target' => $nivelDeudaTarget,
+            'lotes_ids' => $lotesIds,
         ]);
     }
 
