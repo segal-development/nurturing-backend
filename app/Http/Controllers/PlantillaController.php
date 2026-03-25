@@ -32,6 +32,16 @@ class PlantillaController extends Controller
             }
         }
 
+        // Filtro por búsqueda (nombre, descripcion, asunto)
+        if ($request->filled('busqueda')) {
+            $busqueda = $request->busqueda;
+            $query->where(function ($q) use ($busqueda) {
+                $q->where('nombre', 'like', "%{$busqueda}%")
+                    ->orWhere('descripcion', 'like', "%{$busqueda}%")
+                    ->orWhere('asunto', 'like', "%{$busqueda}%");
+            });
+        }
+
         // Paginación
         $porPagina = $request->input('por_pagina', 10);
         $plantillas = $query->latest()->paginate($porPagina);
