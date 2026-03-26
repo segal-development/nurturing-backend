@@ -50,9 +50,10 @@ class FlujoController extends Controller
             $origenId = $request->input('origen_id');
 
             if ($origenId === '_sin_origen') {
-                $query->whereNull('origen_id');
+                $query->whereNull('origen');
             } elseif ($origenId !== '_todos') {
-                $query->where('origen_id', $origenId);
+                // Filter by 'origen' column (name) since that's what opcionesFiltrado() returns
+                $query->where('origen', $origenId);
             }
             // '_todos' = no filter, show all
         }
