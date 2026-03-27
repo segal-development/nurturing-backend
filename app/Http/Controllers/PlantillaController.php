@@ -233,4 +233,72 @@ class PlantillaController extends Controller
 
         return response()->json($validacion);
     }
+
+    /**
+     * Preview de plantilla guardada con datos de ejemplo
+     *
+     * Retorna el contenido renderizado (HTML para email, texto para SMS)
+     * con variables reemplazadas por valores de ejemplo.
+     */
+    public function preview(Plantilla $plantilla): JsonResponse
+    {
+        $contenido = $plantilla->generarPreview() ?? $plantilla->contenido ?? '';
+
+        // Reemplazar variables con datos de ejemplo
+        $contenidoConEjemplos = $this->reemplazarVariablesEjemplo($contenido);
+
+        // Detectar qué variables usa la plantilla
+        $variables = $this->detectarVariables($plantilla->contenido ?? '');
+
+        return response()->json([
+            'data' => [
+                'id' => $plantilla->id,
+                'nombre' => $plantilla->nombre,
+                'tipo' => $plantilla->tipo,
+                'asunto' => $plantilla->asunto
+                    ? $this->reemplazarVariablesEjemplo($plantilla->asunto)
+                    : null,
+                'contenido' => $contenidoConEjemplos,
+                'variables' => $variables,
+            ],
+        ]);
+    }
+
+    /**
+     * Reemplazar variables tipo {{variable}} con datos de ejemplo
+     */
+    private function reemplazarVariablesEjemplo(string $contenido): string
+    {
+        $ejemplos = [
+            'nombre' => 'Juan Pérez',
+            'email' => 'juan.perez@ejemplo.com',
+            'telefono' => '+56 9 1234 5678',
+            'rut' => '12.345.678-9',
+            'monto_deuda' => '$150.000',
+            'monto' => '$150.000',
+            'fecha_vencimiento' => '15/04/2026',
+            'empresa' => 'Grupo Segal',
+            'url_informe' => 'https://ejemplo.com/informe/abc123',
+            'url_pago' => 'https://ejemplo.com/pagar/abc123',
+            'link' => 'https://ejemplo.com/accion',
+        ];
+
+        // Reemplazar {{variable}} y {variable}
+        foreach ($ejemplos as $variable => $valor) {
+            $contenido = str_replace("{{{$variable}}}", $valor, $contenido);
+            $contenido = str_replace("{{$variable}}", $valor, $contenido);
+        }
+
+        return $contenido;
+    }
+
+    /**
+     * Detectar variables usadas en el contenido
+     */
+    private function detectarVariables(string $contenido): array
+    {
+        preg_match_all('/\{\{?(\w+)\}?\}/', $contenido, $matches);
+
+        return array_unique($matches[1] ?? []);
+    }
 }
