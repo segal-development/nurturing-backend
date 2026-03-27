@@ -734,14 +734,14 @@ class FlujoController extends Controller
             ->map(fn ($name) => str_replace('[DEPRECATED] ', '', $name))
             ->toArray();
 
-        // OPTIMIZADO: Una sola query con subquery en vez de N+1
-        // Antes: 1 query para orígenes + N queries para contar flujos
-        // Ahora: 1 query con LEFT JOIN y GROUP BY
-        // Filtramos orígenes que vienen de fuentes deprecated/inactivas
+        // Inferir flujos por origen via: importaciones → prospectos → prospecto_en_flujo → flujos
+        // Un flujo con prospectos de múltiples orígenes aparece en TODOS los filtros relevantes
+        // (correcto: permite filtrar flujos que contengan prospectos de ese origen)
         $origenes = DB::table('importaciones')
             ->select('importaciones.origen')
-            ->selectRaw('COUNT(DISTINCT flujos.id) as total_flujos')
-            ->leftJoin('flujos', 'flujos.origen', '=', 'importaciones.origen')
+            ->selectRaw('COUNT(DISTINCT prospecto_en_flujo.flujo_id) as total_flujos')
+            ->join('prospectos', 'prospectos.importacion_id', '=', 'importaciones.id')
+            ->leftJoin('prospecto_en_flujo', 'prospecto_en_flujo.prospecto_id', '=', 'prospectos.id')
             ->when(count($deprecatedOrigins) > 0, function ($query) use ($deprecatedOrigins) {
                 $query->whereNotIn('importaciones.origen', $deprecatedOrigins);
             })
