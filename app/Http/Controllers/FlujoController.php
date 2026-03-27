@@ -46,14 +46,22 @@ class FlujoController extends Controller
         }
 
         // Filtrar por origen_id si se proporciona
+        // Inferir origen desde prospectos: flujos que tengan prospectos de ese origen
         if ($request->filled('origen_id')) {
             $origenId = $request->input('origen_id');
 
             if ($origenId === '_sin_origen') {
-                $query->whereNull('origen');
+                // Flujos sin prospectos asignados
+                $query->whereDoesntHave('prospectosEnFlujo');
             } elseif ($origenId !== '_todos') {
-                // Filter by 'origen' column (name) since that's what opcionesFiltrado() returns
-                $query->where('origen', $origenId);
+                // Flujos que tengan al menos un prospecto de este origen
+                $query->whereHas('prospectosEnFlujo', function ($q) use ($origenId) {
+                    $q->whereHas('prospecto', function ($q2) use ($origenId) {
+                        $q2->whereHas('importacion', function ($q3) use ($origenId) {
+                            $q3->where('origen', $origenId);
+                        });
+                    });
+                });
             }
             // '_todos' = no filter, show all
         }
