@@ -2061,6 +2061,7 @@ class FlujoController extends Controller
     /**
      * Calcula cuántos prospectos NUEVOS de Sysgal se agregaron en el último sync
      * para el nivel de deuda que corresponde a este flujo.
+     * Incluye el estado de progreso de esos prospectos en el flujo.
      */
     private function calcularNuevosSysgalPorFlujo(Flujo $flujo): ?array
     {
@@ -2116,12 +2117,123 @@ class FlujoController extends Controller
             default => 'Sysgal',
         };
 
+        // Calcular el estado de progreso de los prospectos del último sync
+        $estadoProgreso = $this->calcularEstadoProgresoSync($flujo, $fechaSync);
+
         return [
             'count' => $count,
             'fecha' => $fechaSync->toISOString(),
             'fecha_legible' => $fechaSync->timezone('America/Santiago')->format('d/m/Y H:i'),
             'nivel_deuda' => $nivelLabel,
             'origen' => 'Sysgal',
+            'progreso' => $estadoProgreso,
+        ];
+    }
+
+    /**
+     * Calcula el estado de progreso de los prospectos que entraron desde una fecha específica.
+     * Muestra cuántos ya alcanzaron el nodo actual vs cuántos están en nodos anteriores.
+     */
+    private function calcularEstadoProgresoSync(Flujo $flujo, $fechaSync): array
+    {
+        // Obtener la ejecución perpetua activa del flujo
+        $ejecucionActiva = \App\Models\FlujoEjecucion::where('flujo_id', $flujo->id)
+            ->where('estado', 'in_progress')
+            ->where('es_perpetuo', true)
+            ->first();
+
+        if (! $ejecucionActiva) {
+            return [
+                'tiene_datos' => false,
+                'mensaje' => 'Sin ejecución activa',
+            ];
+        }
+
+        $nodoActual = $ejecucionActiva->nodo_actual;
+
+        // Obtener el orden de etapas del flujo
+        $stageOrder = app(\App\Services\StageOrderResolver::class)->getStageOrder($flujo);
+        $nodoActualIndex = $nodoActual ? array_search($nodoActual, $stageOrder) : 0;
+
+        if ($nodoActualIndex === false) {
+            $nodoActualIndex = 0;
+        }
+
+        // Buscar prospectos que entraron al flujo desde la fecha del sync
+        // (fecha_inicio >= fechaSync)
+        $prospectosSyncQuery = \App\Models\ProspectoEnFlujo::where('flujo_id', $flujo->id)
+            ->where('fecha_inicio', '>=', $fechaSync)
+            ->where('completado', false)
+            ->where('cancelado', false);
+
+        $totalProspectosSync = $prospectosSyncQuery->count();
+
+        if ($totalProspectosSync === 0) {
+            return [
+                'tiene_datos' => false,
+                'mensaje' => 'Prospectos aún no asignados al flujo',
+            ];
+        }
+
+        // Contar prospectos por estado de avance
+        // 1. Sin empezar (ultima_etapa_node_id = NULL)
+        $sinEmpezar = (clone $prospectosSyncQuery)->whereNull('ultima_etapa_node_id')->count();
+
+        // 2. En el nodo actual (ya alcanzaron)
+        $enNodoActual = $nodoActual
+            ? (clone $prospectosSyncQuery)->where('ultima_etapa_node_id', $nodoActual)->count()
+            : 0;
+
+        // 3. En nodos anteriores (alcanzando)
+        $enNodosAnteriores = 0;
+        if ($nodoActualIndex > 0) {
+            $nodosAnteriores = array_slice($stageOrder, 0, $nodoActualIndex);
+            $enNodosAnteriores = (clone $prospectosSyncQuery)
+                ->whereIn('ultima_etapa_node_id', $nodosAnteriores)
+                ->count();
+        }
+
+        // Calcular estadísticas de envíos para estos prospectos
+        $prospectoIds = $prospectosSyncQuery->pluck('prospecto_id')->toArray();
+
+        $enviosStats = \App\Models\Envio::where('flujo_id', $flujo->id)
+            ->whereIn('prospecto_id', $prospectoIds)
+            ->selectRaw("
+                COUNT(*) as total,
+                SUM(CASE WHEN estado IN ('enviado', 'abierto', 'clickeado') THEN 1 ELSE 0 END) as enviados,
+                SUM(CASE WHEN estado = 'fallido' THEN 1 ELSE 0 END) as fallidos,
+                SUM(CASE WHEN estado = 'pendiente' THEN 1 ELSE 0 END) as pendientes
+            ")
+            ->first();
+
+        // Calcular porcentaje de alcance
+        $yaAlcanzaron = $enNodoActual;
+        $alcanzando = $sinEmpezar + $enNodosAnteriores;
+        $porcentajeAlcance = $totalProspectosSync > 0
+            ? round(($yaAlcanzaron / $totalProspectosSync) * 100, 1)
+            : 0;
+
+        // Obtener label del nodo actual
+        $stages = $flujo->config_structure['stages'] ?? [];
+        $nodoActualData = collect($stages)->firstWhere('id', $nodoActual);
+        $nodoActualLabel = $nodoActualData['label'] ?? $nodoActual ?? 'Inicio';
+
+        return [
+            'tiene_datos' => true,
+            'total_prospectos' => $totalProspectosSync,
+            'ya_alcanzaron' => $yaAlcanzaron,
+            'alcanzando' => $alcanzando,
+            'sin_empezar' => $sinEmpezar,
+            'en_nodos_anteriores' => $enNodosAnteriores,
+            'porcentaje_alcance' => $porcentajeAlcance,
+            'nodo_actual' => $nodoActual,
+            'nodo_actual_label' => $nodoActualLabel,
+            'envios' => [
+                'total' => (int) ($enviosStats->total ?? 0),
+                'enviados' => (int) ($enviosStats->enviados ?? 0),
+                'fallidos' => (int) ($enviosStats->fallidos ?? 0),
+                'pendientes' => (int) ($enviosStats->pendientes ?? 0),
+            ],
         ];
     }
 }
