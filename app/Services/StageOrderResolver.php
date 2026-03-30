@@ -34,7 +34,12 @@ class StageOrderResolver
 
         $stages = $configStructure['stages'];
         $branches = $configStructure['branches'] ?? [];
-        $initialNode = $configStructure['initial_node'] ?? null;
+        $initialNodeConfig = $configStructure['initial_node'] ?? null;
+        
+        // initial_node can be a string (node_id) or an array with 'id' key
+        $initialNode = is_array($initialNodeConfig) 
+            ? ($initialNodeConfig['id'] ?? null) 
+            : $initialNodeConfig;
 
         // Find first stage (after start node)
         $firstStageId = $this->findFirstStageId($stages, $branches, $initialNode);
