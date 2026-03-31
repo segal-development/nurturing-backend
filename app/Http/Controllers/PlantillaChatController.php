@@ -2,30 +2,25 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\AiConversation;
+use App\Models\AgentConversationTemplate;
 use App\Models\Plantilla;
 use App\Services\AI\EmailTemplateAgent;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class PlantillaChatController extends Controller
 {
-    public function __construct(
-        private EmailTemplateAgent $agent
-    ) {}
-
     /**
      * Send a message to the AI agent and receive SSE stream.
      *
-     * Note: Laravel AI doesn't support streaming with structured output.
-     * We use SSE to provide immediate feedback (thinking state) while
-     * the synchronous agent call processes the request.
+     * The SDK's RemembersConversations trait handles message persistence.
+     * We use SSE to provide immediate feedback while the synchronous
+     * agent call processes (streaming not supported with structured output).
      *
      * POST /plantilla-chat/message
-     *
-     * @return StreamedResponse
      */
     public function message(Request $request): StreamedResponse
     {
@@ -34,14 +29,22 @@ class PlantillaChatController extends Controller
             'conversation_id' => ['nullable', 'string', 'uuid'],
         ]);
 
-        $userId = $request->user()->id;
+        $user = $request->user();
         $userMessage = $request->input('message');
+        $conversationId = $request->input('conversation_id');
 
-        // Initialize agent with user's conversation
-        $this->agent->forUser($userId);
-        $conversation = $this->agent->getConversation();
+        // Build agent with SDK's conversation handling
+        $agent = new EmailTemplateAgent;
 
-        return new StreamedResponse(function () use ($userMessage, $conversation) {
+        if ($conversationId) {
+            // Continue existing conversation
+            $agent->continue($conversationId, as: $user);
+        } else {
+            // Start new conversation for user
+            $agent->forUser($user);
+        }
+
+        return new StreamedResponse(function () use ($agent, $userMessage, $user) {
             // Disable output buffering for real-time SSE
             if (ob_get_level()) {
                 ob_end_clean();
@@ -51,36 +54,46 @@ class PlantillaChatController extends Controller
                 // Emit thinking event immediately to provide feedback
                 $this->emitSSE('thinking', ['content' => 'Analizando tu solicitud...']);
 
-                // Call the agent synchronously (streaming not supported with structured output)
-                $response = $this->agent->chat($userMessage);
+                // Call the agent - SDK handles message persistence automatically
+                $response = $agent->prompt($userMessage);
+
+                // Get conversation ID from response (SDK sets this)
+                $conversationId = $response->conversationId;
 
                 // Extract structured response data
                 $thinking = $response['thinking'] ?? null;
                 $message = $response['message'] ?? '';
-                
-                // Parse template from JSON string (we use template_json to avoid OpenAI schema issues)
+
+                // Parse template from JSON string
                 $templateJson = $response['template_json'] ?? '';
                 $template = null;
+
                 if ($templateJson && is_string($templateJson) && $templateJson !== '') {
                     $rawTemplate = json_decode($templateJson, true);
+
                     if ($rawTemplate && isset($rawTemplate['componentes'])) {
                         // Transform flat component structure to nested 'contenido' structure
-                        // that the frontend expects
                         $template = [
                             'nombre' => $rawTemplate['nombre'] ?? '',
                             'asunto' => $rawTemplate['asunto'] ?? '',
                             'componentes' => array_map(function ($comp, $index) {
                                 $tipo = $comp['tipo'] ?? 'texto';
                                 unset($comp['tipo']);
-                                
+
                                 return [
-                                    'id' => $comp['id'] ?? 'comp-' . uniqid(),
+                                    'id' => $comp['id'] ?? 'comp-'.uniqid(),
                                     'tipo' => $tipo,
                                     'orden' => $comp['orden'] ?? $index,
-                                    'contenido' => $comp, // All other fields go into contenido
+                                    'contenido' => $comp,
                                 ];
                             }, $rawTemplate['componentes'], array_keys($rawTemplate['componentes'])),
                         ];
+
+                        // Store current template in auxiliary table
+                        if ($conversationId) {
+                            AgentConversationTemplate::forConversation($conversationId)
+                                ->setTemplate($template);
+                        }
                     }
                 }
 
@@ -99,7 +112,7 @@ class PlantillaChatController extends Controller
 
                 // Emit done event with complete response
                 $this->emitSSE('done', [
-                    'conversation_id' => $conversation->id,
+                    'conversation_id' => $conversationId,
                     'message' => $message,
                     'template' => $template,
                 ]);
@@ -107,7 +120,7 @@ class PlantillaChatController extends Controller
                 Log::error('PlantillaChatController: Agent error', [
                     'error' => $e->getMessage(),
                     'trace' => $e->getTraceAsString(),
-                    'user_id' => $conversation->user_id ?? null,
+                    'user_id' => $user->id,
                 ]);
 
                 $this->emitSSE('error', [
@@ -118,7 +131,7 @@ class PlantillaChatController extends Controller
             'Content-Type' => 'text/event-stream',
             'Cache-Control' => 'no-cache',
             'Connection' => 'keep-alive',
-            'X-Accel-Buffering' => 'no', // Disable nginx buffering
+            'X-Accel-Buffering' => 'no',
         ]);
     }
 
@@ -135,7 +148,6 @@ class PlantillaChatController extends Controller
             'template.asunto' => ['required', 'string', 'max:200'],
             'template.componentes' => ['required', 'array', 'min:1'],
             'template.componentes.*.tipo' => ['required', 'in:logo,texto,boton,separador,imagen,footer'],
-            // Component fields - all optional depending on tipo
             'template.componentes.*.id' => ['sometimes', 'string'],
             'template.componentes.*.orden' => ['sometimes', 'integer'],
             'template.componentes.*.url' => ['nullable', 'string'],
@@ -162,18 +174,16 @@ class PlantillaChatController extends Controller
         $templateData = $request->input('template');
         $existingId = $request->input('existing_id');
 
-        // Ensure componentes have required fields
         $componentes = collect($templateData['componentes'])
             ->map(function ($componente, $index) {
                 return array_merge($componente, [
-                    'id' => $componente['id'] ?? 'comp-' . uniqid(),
+                    'id' => $componente['id'] ?? 'comp-'.uniqid(),
                     'orden' => $componente['orden'] ?? $index,
                 ]);
             })
             ->toArray();
 
         if ($existingId) {
-            // Update existing template
             $plantilla = Plantilla::findOrFail($existingId);
             $plantilla->update([
                 'nombre' => $templateData['nombre'],
@@ -193,7 +203,6 @@ class PlantillaChatController extends Controller
             ]);
         }
 
-        // Create new template
         $plantilla = Plantilla::create([
             'nombre' => $templateData['nombre'],
             'descripcion' => 'Creada con asistente de IA',
@@ -224,18 +233,41 @@ class PlantillaChatController extends Controller
     {
         $userId = $request->user()->id;
 
-        $conversation = AiConversation::where('user_id', $userId)->first();
+        // Get latest conversation from SDK tables
+        $conversation = DB::table('agent_conversations')
+            ->where('user_id', $userId)
+            ->orderBy('updated_at', 'desc')
+            ->first();
 
         if (! $conversation) {
             return response()->json([
+                'conversation_id' => null,
                 'messages' => [],
                 'current_template' => null,
             ]);
         }
 
+        // Get messages from SDK table
+        $messages = DB::table('agent_conversation_messages')
+            ->where('conversation_id', $conversation->id)
+            ->orderBy('created_at', 'asc')
+            ->get()
+            ->map(function ($msg) {
+                return [
+                    'role' => $msg->role,
+                    'content' => $msg->content,
+                    'timestamp' => $msg->created_at,
+                ];
+            })
+            ->toArray();
+
+        // Get current template from auxiliary table
+        $templateRecord = AgentConversationTemplate::find($conversation->id);
+
         return response()->json([
-            'messages' => $conversation->messages ?? [],
-            'current_template' => $conversation->current_template,
+            'conversation_id' => $conversation->id,
+            'messages' => $messages,
+            'current_template' => $templateRecord?->current_template,
         ]);
     }
 
@@ -248,19 +280,33 @@ class PlantillaChatController extends Controller
     {
         $userId = $request->user()->id;
 
-        $conversation = AiConversation::where('user_id', $userId)->first();
+        // Get user's conversations
+        $conversationIds = DB::table('agent_conversations')
+            ->where('user_id', $userId)
+            ->pluck('id');
 
-        if ($conversation) {
-            $conversation->clearHistory();
-            $conversation->save();
+        if ($conversationIds->isNotEmpty()) {
+            // Delete templates (cascade will handle this, but explicit for clarity)
+            AgentConversationTemplate::whereIn('conversation_id', $conversationIds)->delete();
+
+            // Delete messages
+            DB::table('agent_conversation_messages')
+                ->whereIn('conversation_id', $conversationIds)
+                ->delete();
+
+            // Delete conversations
+            DB::table('agent_conversations')
+                ->where('user_id', $userId)
+                ->delete();
 
             Log::info('PlantillaChatController: History cleared', [
                 'user_id' => $userId,
+                'conversations_deleted' => $conversationIds->count(),
             ]);
         }
 
         return response()->json([
-            'message' => 'Historial de conversación eliminado',
+            'message' => 'Historial de conversacion eliminado',
         ]);
     }
 
@@ -270,9 +316,8 @@ class PlantillaChatController extends Controller
     private function emitSSE(string $type, array $data): void
     {
         $payload = array_merge(['type' => $type], $data);
-        echo 'data: ' . json_encode($payload) . "\n\n";
+        echo 'data: '.json_encode($payload)."\n\n";
 
-        // Flush output immediately
         if (ob_get_level()) {
             ob_flush();
         }

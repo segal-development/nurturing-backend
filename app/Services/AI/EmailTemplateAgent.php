@@ -5,81 +5,17 @@ namespace App\Services\AI;
 use App\Ai\Tools\GetBrandGuidelines;
 use App\Ai\Tools\ListTemplates;
 use App\Ai\Tools\LoadTemplate;
-use App\Models\AiConversation;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
-use Illuminate\Support\Collection;
+use Laravel\Ai\Concerns\RemembersConversations;
 use Laravel\Ai\Contracts\Agent;
 use Laravel\Ai\Contracts\Conversational;
 use Laravel\Ai\Contracts\HasStructuredOutput;
 use Laravel\Ai\Contracts\HasTools;
-use Laravel\Ai\Messages\AssistantMessage;
-use Laravel\Ai\Messages\UserMessage;
 use Laravel\Ai\Promptable;
-use Laravel\Ai\Responses\AgentResponse;
 
 class EmailTemplateAgent implements Agent, Conversational, HasStructuredOutput, HasTools
 {
-    use Promptable;
-
-    private ?AiConversation $conversation = null;
-
-    private Collection $conversationMessages;
-
-    public function __construct()
-    {
-        $this->conversationMessages = new Collection;
-    }
-
-    /**
-     * Load an existing conversation for the user.
-     */
-    public function forConversation(AiConversation $conversation): static
-    {
-        $this->conversation = $conversation;
-        $this->loadConversationHistory();
-
-        return $this;
-    }
-
-    /**
-     * Create or get conversation for a user.
-     */
-    public function forUser(int|\App\Models\User $user): static
-    {
-        $userId = $user instanceof \App\Models\User ? $user->id : $user;
-        
-        $this->conversation = AiConversation::firstOrCreate(
-            ['user_id' => $userId],
-            ['messages' => [], 'current_template' => null]
-        );
-
-        $this->loadConversationHistory();
-
-        return $this;
-    }
-
-    /**
-     * Load conversation history into messages collection.
-     */
-    private function loadConversationHistory(): void
-    {
-        $this->conversationMessages = new Collection;
-
-        if (! $this->conversation || empty($this->conversation->messages)) {
-            return;
-        }
-
-        foreach ($this->conversation->messages as $message) {
-            $role = $message['role'] ?? 'user';
-            $content = $message['content'] ?? '';
-
-            if ($role === 'user') {
-                $this->conversationMessages->push(new UserMessage($content));
-            } else {
-                $this->conversationMessages->push(new AssistantMessage($content));
-            }
-        }
-    }
+    use Promptable, RemembersConversations;
 
     /**
      * Get the instructions that the agent should follow.
@@ -168,7 +104,7 @@ El usuario puede usar estas variables que seran reemplazadas:
 5. El campo "template" solo debe incluirse cuando generes/modifiques una plantilla
 6. Sigue SIEMPRE la guia de marca (colores, tono, estructura)
 7. Asegurate de que los asuntos sean atractivos y no activen filtros de spam
-8. Mantén los emails concisos y con un solo CTA principal
+8. Manten los emails concisos y con un solo CTA principal
 INSTRUCTIONS;
     }
 
@@ -205,79 +141,10 @@ INSTRUCTIONS;
     }
 
     /**
-     * Get the conversation messages for context.
+     * Get the maximum number of conversation messages to include in context.
      */
-    public function messages(): array
+    protected function maxConversationMessages(): int
     {
-        return $this->conversationMessages->all();
-    }
-
-    /**
-     * Send a message and get a response.
-     */
-    public function chat(string $message): AgentResponse
-    {
-        // Add user message to conversation
-        if ($this->conversation) {
-            $this->conversation->addMessage('user', $message);
-            $this->conversationMessages->push(new UserMessage($message));
-        }
-
-        // Use the default provider configured in config/ai.php
-        $response = $this->prompt(prompt: $message);
-
-        // Save assistant response to conversation
-        if ($this->conversation) {
-            // Get response data - AgentResponse has a text property with JSON
-            $responseData = json_decode($response->text, true) ?? [];
-            
-            // Parse template from JSON string if present (empty string means no template)
-            $templateJson = $responseData['template_json'] ?? '';
-            $template = null;
-            if ($templateJson && is_string($templateJson) && $templateJson !== '') {
-                $template = json_decode($templateJson, true);
-            }
-            
-            $assistantMessage = $responseData['message'] ?? $response->text;
-            
-            $this->conversation->addMessage('assistant', $assistantMessage, $template);
-
-            if ($template) {
-                $this->conversation->current_template = $template;
-            }
-
-            $this->conversation->save();
-        }
-
-        return $response;
-    }
-
-    /**
-     * Get the current template from the conversation.
-     */
-    public function getCurrentTemplate(): ?array
-    {
-        return $this->conversation?->current_template;
-    }
-
-    /**
-     * Clear the conversation history.
-     */
-    public function clearHistory(): void
-    {
-        if ($this->conversation) {
-            $this->conversation->clearHistory();
-            $this->conversation->save();
-        }
-
-        $this->conversationMessages = new Collection;
-    }
-
-    /**
-     * Get the conversation model.
-     */
-    public function getConversation(): ?AiConversation
-    {
-        return $this->conversation;
+        return 50;
     }
 }
