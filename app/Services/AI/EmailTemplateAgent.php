@@ -198,104 +198,8 @@ INSTRUCTIONS;
                 ->description('Tu respuesta conversacional al usuario, explicando que hiciste o preguntando por mas detalles.')
                 ->required(),
 
-            'template' => $schema->object([
-                'nombre' => $schema->string()
-                    ->description('Nombre identificador de la plantilla (ej: CAMP-EMAIL-D001-Bienvenida)')
-                    ->required(),
-
-                'asunto' => $schema->string()
-                    ->description('Linea de asunto del email (max 60 caracteres)')
-                    ->required(),
-
-                'componentes' => $schema->array()
-                    ->items($schema->object([
-                        'tipo' => $schema->string()
-                            ->enum(['logo', 'texto', 'boton', 'separador', 'imagen', 'footer'])
-                            ->description('Tipo de componente')
-                            ->required(),
-
-                        // Logo properties
-                        'url' => $schema->string()
-                            ->description('URL de la imagen (para logo e imagen)')
-                            ->nullable(),
-
-                        'alt' => $schema->string()
-                            ->description('Texto alternativo para la imagen')
-                            ->nullable(),
-
-                        'altura' => $schema->integer()
-                            ->description('Altura en pixeles')
-                            ->nullable(),
-
-                        'ancho' => $schema->integer()
-                            ->description('Ancho en pixeles')
-                            ->nullable(),
-
-                        'alineacion' => $schema->string()
-                            ->enum(['left', 'center', 'right'])
-                            ->description('Alineacion del componente')
-                            ->nullable(),
-
-                        'color_fondo' => $schema->string()
-                            ->description('Color de fondo hexadecimal (ej: #1e3a8a)')
-                            ->nullable(),
-
-                        'padding' => $schema->integer()
-                            ->description('Padding en pixeles')
-                            ->nullable(),
-
-                        // Text properties
-                        'texto' => $schema->string()
-                            ->description('Contenido de texto')
-                            ->nullable(),
-
-                        'tamanio_fuente' => $schema->integer()
-                            ->description('Tamano de fuente en pixeles')
-                            ->nullable(),
-
-                        'color' => $schema->string()
-                            ->description('Color del texto hexadecimal')
-                            ->nullable(),
-
-                        'color_texto' => $schema->string()
-                            ->description('Color del texto para botones y footer')
-                            ->nullable(),
-
-                        'negrita' => $schema->boolean()
-                            ->description('Si el texto es negrita')
-                            ->nullable(),
-
-                        'italica' => $schema->boolean()
-                            ->description('Si el texto es italica')
-                            ->nullable(),
-
-                        // Separator properties
-                        'margen' => $schema->integer()
-                            ->description('Margen vertical para separadores')
-                            ->nullable(),
-
-                        // Image properties
-                        'link_url' => $schema->string()
-                            ->description('URL de destino al hacer click en la imagen')
-                            ->nullable(),
-
-                        'border_radius' => $schema->integer()
-                            ->description('Radio del borde en pixeles')
-                            ->nullable(),
-
-                        // Footer properties
-                        'enlaces' => $schema->array()
-                            ->items($schema->object([
-                                'url' => $schema->string()->required(),
-                                'etiqueta' => $schema->string()->required(),
-                            ]))
-                            ->description('Enlaces adicionales para el footer')
-                            ->nullable(),
-                    ]))
-                    ->description('Lista de componentes del email en orden')
-                    ->required(),
-            ])
-                ->description('La plantilla generada o modificada. Solo incluir cuando se crea/modifica una plantilla.')
+            'template_json' => $schema->string()
+                ->description('La plantilla en formato JSON string. Debe ser un JSON valido con la estructura: {"nombre": "string", "asunto": "string", "componentes": [...]}. Solo incluir cuando se crea/modifica una plantilla. Usar null si no hay plantilla.')
                 ->nullable(),
         ];
     }
@@ -326,7 +230,14 @@ INSTRUCTIONS;
         if ($this->conversation) {
             // Get response data - AgentResponse has a text property with JSON
             $responseData = json_decode($response->text, true) ?? [];
-            $template = $responseData['template'] ?? null;
+            
+            // Parse template from JSON string if present
+            $templateJson = $responseData['template_json'] ?? null;
+            $template = null;
+            if ($templateJson && is_string($templateJson)) {
+                $template = json_decode($templateJson, true);
+            }
+            
             $assistantMessage = $responseData['message'] ?? $response->text;
             
             $this->conversation->addMessage('assistant', $assistantMessage, $template);
