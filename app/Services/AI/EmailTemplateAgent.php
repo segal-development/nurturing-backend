@@ -303,9 +303,9 @@ INSTRUCTIONS;
     /**
      * Get the conversation messages for context.
      */
-    public function messages(): iterable
+    public function messages(): array
     {
-        return $this->conversationMessages;
+        return $this->conversationMessages->all();
     }
 
     /**
