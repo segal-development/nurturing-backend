@@ -44,8 +44,10 @@ class EmailTemplateAgent implements Agent, Conversational, HasStructuredOutput, 
     /**
      * Create or get conversation for a user.
      */
-    public function forUser(int $userId): static
+    public function forUser(int|\App\Models\User $user): static
     {
+        $userId = $user instanceof \App\Models\User ? $user->id : $user;
+        
         $this->conversation = AiConversation::firstOrCreate(
             ['user_id' => $userId],
             ['messages' => [], 'current_template' => null]
