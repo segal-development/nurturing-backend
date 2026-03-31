@@ -60,5 +60,23 @@ return Application::configure(basePath: dirname(__DIR__))
             });
     })
     ->withExceptions(function (Exceptions $exceptions): void {
-        //
+        // Always return JSON for API authentication/authorization errors
+        $exceptions->render(function (\Illuminate\Auth\AuthenticationException $e, $request) {
+            if ($request->is('api/*') || $request->expectsJson()) {
+                return response()->json([
+                    'message' => 'Unauthenticated.',
+                    'error' => 'session_expired',
+                ], 401);
+            }
+        });
+
+        // Handle CSRF token mismatch for API routes
+        $exceptions->render(function (\Illuminate\Session\TokenMismatchException $e, $request) {
+            if ($request->is('api/*') || $request->expectsJson()) {
+                return response()->json([
+                    'message' => 'CSRF token mismatch. Please refresh the page.',
+                    'error' => 'csrf_token_mismatch',
+                ], 419);
+            }
+        });
     })->create();
