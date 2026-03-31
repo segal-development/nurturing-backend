@@ -309,7 +309,7 @@ INSTRUCTIONS;
     }
 
     /**
-     * Send a message and get a response, with automatic failover.
+     * Send a message and get a response.
      */
     public function chat(string $message): AgentResponse
     {
@@ -319,16 +319,17 @@ INSTRUCTIONS;
             $this->conversationMessages->push(new UserMessage($message));
         }
 
-        // Use failover chain: Anthropic -> OpenAI
-        $response = $this->prompt(
-            prompt: $message,
-            provider: $this->getProviderChain()
-        );
+        // Use the default provider configured in config/ai.php
+        $response = $this->prompt(prompt: $message);
 
         // Save assistant response to conversation
         if ($this->conversation) {
-            $template = $response['template'] ?? null;
-            $this->conversation->addMessage('assistant', $response['message'], $template);
+            // Get response data - AgentResponse has a text property with JSON
+            $responseData = json_decode($response->text, true) ?? [];
+            $template = $responseData['template'] ?? null;
+            $assistantMessage = $responseData['message'] ?? $response->text;
+            
+            $this->conversation->addMessage('assistant', $assistantMessage, $template);
 
             if ($template) {
                 $this->conversation->current_template = $template;
@@ -359,23 +360,6 @@ INSTRUCTIONS;
         }
 
         $this->conversationMessages = new Collection;
-    }
-
-    /**
-     * Get the provider failover chain.
-     */
-    private function getProviderChain(): array
-    {
-        $config = config('ai');
-
-        $providers = ['anthropic'];
-
-        // Add OpenAI as failover if enabled
-        if ($config['failover']['enabled'] ?? true) {
-            $providers[] = $config['failover']['fallback_provider'] ?? 'openai';
-        }
-
-        return $providers;
     }
 
     /**
