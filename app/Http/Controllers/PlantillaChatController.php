@@ -57,7 +57,13 @@ class PlantillaChatController extends Controller
                 // Extract structured response data
                 $thinking = $response['thinking'] ?? null;
                 $message = $response['message'] ?? '';
-                $template = $response['template'] ?? null;
+                
+                // Parse template from JSON string (we use template_json to avoid OpenAI schema issues)
+                $templateJson = $response['template_json'] ?? '';
+                $template = null;
+                if ($templateJson && is_string($templateJson) && $templateJson !== '') {
+                    $template = json_decode($templateJson, true);
+                }
 
                 // Emit thinking content if available
                 if ($thinking) {
