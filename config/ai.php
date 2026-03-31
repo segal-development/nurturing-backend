@@ -29,6 +29,7 @@ return [
     'providers' => [
 
         'anthropic' => [
+            'driver' => 'anthropic',
             'api_key' => env('ANTHROPIC_API_KEY'),
             'model' => env('ANTHROPIC_MODEL', 'claude-sonnet-4-20250514'),
             'max_tokens' => env('ANTHROPIC_MAX_TOKENS', 4096),
@@ -36,6 +37,7 @@ return [
         ],
 
         'openai' => [
+            'driver' => 'openai',
             'api_key' => env('OPENAI_API_KEY'),
             'model' => env('OPENAI_MODEL', 'gpt-4o'),
             'max_tokens' => env('OPENAI_MAX_TOKENS', 4096),
