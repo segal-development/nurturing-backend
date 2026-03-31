@@ -14,6 +14,7 @@ use App\Http\Controllers\LoteController;
 use App\Http\Controllers\MetricasController;
 use App\Http\Controllers\MonitoreoController;
 use App\Http\Controllers\MonitoringController;
+use App\Http\Controllers\PlantillaChatController;
 use App\Http\Controllers\PlantillaController;
 use App\Http\Controllers\ProspectoController;
 use App\Http\Controllers\TestingController;
@@ -145,6 +146,16 @@ Route::middleware(['auth:sanctum', 'throttle:api'])->group(function () {
     Route::post('/plantillas/validar/sms', [PlantillaController::class, 'validarSMS']);
     Route::get('/plantillas/{plantilla}/preview', [PlantillaController::class, 'preview']);
     Route::apiResource('plantillas', PlantillaController::class);
+
+    // Rutas de Plantilla Chat (AI Assistant)
+    // Rate limited: 20 requests/min for message endpoint (AI-intensive)
+    Route::prefix('plantilla-chat')->group(function () {
+        Route::post('/message', [PlantillaChatController::class, 'message'])
+            ->middleware('throttle:ai-chat');
+        Route::post('/save', [PlantillaChatController::class, 'save']);
+        Route::get('/history', [PlantillaChatController::class, 'history']);
+        Route::delete('/history', [PlantillaChatController::class, 'clearHistory']);
+    });
 
     // Rutas de Envíos
     Route::get('/envios/estadisticas', [EnvioController::class, 'estadisticas']);

@@ -146,5 +146,21 @@ class AppServiceProvider extends ServiceProvider
         RateLimiter::for('cron', function (Request $request) {
             return Limit::none();
         });
+
+        // =========================================================================
+        // AI Chat: 20 requests/minuto
+        // =========================================================================
+        // Para el chat de IA que consume tokens de API externos
+        // Límite más estricto para controlar costos
+        RateLimiter::for('ai-chat', function (Request $request) {
+            return Limit::perMinute(20)->by(
+                $request->user()?->id ?: $request->ip()
+            )->response(function (Request $request, array $headers) {
+                return response()->json([
+                    'message' => 'Demasiadas solicitudes al asistente de IA. Por favor, espera un momento.',
+                    'retry_after' => $headers['Retry-After'] ?? 60,
+                ], 429, $headers);
+            });
+        });
     }
 }
