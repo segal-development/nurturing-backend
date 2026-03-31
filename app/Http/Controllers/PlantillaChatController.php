@@ -62,7 +62,26 @@ class PlantillaChatController extends Controller
                 $templateJson = $response['template_json'] ?? '';
                 $template = null;
                 if ($templateJson && is_string($templateJson) && $templateJson !== '') {
-                    $template = json_decode($templateJson, true);
+                    $rawTemplate = json_decode($templateJson, true);
+                    if ($rawTemplate && isset($rawTemplate['componentes'])) {
+                        // Transform flat component structure to nested 'contenido' structure
+                        // that the frontend expects
+                        $template = [
+                            'nombre' => $rawTemplate['nombre'] ?? '',
+                            'asunto' => $rawTemplate['asunto'] ?? '',
+                            'componentes' => array_map(function ($comp, $index) {
+                                $tipo = $comp['tipo'] ?? 'texto';
+                                unset($comp['tipo']);
+                                
+                                return [
+                                    'id' => $comp['id'] ?? 'comp-' . uniqid(),
+                                    'tipo' => $tipo,
+                                    'orden' => $comp['orden'] ?? $index,
+                                    'contenido' => $comp, // All other fields go into contenido
+                                ];
+                            }, $rawTemplate['componentes'], array_keys($rawTemplate['componentes'])),
+                        ];
+                    }
                 }
 
                 // Emit thinking content if available
