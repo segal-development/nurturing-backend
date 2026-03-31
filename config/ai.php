@@ -4,89 +4,81 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Default AI Provider
+    | Default AI Provider Names
     |--------------------------------------------------------------------------
     |
-    | This option controls the default AI provider that will be used for
-    | AI-powered features like the Email Template Agent. Anthropic is the
-    | primary provider with OpenAI as failover.
+    | Here you may specify which of the AI providers below should be the
+    | default for AI operations when no explicit provider is provided
+    | for the operation. This should be any provider defined below.
     |
     */
 
-    'default' => env('AI_PROVIDER', 'anthropic'),
+    'default' => env('AI_PROVIDER', 'openai'),
+    'default_for_images' => 'gemini',
+    'default_for_audio' => 'openai',
+    'default_for_transcription' => 'openai',
+    'default_for_embeddings' => 'openai',
+    'default_for_reranking' => 'cohere',
 
     /*
     |--------------------------------------------------------------------------
-    | AI Providers Configuration
+    | Caching
     |--------------------------------------------------------------------------
     |
-    | Here you may configure the AI providers used by your application.
-    | We use Anthropic (Claude) as the primary provider for better
-    | structured output, with OpenAI (GPT-4) as automatic failover.
+    | Below you may configure caching strategies for AI related operations
+    | such as embedding generation. You are free to adjust these values
+    | based on your application's available caching stores and needs.
+    |
+    */
+
+    'caching' => [
+        'embeddings' => [
+            'cache' => false,
+            'store' => env('CACHE_STORE', 'database'),
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | AI Providers
+    |--------------------------------------------------------------------------
+    |
+    | Below are each of your AI providers defined for this application. Each
+    | represents an AI provider and API key combination which can be used
+    | to perform tasks like text, image, and audio creation via agents.
     |
     */
 
     'providers' => [
-
         'anthropic' => [
             'driver' => 'anthropic',
-            'api_key' => env('ANTHROPIC_API_KEY'),
-            'model' => env('ANTHROPIC_MODEL', 'claude-sonnet-4-20250514'),
-            'max_tokens' => env('ANTHROPIC_MAX_TOKENS', 4096),
-            'timeout' => env('ANTHROPIC_TIMEOUT', 30),
+            'key' => env('ANTHROPIC_API_KEY'),
         ],
 
         'openai' => [
             'driver' => 'openai',
-            'api_key' => env('OPENAI_API_KEY'),
-            'model' => env('OPENAI_MODEL', 'gpt-4o'),
-            'max_tokens' => env('OPENAI_MAX_TOKENS', 4096),
-            'timeout' => env('OPENAI_TIMEOUT', 30),
+            'key' => env('OPENAI_API_KEY'),
         ],
-
     ],
 
     /*
     |--------------------------------------------------------------------------
-    | Failover Configuration
+    | Custom App Settings (not SDK-related)
     |--------------------------------------------------------------------------
     |
-    | Configure automatic failover behavior when the primary provider fails.
-    | Failover activates on timeouts, 5xx errors, or rate limits.
+    | These are application-specific settings used by our custom code,
+    | not by the Laravel AI SDK directly.
     |
     */
 
-    'failover' => [
-        'enabled' => env('AI_FAILOVER_ENABLED', true),
-        'timeout' => env('AI_FAILOVER_TIMEOUT', 5), // seconds before trying fallback
-        'fallback_provider' => 'openai',
-    ],
-
-    /*
-    |--------------------------------------------------------------------------
-    | Rate Limiting
-    |--------------------------------------------------------------------------
-    |
-    | Rate limiting for AI chat endpoints to prevent abuse.
-    |
-    */
-
-    'rate_limit' => [
-        'requests_per_minute' => env('AI_RATE_LIMIT', 20),
-    ],
-
-    /*
-    |--------------------------------------------------------------------------
-    | Conversation Settings
-    |--------------------------------------------------------------------------
-    |
-    | Settings for AI conversation management.
-    |
-    */
-
-    'conversation' => [
-        'max_tokens' => env('AI_CONVERSATION_MAX_TOKENS', 8000),
-        'prune_strategy' => 'oldest_first', // Remove oldest messages when limit reached
+    'app' => [
+        'rate_limit' => [
+            'requests_per_minute' => env('AI_RATE_LIMIT', 20),
+        ],
+        'conversation' => [
+            'max_tokens' => env('AI_CONVERSATION_MAX_TOKENS', 8000),
+            'prune_strategy' => 'oldest_first',
+        ],
     ],
 
 ];
