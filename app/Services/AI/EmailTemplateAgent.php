@@ -199,8 +199,8 @@ INSTRUCTIONS;
                 ->required(),
 
             'template_json' => $schema->string()
-                ->description('La plantilla en formato JSON string. Debe ser un JSON valido con la estructura: {"nombre": "string", "asunto": "string", "componentes": [...]}. Solo incluir cuando se crea/modifica una plantilla. Usar null si no hay plantilla.')
-                ->nullable(),
+                ->description('La plantilla en formato JSON string. Debe ser un JSON valido con la estructura: {"nombre": "string", "asunto": "string", "componentes": [...]}. Solo incluir cuando se crea/modifica una plantilla. Usar string vacio "" si no hay plantilla.')
+                ->required(),
         ];
     }
 
@@ -231,10 +231,10 @@ INSTRUCTIONS;
             // Get response data - AgentResponse has a text property with JSON
             $responseData = json_decode($response->text, true) ?? [];
             
-            // Parse template from JSON string if present
-            $templateJson = $responseData['template_json'] ?? null;
+            // Parse template from JSON string if present (empty string means no template)
+            $templateJson = $responseData['template_json'] ?? '';
             $template = null;
-            if ($templateJson && is_string($templateJson)) {
+            if ($templateJson && is_string($templateJson) && $templateJson !== '') {
                 $template = json_decode($templateJson, true);
             }
             
