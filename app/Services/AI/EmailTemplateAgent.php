@@ -2,18 +2,25 @@
 
 namespace App\Services\AI;
 
+use App\Ai\Middleware\LogAgentActivity;
+use App\Ai\Middleware\TrackAgentUsage;
 use App\Ai\Tools\GetBrandGuidelines;
 use App\Ai\Tools\ListTemplates;
 use App\Ai\Tools\LoadTemplate;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
+use Laravel\Ai\Attributes\Provider;
 use Laravel\Ai\Concerns\RemembersConversations;
 use Laravel\Ai\Contracts\Agent;
 use Laravel\Ai\Contracts\Conversational;
+use Laravel\Ai\Contracts\HasMiddleware;
 use Laravel\Ai\Contracts\HasStructuredOutput;
 use Laravel\Ai\Contracts\HasTools;
+use Laravel\Ai\Enums\Lab;
 use Laravel\Ai\Promptable;
+use Laravel\Ai\Providers\Tools\WebSearch;
 
-class EmailTemplateAgent implements Agent, Conversational, HasStructuredOutput, HasTools
+#[Provider([Lab::OpenAI, Lab::Anthropic])]
+class EmailTemplateAgent implements Agent, Conversational, HasMiddleware, HasStructuredOutput, HasTools
 {
     use Promptable, RemembersConversations;
 
@@ -95,6 +102,7 @@ El usuario puede usar estas variables que seran reemplazadas:
 - **ListTemplates**: Buscar plantillas existentes para inspiracion
 - **LoadTemplate**: Cargar una plantilla completa por ID
 - **GetBrandGuidelines**: Obtener la guia de marca completa
+- **WebSearch**: Buscar inspiracion de email templates en sitios especializados (reallygoodemails.com, mailchimp.com, etc.)
 
 ## Reglas de Respuesta
 1. SIEMPRE responde en espanol
@@ -117,6 +125,16 @@ INSTRUCTIONS;
             new ListTemplates,
             new LoadTemplate,
             new GetBrandGuidelines,
+            // Provider tool: web search for email template inspiration
+            (new WebSearch)
+                ->max(3)
+                ->allow([
+                    'reallygoodemails.com',
+                    'emaildesigninspiration.com',
+                    'htmlemail.io',
+                    'mailchimp.com',
+                    'hubspot.com',
+                ]),
         ];
     }
 
@@ -146,5 +164,16 @@ INSTRUCTIONS;
     protected function maxConversationMessages(): int
     {
         return 50;
+    }
+
+    /**
+     * Get the agent's middleware.
+     */
+    public function middleware(): array
+    {
+        return [
+            new LogAgentActivity,
+            new TrackAgentUsage,
+        ];
     }
 }
