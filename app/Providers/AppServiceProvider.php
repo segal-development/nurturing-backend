@@ -5,7 +5,9 @@ namespace App\Providers;
 use App\Events\CircuitBreakerOpened;
 use App\Listeners\NotifyCircuitBreakerOpened;
 use App\Models\FlujoEjecucion;
+use App\Models\FlujoEjecucionEtapa;
 use App\Models\ProspectoEnFlujo;
+use App\Observers\FlujoEjecucionEtapaObserver;
 use App\Observers\FlujoEjecucionObserver;
 use App\Observers\ProspectoEnFlujoObserver;
 use Illuminate\Cache\RateLimiting\Limit;
@@ -34,6 +36,7 @@ class AppServiceProvider extends ServiceProvider
         $this->configureRateLimiting();
         // Register observers
         FlujoEjecucion::observe(FlujoEjecucionObserver::class);
+        FlujoEjecucionEtapa::observe(FlujoEjecucionEtapaObserver::class);
         ProspectoEnFlujo::observe(ProspectoEnFlujoObserver::class);
 
         // Register event listeners
