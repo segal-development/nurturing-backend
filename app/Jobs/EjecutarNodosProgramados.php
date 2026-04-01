@@ -661,6 +661,7 @@ class EjecutarNodosProgramados implements ShouldQueue
             ")
             ->first();
 
+        $totalEnviosCreados = (int) ($envioStats->total ?? 0);
         $exitosos = (int) ($envioStats->exitosos ?? 0);
         $fallidos = (int) ($envioStats->fallidos ?? 0);
         $pendientes = (int) ($envioStats->pendientes ?? 0);
@@ -669,17 +670,21 @@ class EjecutarNodosProgramados implements ShouldQueue
         Log::info('EjecutarNodosProgramados: Verificando etapa volumen grande', [
             'etapa_id' => $etapa->id,
             'total_prospectos' => $totalProspectos,
+            'total_envios_creados' => $totalEnviosCreados,
             'procesados' => $procesados,
             'exitosos' => $exitosos,
             'fallidos' => $fallidos,
             'pendientes' => $pendientes,
         ]);
 
-        // ✅ Verificar si está "prácticamente terminado"
-        // - No quedan pendientes
-        // - Se procesó al menos el 80% de los prospectos (algunos pueden no tener email válido)
-        $porcentajeProcesado = $totalProspectos > 0 ? ($procesados / $totalProspectos) * 100 : 0;
-        $todosProcesados = $pendientes === 0 && $porcentajeProcesado >= 80;
+        // ✅ FIX: Verificar completitud basándose en ENVÍOS CREADOS, no en prospectos
+        // No todos los prospectos generan envíos (email/teléfono inválido, desuscritos, etc.)
+        // Antes: comparaba procesados vs total_prospectos (buggy - nunca llegaba al 80%)
+        // Ahora: si no hay pendientes y hay envíos, está completa
+        $todosProcesados = $pendientes === 0 && $totalEnviosCreados > 0;
+
+        // Calcular porcentaje para logging (basado en envíos creados, no prospectos)
+        $porcentajeProcesado = $totalEnviosCreados > 0 ? ($procesados / $totalEnviosCreados) * 100 : 0;
 
         // También verificar jobs en cola para esta etapa
         $jobsEnCola = DB::table('jobs')
@@ -689,6 +694,7 @@ class EjecutarNodosProgramados implements ShouldQueue
         if ($todosProcesados && $jobsEnCola < 100) {
             Log::info('EjecutarNodosProgramados: Etapa volumen grande completada', [
                 'etapa_id' => $etapa->id,
+                'total_envios_creados' => $totalEnviosCreados,
                 'porcentaje_procesado' => round($porcentajeProcesado, 2),
                 'jobs_restantes_en_cola' => $jobsEnCola,
             ]);
@@ -706,6 +712,7 @@ class EjecutarNodosProgramados implements ShouldQueue
                     'messageID' => $messageId,
                     'Recipients' => $exitosos,
                     'Errores' => $fallidos,
+                    'total_envios_creados' => $totalEnviosCreados,
                     'porcentaje_procesado' => round($porcentajeProcesado, 2),
                 ]),
             ]);
@@ -719,7 +726,9 @@ class EjecutarNodosProgramados implements ShouldQueue
         // Aún procesando - loguear progreso
         Log::info('EjecutarNodosProgramados: Etapa volumen grande aún procesando', [
             'etapa_id' => $etapa->id,
+            'total_envios_creados' => $totalEnviosCreados,
             'porcentaje' => round($porcentajeProcesado, 2),
+            'pendientes' => $pendientes,
             'jobs_en_cola' => $jobsEnCola,
         ]);
     }
