@@ -58,6 +58,15 @@ return Application::configure(basePath: dirname(__DIR__))
             ->onFailure(function () {
                 \Illuminate\Support\Facades\Log::error('SyncExternalApiJob: Job programado falló');
             });
+
+        // Sincronizar contratos nuevos desde Grupo Deudas - cada hora
+        $schedule->job(\App\Jobs\SyncGrupoDeudaJob::class)
+            ->hourly()
+            ->name('sync-grupo-deuda-contratos')
+            ->withoutOverlapping()
+            ->onFailure(function () {
+                \Illuminate\Support\Facades\Log::error('SyncGrupoDeudaJob: Job programado falló');
+            });
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         // Always return JSON for API authentication/authorization errors

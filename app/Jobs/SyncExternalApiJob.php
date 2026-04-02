@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Models\ExternalApiSource;
 use App\Services\ExternalApiSyncService;
+use App\Services\GrupoDeudaApiSyncService;
 use App\Services\SysgalApiSyncService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -18,6 +19,7 @@ use Illuminate\Support\Facades\Log;
  * Soporta:
  * - Informes Comerciales (GET con paginación)
  * - Sysgal (POST con rango de fechas)
+ * - Grupo Deudas (POST con rango de fechas)
  *
  * Se puede ejecutar:
  * - Programado (cada viernes a las 6am)
@@ -85,12 +87,24 @@ class SyncExternalApiJob implements ShouldQueue
     }
 
     /**
+     * Determina si una fuente es de Grupo Deudas.
+     */
+    private function isGrupoDeudaSource(ExternalApiSource $source): bool
+    {
+        return str_starts_with($source->name, 'grupo_deuda');
+    }
+
+    /**
      * Obtiene el servicio apropiado para una fuente.
      */
-    private function getSyncService(ExternalApiSource $source): ExternalApiSyncService|SysgalApiSyncService
+    private function getSyncService(ExternalApiSource $source): ExternalApiSyncService|SysgalApiSyncService|GrupoDeudaApiSyncService
     {
         if ($this->isSysgalSource($source)) {
             return new SysgalApiSyncService;
+        }
+
+        if ($this->isGrupoDeudaSource($source)) {
+            return new GrupoDeudaApiSyncService;
         }
 
         return new ExternalApiSyncService;
