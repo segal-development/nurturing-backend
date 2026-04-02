@@ -8,22 +8,28 @@ use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Comando para sincronizar contratos nuevos desde la API de Grupo Deudas.
+ * Comando para sincronizar prospectos desde la API de Grupo Deudas.
  *
  * Uso:
- *   php artisan sync:grupo-deuda                # Sync incremental
- *   php artisan sync:grupo-deuda --test         # Test de conexión
- *   php artisan sync:grupo-deuda --stats        # Ver estadísticas
- *   php artisan sync:grupo-deuda --horas=48     # Últimas 48 horas (ignora last_synced_at)
+ *   php artisan sync:grupo-deuda                              # Sync contratos (default)
+ *   php artisan sync:grupo-deuda --endpoint=contratos         # Sync contratos nuevos
+ *   php artisan sync:grupo-deuda --endpoint=cuotas-vencer     # Sync cuotas por vencer
+ *   php artisan sync:grupo-deuda --endpoint=cuotas-vencidas   # Sync cuotas vencidas
+ *   php artisan sync:grupo-deuda --endpoint=clientes-ingreso  # Sync clientes ingreso
+ *   php artisan sync:grupo-deuda --test                       # Test conexión (contratos)
+ *   php artisan sync:grupo-deuda --test --endpoint=cuotas-vencer  # Test endpoint específico
+ *   php artisan sync:grupo-deuda --stats                      # Ver estadísticas
+ *   php artisan sync:grupo-deuda --horas=48                   # Últimas 48 horas
  */
 class SyncGrupoDeudaCommand extends Command
 {
     protected $signature = 'sync:grupo-deuda
+                            {--endpoint= : Endpoint a sincronizar (contratos, cuotas-vencer, cuotas-vencidas, clientes-ingreso)}
                             {--test : Solo probar conexión sin sincronizar}
                             {--stats : Mostrar estadísticas de la fuente}
                             {--horas= : Forzar sync de las últimas N horas (ignora last_synced_at)}';
 
-    protected $description = 'Sincroniza contratos nuevos desde la API de Grupo Deudas';
+    protected $description = 'Sincroniza prospectos desde la API de Grupo Deudas';
 
     private GrupoDeudaApiSyncService $syncService;
 
@@ -51,7 +57,8 @@ class SyncGrupoDeudaCommand extends Command
      */
     private function syncSource(): int
     {
-        $source = $this->getGrupoDeudaSource();
+        $endpoint = $this->option('endpoint') ?? GrupoDeudaApiSyncService::ENDPOINT_CONTRATOS_NUEVOS;
+        $source = $this->getGrupoDeudaSourceByEndpoint($endpoint);
 
         if (! $source) {
             return Command::FAILURE;
@@ -67,14 +74,22 @@ class SyncGrupoDeudaCommand extends Command
         }
 
         $this->info("=== Sincronizando: {$source->display_name} ===");
-        $this->line('Desde: '.($source->last_synced_at?->format('Y-m-d H:i:s') ?? 'últimas 24 horas'));
-        $this->line('Hasta: '.now()->format('Y-m-d H:i:s'));
+        $this->line("Endpoint: {$endpoint}");
+
+        // Los endpoints de cuotas/clientes siempre usan el día actual
+        if ($endpoint === GrupoDeudaApiSyncService::ENDPOINT_CONTRATOS_NUEVOS) {
+            $this->line('Desde: '.($source->last_synced_at?->format('Y-m-d H:i:s') ?? 'últimas 24 horas'));
+            $this->line('Hasta: '.now()->format('Y-m-d H:i:s'));
+        } else {
+            $this->line('Desde: '.now()->startOfDay()->format('Y-m-d H:i:s'));
+            $this->line('Hasta: '.now()->endOfDay()->format('Y-m-d H:i:s'));
+        }
         $this->newLine();
 
         $startTime = now();
 
         try {
-            $resultado = $this->syncService->sync($source, 1);
+            $resultado = $this->executeSync($endpoint, $source);
 
             $duration = now()->diffInSeconds($startTime);
 
@@ -112,6 +127,20 @@ class SyncGrupoDeudaCommand extends Command
 
             return Command::FAILURE;
         }
+    }
+
+    /**
+     * Ejecuta la sincronización según el endpoint.
+     */
+    private function executeSync(string $endpoint, ExternalApiSource $source): array
+    {
+        return match ($endpoint) {
+            GrupoDeudaApiSyncService::ENDPOINT_CONTRATOS_NUEVOS => $this->syncService->sync($source, 1),
+            GrupoDeudaApiSyncService::ENDPOINT_CUOTAS_POR_VENCER => $this->syncService->syncCuotasPorVencer($source, 1),
+            GrupoDeudaApiSyncService::ENDPOINT_CUOTAS_VENCIDAS => $this->syncService->syncCuotasVencidas($source, 1),
+            GrupoDeudaApiSyncService::ENDPOINT_CLIENTES_INGRESO => $this->syncService->syncClientesPorFechaIngreso($source, 1),
+            default => throw new \InvalidArgumentException("Endpoint desconocido: {$endpoint}"),
+        };
     }
 
     /**
@@ -186,24 +215,27 @@ class SyncGrupoDeudaCommand extends Command
      */
     private function testConnection(): int
     {
+        $endpoint = $this->option('endpoint') ?? GrupoDeudaApiSyncService::ENDPOINT_CONTRATOS_NUEVOS;
+
         $this->info('=== Test de conexión a Grupo Deudas ===');
         $this->newLine();
 
-        $source = $this->getGrupoDeudaSource();
+        $source = $this->getGrupoDeudaSourceByEndpoint($endpoint);
 
         if (! $source) {
             return Command::FAILURE;
         }
 
-        $this->line("Probando {$source->display_name}...");
-        $this->line("Endpoint: {$source->endpoint_url}");
+        $this->line("Probando endpoint: {$endpoint}");
+        $this->line("Fuente: {$source->display_name}");
         $this->newLine();
 
-        $result = $this->syncService->testConnection($source);
+        $result = $this->syncService->testEndpoint($endpoint, $source);
 
         if ($result['success']) {
             $this->info("✓ {$result['message']}");
-            $this->line("Contratos encontrados (últimas 24h): {$result['sample_count']}");
+            $this->line("Endpoint probado: {$result['endpoint']}");
+            $this->line("Registros encontrados: {$result['sample_count']}");
             $this->line("Total reportado por API: {$result['total']}");
         } else {
             $this->error("✗ {$result['message']}");
@@ -213,7 +245,44 @@ class SyncGrupoDeudaCommand extends Command
     }
 
     /**
-     * Obtiene la fuente de Grupo Deudas.
+     * Obtiene la fuente de Grupo Deudas según el endpoint.
+     */
+    private function getGrupoDeudaSourceByEndpoint(string $endpoint): ?ExternalApiSource
+    {
+        $sourceMap = [
+            GrupoDeudaApiSyncService::ENDPOINT_CONTRATOS_NUEVOS => 'grupo_deuda_contratos',
+            GrupoDeudaApiSyncService::ENDPOINT_CUOTAS_POR_VENCER => 'grupo_deuda_cuotas_por_vencer',
+            GrupoDeudaApiSyncService::ENDPOINT_CUOTAS_VENCIDAS => 'grupo_deuda_cuotas_vencidas',
+            GrupoDeudaApiSyncService::ENDPOINT_CLIENTES_INGRESO => 'grupo_deuda_clientes_ingreso',
+        ];
+
+        $sourceName = $sourceMap[$endpoint] ?? null;
+
+        if ($sourceName === null) {
+            $this->error("Endpoint desconocido: {$endpoint}");
+            $this->line('Endpoints válidos: contratos, cuotas-vencer, cuotas-vencidas, clientes-ingreso');
+
+            return null;
+        }
+
+        $source = ExternalApiSource::where('name', $sourceName)->first();
+
+        if (! $source) {
+            $this->error("No se encontró fuente: {$sourceName}");
+            $this->line('Ejecute: php artisan db:seed --class=GrupoDeudaApiSourceSeeder');
+
+            return null;
+        }
+
+        if (! $source->is_active) {
+            $this->warn("La fuente {$source->display_name} está inactiva.");
+        }
+
+        return $source;
+    }
+
+    /**
+     * Obtiene la fuente principal de Grupo Deudas (para stats).
      */
     private function getGrupoDeudaSource(): ?ExternalApiSource
     {

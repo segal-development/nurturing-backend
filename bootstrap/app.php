@@ -67,6 +67,33 @@ return Application::configure(basePath: dirname(__DIR__))
             ->onFailure(function () {
                 \Illuminate\Support\Facades\Log::error('SyncGrupoDeudaJob: Job programado falló');
             });
+
+        // Sincronizar cuotas por vencer desde Grupo Deudas - diario a las 7am
+        $schedule->job(\App\Jobs\SyncGrupoDeudaCuotasPorVencerJob::class)
+            ->dailyAt('07:00')
+            ->name('sync-grupo-deuda-cuotas-vencer')
+            ->withoutOverlapping()
+            ->onFailure(function () {
+                \Illuminate\Support\Facades\Log::error('SyncGrupoDeudaCuotasPorVencerJob: Job programado falló');
+            });
+
+        // Sincronizar cuotas vencidas desde Grupo Deudas - diario a las 7am
+        $schedule->job(\App\Jobs\SyncGrupoDeudaCuotasVencidasJob::class)
+            ->dailyAt('07:00')
+            ->name('sync-grupo-deuda-cuotas-vencidas')
+            ->withoutOverlapping()
+            ->onFailure(function () {
+                \Illuminate\Support\Facades\Log::error('SyncGrupoDeudaCuotasVencidasJob: Job programado falló');
+            });
+
+        // Sincronizar clientes ingreso desde Grupo Deudas - diario a las 7am
+        $schedule->job(\App\Jobs\SyncGrupoDeudaClientesIngresoJob::class)
+            ->dailyAt('07:00')
+            ->name('sync-grupo-deuda-clientes-ingreso')
+            ->withoutOverlapping()
+            ->onFailure(function () {
+                \Illuminate\Support\Facades\Log::error('SyncGrupoDeudaClientesIngresoJob: Job programado falló');
+            });
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         // Always return JSON for API authentication/authorization errors

@@ -9,6 +9,7 @@ use App\Models\Importacion;
 use App\Models\Lote;
 use App\Models\TipoProspecto;
 use App\Services\Import\ProspectoCacheService;
+use Carbon\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
@@ -17,22 +18,36 @@ use Illuminate\Support\Facades\Log;
 /**
  * Servicio para sincronizar prospectos desde la API de Grupo Deudas.
  *
- * Endpoint: /ContratosNuevos
- * Trae contratos nuevos (clientes que ya contrataron) para nurturing post-venta.
+ * Endpoints soportados:
+ * - /ContratosNuevos: Contratos nuevos (sync incremental)
+ * - /CuotasPorVencer: Cuotas que vencen hoy (sync diario)
+ * - /CuotasVencidas: Cuotas vencidas hoy - morosos (sync diario)
+ * - /ClientesPorFechaIngreso: Clientes que firmaron contrato hoy (sync diario)
  *
  * Características:
  * - Usa POST con rango de fechas en el body
  * - Auth por IP (no requiere token)
- * - Todos los contratos van a un único lote "CONTRATOS_NUEVOS"
- * - Sync incremental usando last_synced_at
+ * - Cada endpoint tiene su propio lote
  *
  * @example
  * $service = new GrupoDeudaApiSyncService();
- * $result = $service->sync($source, $userId);
+ * $result = $service->sync($source, $userId); // ContratosNuevos
+ * $result = $service->syncCuotasPorVencer($source, $userId);
+ * $result = $service->syncCuotasVencidas($source, $userId);
+ * $result = $service->syncClientesPorFechaIngreso($source, $userId);
  */
 class GrupoDeudaApiSyncService
 {
     private const BATCH_SIZE = 500;
+
+    // Constantes de endpoints
+    public const ENDPOINT_CONTRATOS_NUEVOS = 'contratos';
+
+    public const ENDPOINT_CUOTAS_POR_VENCER = 'cuotas-vencer';
+
+    public const ENDPOINT_CUOTAS_VENCIDAS = 'cuotas-vencidas';
+
+    public const ENDPOINT_CLIENTES_INGRESO = 'clientes-ingreso';
 
     private ProspectoCacheService $cacheService;
 
@@ -122,7 +137,7 @@ class GrupoDeudaApiSyncService
     /**
      * Llama a la API de ContratosNuevos.
      */
-    private function fetchContratos(ExternalApiSource $source, \Carbon\Carbon $desde, \Carbon\Carbon $hasta): array
+    private function fetchContratos(ExternalApiSource $source, Carbon $desde, Carbon $hasta): array
     {
         $url = $source->endpoint_url;
 
@@ -486,7 +501,7 @@ class GrupoDeudaApiSyncService
     private function isValidEmail(string $email): bool
     {
         // Emails inválidos conocidos
-        $invalidos = ['s@c', 'n@g', 'sin@correo', 'sc@sc.cl', 'sin@correo.cl', 'no@tiene.cl', 's@c.cl'];
+        $invalidos = ['s@c', 'n@g', 'sin@correo', 'sc@sc.cl', 'sin@correo.cl', 'no@tiene.cl', 's@c.cl', 'notiene@notiene.cl'];
 
         if (in_array($email, $invalidos, true)) {
             return false;
@@ -770,6 +785,691 @@ class GrupoDeudaApiSyncService
                 'message' => 'Conexión exitosa',
                 'sample_count' => count($data),
                 'total' => $json['Total'] ?? count($data),
+            ];
+
+        } catch (\Exception $e) {
+            return [
+                'success' => false,
+                'message' => "Error de conexión: {$e->getMessage()}",
+            ];
+        }
+    }
+
+    /**
+     * Sincroniza cuotas por vencer (que vencen hoy).
+     *
+     * Siempre trae datos del día actual (00:00:00 a 23:59:59).
+     * No es sync incremental.
+     */
+    public function syncCuotasPorVencer(ExternalApiSource $source, ?int $userId = null): array
+    {
+        return $this->syncCuotasEndpoint($source, $userId, 'CuotasPorVencer', 'CUOTAS_POR_VENCER');
+    }
+
+    /**
+     * Sincroniza cuotas vencidas (morosos de hoy).
+     *
+     * Siempre trae datos del día actual (00:00:00 a 23:59:59).
+     * No es sync incremental.
+     */
+    public function syncCuotasVencidas(ExternalApiSource $source, ?int $userId = null): array
+    {
+        return $this->syncCuotasEndpoint($source, $userId, 'CuotasVencidas', 'CUOTAS_VENCIDAS');
+    }
+
+    /**
+     * Método común para sincronizar endpoints de cuotas.
+     */
+    private function syncCuotasEndpoint(ExternalApiSource $source, ?int $userId, string $endpointPath, string $loteNombre): array
+    {
+        Log::info("GrupoDeudaApiSyncService: Iniciando sincronización {$endpointPath}", [
+            'source' => $source->name,
+        ]);
+
+        try {
+            $this->cacheService->loadExistingProspectos();
+            $this->loadProspectosEnFlujoActivo();
+
+            // Siempre usa fecha del día actual
+            $desde = now()->startOfDay();
+            $hasta = now()->endOfDay();
+
+            Log::info("GrupoDeudaApiSyncService: Rango de fechas {$endpointPath}", [
+                'desde' => $desde->format('Y-m-d H:i:s'),
+                'hasta' => $hasta->format('Y-m-d H:i:s'),
+            ]);
+
+            $data = $this->fetchCuotasEndpoint($source, $endpointPath, $desde, $hasta);
+
+            if (empty($data)) {
+                Log::info("GrupoDeudaApiSyncService: No hay datos en {$endpointPath}");
+                $source->markAsSynced(0);
+
+                return $this->emptyResult();
+            }
+
+            $resultado = $this->procesarDatosCuotas($data, $source, $userId ?? 1, $loteNombre, $endpointPath);
+
+            $source->markAsSynced($resultado['total_prospectos']);
+
+            Log::info("GrupoDeudaApiSyncService: Sincronización {$endpointPath} completada", [
+                'source' => $source->name,
+                'total_prospectos' => $resultado['total_prospectos'],
+                'nuevos' => $resultado['nuevos'],
+                'actualizados' => $resultado['actualizados'],
+            ]);
+
+            return $resultado;
+
+        } catch (\Exception $e) {
+            $source->markAsFailed($e->getMessage());
+
+            Log::error("GrupoDeudaApiSyncService: Error en {$endpointPath}", [
+                'source' => $source->name,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            throw $e;
+        }
+    }
+
+    /**
+     * Llama a un endpoint de cuotas (CuotasPorVencer o CuotasVencidas).
+     */
+    private function fetchCuotasEndpoint(ExternalApiSource $source, string $endpointPath, Carbon $desde, Carbon $hasta): array
+    {
+        // Construir URL con el endpoint correcto
+        $baseUrl = dirname($source->endpoint_url);
+        $url = $baseUrl.'/'.$endpointPath;
+
+        $body = [
+            'desde' => $desde->format('Y-m-d H:i:s'),
+            'hasta' => $hasta->format('Y-m-d H:i:s'),
+        ];
+
+        Log::info("GrupoDeudaApiSyncService: Llamando a API {$endpointPath}", [
+            'url' => $url,
+            'body' => $body,
+        ]);
+
+        $response = Http::withHeaders([
+            'Content-Type' => 'application/json',
+            'Accept' => 'application/json',
+        ])
+            ->timeout(120)
+            ->post($url, $body);
+
+        if (! $response->successful()) {
+            throw new \Exception("Error HTTP {$response->status()}: {$response->body()}");
+        }
+
+        $json = $response->json();
+
+        if (($json['Estado'] ?? 0) !== 1) {
+            $mensaje = $json['Mensaje'] ?? 'Error desconocido';
+            throw new \Exception("API respondió con error: {$mensaje}");
+        }
+
+        // El response de Cuotas tiene "Clientes" como objeto (no array)
+        $clientes = $json['Clientes'] ?? [];
+
+        Log::info("GrupoDeudaApiSyncService: Respuesta {$endpointPath} recibida", [
+            'total_clientes' => $json['Total_Clientes'] ?? 0,
+            'total_cuotas' => $json['Total_Cuotas'] ?? 0,
+        ]);
+
+        return $clientes;
+    }
+
+    /**
+     * Procesa datos del endpoint de cuotas (objeto de clientes).
+     */
+    private function procesarDatosCuotas(array $clientes, ExternalApiSource $source, int $userId, string $loteNombre, string $endpointPath): array
+    {
+        $lote = $this->obtenerOCrearLoteGlobal($source, $loteNombre, $userId);
+        $importacion = $this->createImportacion($source, $lote, $userId, count($clientes));
+        $tiposProspecto = $this->loadTiposProspecto();
+
+        $exitosos = 0;
+        $fallidos = 0;
+        $nuevos = 0;
+        $actualizados = 0;
+        $omitidosEnFlujo = 0;
+        $errores = [];
+
+        $createBatch = [];
+        $updateBatch = [];
+
+        // Clientes viene como objeto asociativo, no como array
+        foreach ($clientes as $clienteId => $cliente) {
+            try {
+                $prospectoData = $this->mapCuotasClienteToProspecto(
+                    $cliente,
+                    $importacion->id,
+                    $tiposProspecto,
+                    $endpointPath
+                );
+
+                if ($prospectoData === null) {
+                    $fallidos++;
+                    $errores[] = ['cliente_id' => $clienteId, 'error' => 'Datos insuficientes'];
+
+                    continue;
+                }
+
+                $email = $prospectoData['email'];
+                $telefono = $prospectoData['telefono'];
+
+                $existingId = $this->cacheService->findExistingProspectoId($email, $telefono);
+
+                if ($existingId !== null) {
+                    if ($this->estaEnFlujoActivo($existingId)) {
+                        $omitidosEnFlujo++;
+
+                        continue;
+                    }
+
+                    $updateBatch[] = array_merge($prospectoData, ['id' => $existingId]);
+                    $actualizados++;
+                } else {
+                    $createBatch[] = $prospectoData;
+                    $nuevos++;
+                    $this->cacheService->registerNewProspecto($email, $telefono);
+                }
+
+                $exitosos++;
+
+                if (count($createBatch) >= self::BATCH_SIZE) {
+                    $this->insertBatch($createBatch);
+                    $createBatch = [];
+                }
+
+                if (count($updateBatch) >= self::BATCH_SIZE) {
+                    $this->updateBatch($updateBatch);
+                    $updateBatch = [];
+                }
+
+            } catch (\Exception $e) {
+                $fallidos++;
+                $errores[] = ['cliente_id' => $clienteId, 'error' => $e->getMessage()];
+            }
+        }
+
+        if (! empty($createBatch)) {
+            $this->insertBatch($createBatch);
+        }
+
+        if (! empty($updateBatch)) {
+            $this->updateBatch($updateBatch);
+        }
+
+        $this->finalizeImportacion($importacion, [
+            'exitosos' => $exitosos,
+            'fallidos' => $fallidos,
+            'nuevos' => $nuevos,
+            'actualizados' => $actualizados,
+            'omitidos_en_flujo' => $omitidosEnFlujo,
+            'errores' => $errores,
+        ]);
+
+        $lote->recalcularTotales();
+
+        return [
+            'lotes' => [$lote],
+            'total_prospectos' => $exitosos,
+            'nuevos' => $nuevos,
+            'actualizados' => $actualizados,
+            'omitidos_en_flujo' => $omitidosEnFlujo,
+        ];
+    }
+
+    /**
+     * Mapea un cliente del endpoint de Cuotas a Prospecto.
+     */
+    private function mapCuotasClienteToProspecto(
+        array $cliente,
+        int $importacionId,
+        Collection $tiposProspecto,
+        string $endpointPath
+    ): ?array {
+        $nombre = trim(implode(' ', array_filter([
+            $cliente['Nombre'] ?? '',
+            $cliente['Apellido_Paterno'] ?? '',
+            $cliente['Apellido_Materno'] ?? '',
+        ])));
+
+        if (empty($nombre)) {
+            return null;
+        }
+
+        $email = $cliente['Email'] ?? null;
+        if (! empty($email)) {
+            $email = strtolower(trim($email));
+            if (! $this->isValidEmail($email)) {
+                $email = null;
+            }
+        }
+
+        $telefono = $cliente['Telefono'] ?? null;
+        if (! empty($telefono)) {
+            $telefono = $this->normalizarTelefono($telefono);
+        }
+
+        if (empty($email) && empty($telefono)) {
+            return null;
+        }
+
+        // Calcular monto total de cuotas
+        $cuotas = $cliente['Cuotas'] ?? [];
+        $montoDeuda = 0;
+        foreach ($cuotas as $cuota) {
+            $montoDeuda += (int) ($cuota['Monto'] ?? 0);
+        }
+
+        $tipoProspectoId = $this->determinarTipoProspecto($tiposProspecto, $montoDeuda);
+
+        if ($tipoProspectoId === null) {
+            return null;
+        }
+
+        $metadata = [
+            'source' => 'grupo_deuda',
+            'endpoint' => strtolower($endpointPath),
+            'synced_at' => now()->toISOString(),
+            'cliente_id' => $cliente['Id'] ?? null,
+            'abogado' => $cliente['Abogado'] ?? null,
+            'cuotas' => $cuotas,
+        ];
+
+        $now = now();
+
+        return [
+            'importacion_id' => $importacionId,
+            'nombre' => $nombre,
+            'rut' => null,
+            'email' => $email,
+            'telefono' => $telefono,
+            'url_informe' => null,
+            'tipo_prospecto_id' => $tipoProspectoId,
+            'estado' => 'activo',
+            'monto_deuda' => $montoDeuda,
+            'fila_excel' => null,
+            'metadata' => json_encode($metadata),
+            'created_at' => $now,
+            'updated_at' => $now,
+        ];
+    }
+
+    /**
+     * Sincroniza clientes por fecha de ingreso (firmaron contrato hoy).
+     *
+     * Siempre trae datos del día actual (00:00:00 a 23:59:59).
+     * No es sync incremental.
+     */
+    public function syncClientesPorFechaIngreso(ExternalApiSource $source, ?int $userId = null): array
+    {
+        Log::info('GrupoDeudaApiSyncService: Iniciando sincronización ClientesPorFechaIngreso', [
+            'source' => $source->name,
+        ]);
+
+        try {
+            $this->cacheService->loadExistingProspectos();
+            $this->loadProspectosEnFlujoActivo();
+
+            $desde = now()->startOfDay();
+            $hasta = now()->endOfDay();
+
+            Log::info('GrupoDeudaApiSyncService: Rango de fechas ClientesPorFechaIngreso', [
+                'desde' => $desde->format('Y-m-d H:i:s'),
+                'hasta' => $hasta->format('Y-m-d H:i:s'),
+            ]);
+
+            $data = $this->fetchClientesIngreso($source, $desde, $hasta);
+
+            if (empty($data)) {
+                Log::info('GrupoDeudaApiSyncService: No hay datos en ClientesPorFechaIngreso');
+                $source->markAsSynced(0);
+
+                return $this->emptyResult();
+            }
+
+            $resultado = $this->procesarDatosClientesIngreso($data, $source, $userId ?? 1);
+
+            $source->markAsSynced($resultado['total_prospectos']);
+
+            Log::info('GrupoDeudaApiSyncService: Sincronización ClientesPorFechaIngreso completada', [
+                'source' => $source->name,
+                'total_prospectos' => $resultado['total_prospectos'],
+                'nuevos' => $resultado['nuevos'],
+                'actualizados' => $resultado['actualizados'],
+            ]);
+
+            return $resultado;
+
+        } catch (\Exception $e) {
+            $source->markAsFailed($e->getMessage());
+
+            Log::error('GrupoDeudaApiSyncService: Error en ClientesPorFechaIngreso', [
+                'source' => $source->name,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            throw $e;
+        }
+    }
+
+    /**
+     * Llama al endpoint ClientesPorFechaIngreso.
+     */
+    private function fetchClientesIngreso(ExternalApiSource $source, Carbon $desde, Carbon $hasta): array
+    {
+        $baseUrl = dirname($source->endpoint_url);
+        $url = $baseUrl.'/ClientesPorFechaIngreso';
+
+        $body = [
+            'desde' => $desde->format('Y-m-d H:i:s'),
+            'hasta' => $hasta->format('Y-m-d H:i:s'),
+        ];
+
+        Log::info('GrupoDeudaApiSyncService: Llamando a API ClientesPorFechaIngreso', [
+            'url' => $url,
+            'body' => $body,
+        ]);
+
+        $response = Http::withHeaders([
+            'Content-Type' => 'application/json',
+            'Accept' => 'application/json',
+        ])
+            ->timeout(120)
+            ->post($url, $body);
+
+        if (! $response->successful()) {
+            throw new \Exception("Error HTTP {$response->status()}: {$response->body()}");
+        }
+
+        $json = $response->json();
+
+        if (($json['Estado'] ?? 0) !== 1) {
+            $mensaje = $json['Mensaje'] ?? 'Error desconocido';
+            throw new \Exception("API respondió con error: {$mensaje}");
+        }
+
+        // Este endpoint tiene "Clientes" como array
+        $clientes = $json['Clientes'] ?? [];
+
+        Log::info('GrupoDeudaApiSyncService: Respuesta ClientesPorFechaIngreso recibida', [
+            'total' => $json['Total'] ?? count($clientes),
+        ]);
+
+        return $clientes;
+    }
+
+    /**
+     * Procesa datos del endpoint ClientesPorFechaIngreso.
+     */
+    private function procesarDatosClientesIngreso(array $clientes, ExternalApiSource $source, int $userId): array
+    {
+        $loteNombre = 'CLIENTES_ACTIVOS';
+        $lote = $this->obtenerOCrearLoteGlobal($source, $loteNombre, $userId);
+        $importacion = $this->createImportacion($source, $lote, $userId, count($clientes));
+        $tiposProspecto = $this->loadTiposProspecto();
+
+        $exitosos = 0;
+        $fallidos = 0;
+        $nuevos = 0;
+        $actualizados = 0;
+        $omitidosEnFlujo = 0;
+        $errores = [];
+
+        $createBatch = [];
+        $updateBatch = [];
+
+        // Este endpoint tiene Clientes como array
+        foreach ($clientes as $index => $cliente) {
+            try {
+                $prospectoData = $this->mapClienteIngresoToProspecto(
+                    $cliente,
+                    $importacion->id,
+                    $tiposProspecto
+                );
+
+                if ($prospectoData === null) {
+                    $fallidos++;
+                    $errores[] = ['index' => $index, 'error' => 'Datos insuficientes'];
+
+                    continue;
+                }
+
+                $email = $prospectoData['email'];
+                $telefono = $prospectoData['telefono'];
+
+                $existingId = $this->cacheService->findExistingProspectoId($email, $telefono);
+
+                if ($existingId !== null) {
+                    if ($this->estaEnFlujoActivo($existingId)) {
+                        $omitidosEnFlujo++;
+
+                        continue;
+                    }
+
+                    $updateBatch[] = array_merge($prospectoData, ['id' => $existingId]);
+                    $actualizados++;
+                } else {
+                    $createBatch[] = $prospectoData;
+                    $nuevos++;
+                    $this->cacheService->registerNewProspecto($email, $telefono);
+                }
+
+                $exitosos++;
+
+                if (count($createBatch) >= self::BATCH_SIZE) {
+                    $this->insertBatch($createBatch);
+                    $createBatch = [];
+                }
+
+                if (count($updateBatch) >= self::BATCH_SIZE) {
+                    $this->updateBatch($updateBatch);
+                    $updateBatch = [];
+                }
+
+            } catch (\Exception $e) {
+                $fallidos++;
+                $errores[] = ['index' => $index, 'error' => $e->getMessage()];
+            }
+        }
+
+        if (! empty($createBatch)) {
+            $this->insertBatch($createBatch);
+        }
+
+        if (! empty($updateBatch)) {
+            $this->updateBatch($updateBatch);
+        }
+
+        $this->finalizeImportacion($importacion, [
+            'exitosos' => $exitosos,
+            'fallidos' => $fallidos,
+            'nuevos' => $nuevos,
+            'actualizados' => $actualizados,
+            'omitidos_en_flujo' => $omitidosEnFlujo,
+            'errores' => $errores,
+        ]);
+
+        $lote->recalcularTotales();
+
+        return [
+            'lotes' => [$lote],
+            'total_prospectos' => $exitosos,
+            'nuevos' => $nuevos,
+            'actualizados' => $actualizados,
+            'omitidos_en_flujo' => $omitidosEnFlujo,
+        ];
+    }
+
+    /**
+     * Mapea un cliente del endpoint ClientesPorFechaIngreso a Prospecto.
+     */
+    private function mapClienteIngresoToProspecto(
+        array $cliente,
+        int $importacionId,
+        Collection $tiposProspecto
+    ): ?array {
+        $nombre = trim(implode(' ', array_filter([
+            $cliente['Nombre'] ?? '',
+            $cliente['Apellido_Paterno'] ?? '',
+            $cliente['Apellido_Materno'] ?? '',
+        ])));
+
+        if (empty($nombre)) {
+            return null;
+        }
+
+        $email = $cliente['Email'] ?? null;
+        if (! empty($email)) {
+            $email = strtolower(trim($email));
+            if (! $this->isValidEmail($email)) {
+                $email = null;
+            }
+        }
+
+        $telefono = $cliente['Telefono'] ?? null;
+        if (! empty($telefono)) {
+            $telefono = $this->normalizarTelefono($telefono);
+        }
+
+        if (empty($email) && empty($telefono)) {
+            return null;
+        }
+
+        // Este endpoint no tiene monto específico, usar 0 o calcular de cuotas si hay
+        $cuotas = $cliente['Cuotas'] ?? [];
+        $montoDeuda = 0;
+        foreach ($cuotas as $cuota) {
+            $montoDeuda += (int) ($cuota['Monto'] ?? 0);
+        }
+
+        $tipoProspectoId = $this->determinarTipoProspecto($tiposProspecto, $montoDeuda);
+
+        if ($tipoProspectoId === null) {
+            return null;
+        }
+
+        $metadata = [
+            'source' => 'grupo_deuda',
+            'endpoint' => 'clientes_por_fecha_ingreso',
+            'synced_at' => now()->toISOString(),
+            'cliente_id' => $cliente['Id'] ?? null,
+            'abogado' => $cliente['Abogado'] ?? null,
+            'cuotas' => $cuotas,
+        ];
+
+        $now = now();
+
+        return [
+            'importacion_id' => $importacionId,
+            'nombre' => $nombre,
+            'rut' => null,
+            'email' => $email,
+            'telefono' => $telefono,
+            'url_informe' => null,
+            'tipo_prospecto_id' => $tipoProspectoId,
+            'estado' => 'activo',
+            'monto_deuda' => $montoDeuda,
+            'fila_excel' => null,
+            'metadata' => json_encode($metadata),
+            'created_at' => $now,
+            'updated_at' => $now,
+        ];
+    }
+
+    /**
+     * Prueba un endpoint específico de la API.
+     */
+    public function testEndpoint(string $endpoint, ExternalApiSource $source): array
+    {
+        try {
+            $baseUrl = 'https://sysgal.segal.cl/defensoria/Servicio';
+            $desde = now()->startOfDay();
+            $hasta = now()->endOfDay();
+
+            $endpointMap = [
+                self::ENDPOINT_CONTRATOS_NUEVOS => 'ContratosNuevos',
+                self::ENDPOINT_CUOTAS_POR_VENCER => 'CuotasPorVencer',
+                self::ENDPOINT_CUOTAS_VENCIDAS => 'CuotasVencidas',
+                self::ENDPOINT_CLIENTES_INGRESO => 'ClientesPorFechaIngreso',
+            ];
+
+            $endpointPath = $endpointMap[$endpoint] ?? null;
+
+            if ($endpointPath === null) {
+                return [
+                    'success' => false,
+                    'message' => "Endpoint desconocido: {$endpoint}. Válidos: ".implode(', ', array_keys($endpointMap)),
+                ];
+            }
+
+            $url = $baseUrl.'/'.$endpointPath;
+
+            // ContratosNuevos usa últimas 24h para test, los demás usan el día actual
+            if ($endpoint === self::ENDPOINT_CONTRATOS_NUEVOS) {
+                $desde = now()->subHours(24);
+                $hasta = now();
+            }
+
+            $body = [
+                'desde' => $desde->format('Y-m-d H:i:s'),
+                'hasta' => $hasta->format('Y-m-d H:i:s'),
+            ];
+
+            $response = Http::withHeaders([
+                'Content-Type' => 'application/json',
+                'Accept' => 'application/json',
+            ])
+                ->timeout(30)
+                ->post($url, $body);
+
+            if (! $response->successful()) {
+                return [
+                    'success' => false,
+                    'message' => "Error HTTP {$response->status()}: {$response->body()}",
+                ];
+            }
+
+            $json = $response->json();
+
+            if (($json['Estado'] ?? 0) !== 1) {
+                return [
+                    'success' => false,
+                    'message' => 'API respondió con error: '.($json['Mensaje'] ?? 'desconocido'),
+                ];
+            }
+
+            // Determinar conteo según endpoint
+            $count = 0;
+            $total = 0;
+
+            if ($endpoint === self::ENDPOINT_CONTRATOS_NUEVOS) {
+                $data = $json['Contratos'] ?? [];
+                $count = count($data);
+                $total = $json['Total'] ?? $count;
+            } elseif (in_array($endpoint, [self::ENDPOINT_CUOTAS_POR_VENCER, self::ENDPOINT_CUOTAS_VENCIDAS])) {
+                $data = $json['Clientes'] ?? [];
+                $count = is_array($data) ? count($data) : 0;
+                $total = $json['Total_Clientes'] ?? $count;
+            } else {
+                $data = $json['Clientes'] ?? [];
+                $count = count($data);
+                $total = $json['Total'] ?? $count;
+            }
+
+            return [
+                'success' => true,
+                'message' => 'Conexión exitosa',
+                'endpoint' => $endpointPath,
+                'sample_count' => $count,
+                'total' => $total,
             ];
 
         } catch (\Exception $e) {
