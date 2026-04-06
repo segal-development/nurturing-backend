@@ -151,58 +151,77 @@ class SyncGrupoDeudaCommand extends Command
         $this->info('=== Estadísticas de Grupo Deudas ===');
         $this->newLine();
 
-        $source = $this->getGrupoDeudaSource();
+        $sources = $this->getAllGrupoDeudaSources();
 
-        if (! $source) {
+        if ($sources->isEmpty()) {
             return Command::FAILURE;
         }
 
-        $this->info("--- {$source->display_name} ---");
+        // Tabla resumen de todas las sources
+        $this->info('--- Resumen de Sources ---');
+        $summaryData = $sources->map(fn ($s) => [
+            $s->id,
+            $s->display_name,
+            $s->is_active ? '✓' : '✗',
+            $s->last_synced_at?->format('Y-m-d H:i:s') ?? 'Nunca',
+            $s->last_sync_count ?? 0,
+            $s->last_sync_error ? '⚠ Error' : '✓ OK',
+        ])->toArray();
+
         $this->table(
-            ['Campo', 'Valor'],
-            [
-                ['ID', $source->id],
-                ['Nombre', $source->name],
-                ['Endpoint', $source->endpoint_url],
-                ['Activo', $source->is_active ? 'Sí' : 'No'],
-                ['Último sync', $source->last_synced_at?->format('Y-m-d H:i:s') ?? 'Nunca'],
-                ['Registros último sync', $source->last_sync_count ?? 0],
-                ['Error último sync', $source->last_sync_error ?? 'Ninguno'],
-                ['Frecuencia', $source->sync_frequency],
-            ]
+            ['ID', 'Nombre', 'Activo', 'Último Sync', 'Count', 'Estado'],
+            $summaryData
         );
 
-        // Contar lotes y prospectos
-        $lotes = $source->lotes()->count();
-        $prospectos = DB::table('prospectos')
-            ->join('importaciones', 'prospectos.importacion_id', '=', 'importaciones.id')
-            ->where('importaciones.external_api_source_id', $source->id)
-            ->count();
+        // Totales
+        $totalLotes = 0;
+        $totalProspectos = 0;
 
-        $this->newLine();
-        $this->line("Lotes: {$lotes}");
-        $this->line("Prospectos totales: {$prospectos}");
-
-        // Últimos prospectos importados
-        if ($prospectos > 0) {
-            $this->newLine();
-            $this->info('Últimos 5 contratos importados:');
-
-            $ultimos = DB::table('prospectos')
+        foreach ($sources as $source) {
+            $totalLotes += $source->lotes()->count();
+            $totalProspectos += DB::table('prospectos')
                 ->join('importaciones', 'prospectos.importacion_id', '=', 'importaciones.id')
                 ->where('importaciones.external_api_source_id', $source->id)
-                ->select('prospectos.nombre', 'prospectos.email', 'prospectos.monto_deuda', 'prospectos.created_at')
+                ->count();
+        }
+
+        $this->newLine();
+        $this->line("Total lotes: {$totalLotes}");
+        $this->line("Total prospectos: {$totalProspectos}");
+
+        // Mostrar errores si hay
+        $sourcesConError = $sources->filter(fn ($s) => $s->last_sync_error !== null);
+        if ($sourcesConError->isNotEmpty()) {
+            $this->newLine();
+            $this->warn('⚠ Sources con errores:');
+            foreach ($sourcesConError as $source) {
+                $this->error("  [{$source->id}] {$source->display_name}: {$source->last_sync_error}");
+            }
+        }
+
+        // Últimos prospectos importados (de todas las sources)
+        if ($totalProspectos > 0) {
+            $this->newLine();
+            $this->info('Últimos 5 prospectos importados (todas las sources):');
+
+            $sourceIds = $sources->pluck('id');
+            $ultimos = DB::table('prospectos')
+                ->join('importaciones', 'prospectos.importacion_id', '=', 'importaciones.id')
+                ->join('external_api_sources', 'importaciones.external_api_source_id', '=', 'external_api_sources.id')
+                ->whereIn('importaciones.external_api_source_id', $sourceIds)
+                ->select('prospectos.nombre', 'prospectos.email', 'prospectos.monto_deuda', 'prospectos.created_at', 'external_api_sources.display_name as source')
                 ->orderBy('prospectos.created_at', 'desc')
                 ->limit(5)
                 ->get();
 
             $this->table(
-                ['Nombre', 'Email', 'Monto', 'Fecha'],
+                ['Nombre', 'Email', 'Monto', 'Fecha', 'Source'],
                 $ultimos->map(fn ($p) => [
                     $p->nombre,
                     $p->email ?? 'N/A',
                     '$'.number_format($p->monto_deuda ?? 0, 0, ',', '.'),
                     $p->created_at,
+                    $p->source,
                 ])->toArray()
             );
         }
@@ -282,24 +301,19 @@ class SyncGrupoDeudaCommand extends Command
     }
 
     /**
-     * Obtiene la fuente principal de Grupo Deudas (para stats).
+     * Obtiene todas las fuentes de Grupo Deudas.
      */
-    private function getGrupoDeudaSource(): ?ExternalApiSource
+    private function getAllGrupoDeudaSources(): \Illuminate\Database\Eloquent\Collection
     {
-        $source = ExternalApiSource::where('name', 'grupo_deuda_contratos')
-            ->first();
+        $sources = ExternalApiSource::where('name', 'like', 'grupo_deuda%')
+            ->orderBy('id')
+            ->get();
 
-        if (! $source) {
-            $this->error('No se encontró fuente de Grupo Deudas.');
+        if ($sources->isEmpty()) {
+            $this->error('No se encontraron fuentes de Grupo Deudas.');
             $this->line('Ejecute: php artisan db:seed --class=GrupoDeudaApiSourceSeeder');
-
-            return null;
         }
 
-        if (! $source->is_active) {
-            $this->warn('La fuente de Grupo Deudas está inactiva.');
-        }
-
-        return $source;
+        return $sources;
     }
 }
