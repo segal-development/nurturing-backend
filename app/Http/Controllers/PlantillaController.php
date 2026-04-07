@@ -405,7 +405,7 @@ class PlantillaController extends Controller
 
             if (is_array($value)) {
                 // Si es array indexado (0, 1, 2...), tomar solo el primer elemento
-                if (array_is_list($value) && ! empty($value)) {
+                if ($this->isListArray($value) && ! empty($value)) {
                     $this->extraerKeysRecursivo($value[0], "{$fullKey}.0", $keys, $ejemplos);
                 } else {
                     // Array asociativo, seguir recursivamente
@@ -459,5 +459,18 @@ class PlantillaController extends Controller
         $label = ucfirst(strtolower($label));
 
         return $label;
+    }
+
+    /**
+     * Check if array is a list (sequential numeric keys starting from 0)
+     * Polyfill for array_is_list() which requires PHP 8.1+
+     */
+    private function isListArray(array $array): bool
+    {
+        if ($array === []) {
+            return true;
+        }
+
+        return array_keys($array) === range(0, count($array) - 1);
     }
 }
