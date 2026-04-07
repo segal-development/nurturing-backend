@@ -676,34 +676,60 @@ class EnvioService
      */
     private function personalizarContenido(string $contenido, Prospecto $prospecto): string
     {
-        // Formatear monto de deuda con separador de miles
-        $montoFormateado = $prospecto->monto_deuda
-            ? '$'.number_format($prospecto->monto_deuda, 0, ',', '.')
-            : '';
-
-        $variables = [
-            '{{nombre}}' => $prospecto->nombre ?? '',
-            '{{email}}' => $prospecto->email ?? '',
-            '{{telefono}}' => $prospecto->telefono ?? '',
-            '{{monto_deuda}}' => $montoFormateado,
-            '{{monto}}' => $montoFormateado, // Alias
-            '{{rut}}' => $prospecto->rut ?? '',
-            '{{url_informe}}' => $prospecto->url_informe ?? '',
-            // Variables con formato alternativo (sin llaves dobles)
-            '{nombre}' => $prospecto->nombre ?? '',
-            '{email}' => $prospecto->email ?? '',
-            '{telefono}' => $prospecto->telefono ?? '',
-            '{monto_deuda}' => $montoFormateado,
-            '{monto}' => $montoFormateado,
-            '{rut}' => $prospecto->rut ?? '',
-            '{url_informe}' => $prospecto->url_informe ?? '',
-        ];
-
-        return str_replace(
-            array_keys($variables),
-            array_values($variables),
+        // Buscar todas las variables en el contenido: {{variable}} o {variable}
+        // Soporta notación punto para metadata: {{abogado.Nombre}}, {{cuotas.0.Monto}}
+        return preg_replace_callback(
+            '/\{\{?([a-zA-Z0-9_.]+)\}?\}/',
+            fn ($matches) => $this->resolverVariable($matches[1], $prospecto),
             $contenido
         );
+    }
+
+    /**
+     * Resuelve el valor de una variable para un prospecto.
+     *
+     * Orden de resolución:
+     * 1. Variables de sistema (fecha_hoy, etc.)
+     * 2. Campos fijos del prospecto con formato especial (monto_deuda, monto)
+     * 3. Campos fijos del prospecto (nombre, email, telefono, etc.)
+     * 4. Metadata con notación punto (abogado.Nombre, cuotas.0.Monto)
+     */
+    private function resolverVariable(string $variable, Prospecto $prospecto): string
+    {
+        // 1. Variables de sistema
+        $sistemVars = [
+            'fecha_hoy' => now()->format('d/m/Y'),
+            'fecha_hora' => now()->format('d/m/Y H:i'),
+            'anio' => now()->format('Y'),
+        ];
+
+        if (isset($sistemVars[$variable])) {
+            return $sistemVars[$variable];
+        }
+
+        // 2. Campos con formato especial
+        if ($variable === 'monto_deuda' || $variable === 'monto') {
+            return $prospecto->monto_deuda
+                ? '$'.number_format($prospecto->monto_deuda, 0, ',', '.')
+                : '';
+        }
+
+        // 3. Campos fijos del prospecto
+        $camposFijos = ['nombre', 'email', 'telefono', 'rut', 'url_informe', 'estado'];
+
+        if (in_array($variable, $camposFijos)) {
+            return (string) ($prospecto->{$variable} ?? '');
+        }
+
+        // 4. Metadata con notación punto
+        // Soporta: {{nivel_deuda}}, {{abogado.Nombre}}, {{cuotas.0.Monto}}
+        $metadata = $prospecto->metadata ?? [];
+
+        if (empty($metadata)) {
+            return ''; // No hay metadata, retornar vacío
+        }
+
+        return (string) (data_get($metadata, $variable) ?? '');
     }
 
     /**
