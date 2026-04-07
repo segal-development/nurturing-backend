@@ -349,9 +349,9 @@ class PlantillaController extends Controller
     private function detectarVariablesMetadata(): array
     {
         // Obtener una muestra de prospectos con metadata
+        // Use raw query for PostgreSQL JSON compatibility
         $prospectos = \App\Models\Prospecto::whereNotNull('metadata')
-            ->where('metadata', '!=', '{}')
-            ->where('metadata', '!=', '[]')
+            ->whereRaw("metadata::text NOT IN ('{}', '[]', 'null', '')")
             ->limit(100)
             ->get(['metadata']);
 
