@@ -144,6 +144,7 @@ Route::middleware(['auth:sanctum', 'throttle:api'])->group(function () {
     Route::post('/plantillas/email', [PlantillaController::class, 'crearEmail']);
     Route::post('/plantillas/preview/email', [PlantillaController::class, 'generarPreviewEmail']);
     Route::post('/plantillas/validar/sms', [PlantillaController::class, 'validarSMS']);
+    Route::get('/plantillas/variables-disponibles', [PlantillaController::class, 'variablesDisponibles']);
     Route::get('/plantillas/{plantilla}/preview', [PlantillaController::class, 'preview']);
     Route::apiResource('plantillas', PlantillaController::class);
 

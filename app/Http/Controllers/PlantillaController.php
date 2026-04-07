@@ -301,4 +301,163 @@ class PlantillaController extends Controller
 
         return array_unique($matches[1] ?? []);
     }
+
+    /**
+     * Obtener las variables disponibles para plantillas
+     *
+     * Devuelve las variables organizadas por categoría:
+     * - basicas: campos fijos del prospecto
+     * - sistema: fecha_hoy, fecha_hora, etc.
+     * - metadata: campos dinámicos detectados de los prospectos
+     */
+    public function variablesDisponibles(): JsonResponse
+    {
+        // Variables básicas (campos fijos del prospecto)
+        $basicas = [
+            ['key' => 'nombre', 'label' => 'Nombre completo', 'ejemplo' => 'Juan Pérez'],
+            ['key' => 'email', 'label' => 'Email', 'ejemplo' => 'juan@email.com'],
+            ['key' => 'telefono', 'label' => 'Teléfono', 'ejemplo' => '+56912345678'],
+            ['key' => 'rut', 'label' => 'RUT', 'ejemplo' => '12.345.678-9'],
+            ['key' => 'monto', 'label' => 'Monto deuda (formateado)', 'ejemplo' => '$150.000'],
+            ['key' => 'monto_deuda', 'label' => 'Monto deuda (formateado)', 'ejemplo' => '$150.000'],
+            ['key' => 'url_informe', 'label' => 'URL del informe', 'ejemplo' => 'https://...'],
+            ['key' => 'estado', 'label' => 'Estado del prospecto', 'ejemplo' => 'activo'],
+        ];
+
+        // Variables de sistema
+        $sistema = [
+            ['key' => 'fecha_hoy', 'label' => 'Fecha actual', 'ejemplo' => now()->format('d/m/Y')],
+            ['key' => 'fecha_hora', 'label' => 'Fecha y hora actual', 'ejemplo' => now()->format('d/m/Y H:i')],
+            ['key' => 'anio', 'label' => 'Año actual', 'ejemplo' => now()->format('Y')],
+        ];
+
+        // Variables de metadata - detectadas dinámicamente de los prospectos
+        $metadata = $this->detectarVariablesMetadata();
+
+        return response()->json([
+            'data' => [
+                'basicas' => $basicas,
+                'sistema' => $sistema,
+                'metadata' => $metadata,
+            ],
+        ]);
+    }
+
+    /**
+     * Detecta las variables de metadata disponibles analizando prospectos existentes
+     */
+    private function detectarVariablesMetadata(): array
+    {
+        // Obtener una muestra de prospectos con metadata
+        $prospectos = \App\Models\Prospecto::whereNotNull('metadata')
+            ->where('metadata', '!=', '{}')
+            ->where('metadata', '!=', '[]')
+            ->limit(100)
+            ->get(['metadata']);
+
+        $keysEncontradas = [];
+        $ejemplos = [];
+
+        foreach ($prospectos as $prospecto) {
+            $metadata = $prospecto->metadata;
+            if (! is_array($metadata)) {
+                continue;
+            }
+
+            $this->extraerKeysRecursivo($metadata, '', $keysEncontradas, $ejemplos);
+        }
+
+        // Convertir a formato de respuesta, filtrando keys internas
+        $keysInternas = ['source', 'endpoint', 'synced_at', 'cliente_id'];
+        $resultado = [];
+
+        foreach ($keysEncontradas as $key => $count) {
+            // Filtrar keys internas y arrays complejos
+            if (in_array($key, $keysInternas)) {
+                continue;
+            }
+
+            // Generar label legible
+            $label = $this->generarLabelDesdeKey($key);
+
+            $resultado[] = [
+                'key' => $key,
+                'label' => $label,
+                'ejemplo' => $ejemplos[$key] ?? '',
+                'frecuencia' => $count, // Cuántos prospectos tienen esta key
+            ];
+        }
+
+        // Ordenar por frecuencia (más comunes primero)
+        usort($resultado, fn ($a, $b) => $b['frecuencia'] <=> $a['frecuencia']);
+
+        // Limitar a las 30 más comunes
+        return array_slice($resultado, 0, 30);
+    }
+
+    /**
+     * Extrae keys recursivamente de un array de metadata
+     */
+    private function extraerKeysRecursivo(array $data, string $prefix, array &$keys, array &$ejemplos): void
+    {
+        foreach ($data as $key => $value) {
+            $fullKey = $prefix ? "{$prefix}.{$key}" : $key;
+
+            if (is_array($value)) {
+                // Si es array indexado (0, 1, 2...), tomar solo el primer elemento
+                if (array_is_list($value) && ! empty($value)) {
+                    $this->extraerKeysRecursivo($value[0], "{$fullKey}.0", $keys, $ejemplos);
+                } else {
+                    // Array asociativo, seguir recursivamente
+                    $this->extraerKeysRecursivo($value, $fullKey, $keys, $ejemplos);
+                }
+            } else {
+                // Valor escalar
+                $keys[$fullKey] = ($keys[$fullKey] ?? 0) + 1;
+
+                // Guardar ejemplo si no existe o si el actual es más informativo
+                if (! isset($ejemplos[$fullKey]) || (strlen((string) $value) > 0 && strlen((string) $value) < 50)) {
+                    $ejemplos[$fullKey] = (string) $value;
+                }
+            }
+        }
+    }
+
+    /**
+     * Genera un label legible desde una key de metadata
+     * Ej: "abogado.Nombre" -> "Nombre del Abogado"
+     */
+    private function generarLabelDesdeKey(string $key): string
+    {
+        // Mapeo de keys conocidas
+        $mapeo = [
+            'abogado.Nombre' => 'Nombre del Abogado',
+            'abogado.Email' => 'Email del Abogado',
+            'abogado.Telefono' => 'Teléfono del Abogado',
+            'abogado.Apellido_Paterno' => 'Apellido Paterno del Abogado',
+            'abogado.Apellido_Materno' => 'Apellido Materno del Abogado',
+            'nivel_deuda' => 'Nivel de Deuda',
+            'etapa_sysgal' => 'Etapa en Sysgal',
+            'cuotas.0.Monto' => 'Monto de Cuota',
+            'cuotas.0.Vencimiento' => 'Fecha Vencimiento Cuota',
+            'cuotas.0.Estado' => 'Estado de Cuota',
+            'cuotas.0.Contrato' => 'Número de Contrato',
+            'cuotas.0.Cuota' => 'Número de Cuota',
+        ];
+
+        if (isset($mapeo[$key])) {
+            return $mapeo[$key];
+        }
+
+        // Generar label automático
+        $parts = explode('.', $key);
+        $lastPart = end($parts);
+
+        // Convertir snake_case y PascalCase a palabras
+        $label = preg_replace('/([a-z])([A-Z])/', '$1 $2', $lastPart);
+        $label = str_replace('_', ' ', $label);
+        $label = ucfirst(strtolower($label));
+
+        return $label;
+    }
 }
