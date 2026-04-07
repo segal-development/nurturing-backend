@@ -94,6 +94,25 @@ return Application::configure(basePath: dirname(__DIR__))
             ->onFailure(function () {
                 \Illuminate\Support\Facades\Log::error('SyncGrupoDeudaClientesIngresoJob: Job programado falló');
             });
+
+        // Asignar nuevos prospectos a flujos perpetuos - cada hora (después del sync)
+        // Corre 5 minutos después de la hora para dar tiempo al sync de contratos
+        $schedule->job(\App\Jobs\AsignarNuevosProspectosAFlujoJob::class)
+            ->hourlyAt(5)
+            ->name('asignar-nuevos-prospectos-flujos')
+            ->withoutOverlapping()
+            ->onFailure(function () {
+                \Illuminate\Support\Facades\Log::error('AsignarNuevosProspectosAFlujoJob: Job programado falló');
+            });
+
+        // También correr después de los syncs diarios de las 7am (a las 7:30am)
+        $schedule->job(\App\Jobs\AsignarNuevosProspectosAFlujoJob::class)
+            ->dailyAt('07:30')
+            ->name('asignar-nuevos-prospectos-flujos-post-sync')
+            ->withoutOverlapping()
+            ->onFailure(function () {
+                \Illuminate\Support\Facades\Log::error('AsignarNuevosProspectosAFlujoJob (post-sync): Job programado falló');
+            });
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         // Always return JSON for API authentication/authorization errors
