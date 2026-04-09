@@ -27,12 +27,16 @@ class User extends Authenticatable
 
     /**
      * The attributes that should be hidden for serialization.
+     * Incluye campos sensibles que no deben exponerse en APIs públicas.
      *
      * @var list<string>
      */
     protected $hidden = [
         'password',
         'remember_token',
+        'email_verified_at',
+        'created_at',
+        'updated_at',
     ];
 
     /**

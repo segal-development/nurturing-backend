@@ -29,8 +29,8 @@ Route::middleware('throttle:auth')->group(function () {
     Route::post('/login', [AuthController::class, 'login']);
 });
 
-// Public health check endpoint (no auth required)
-Route::get('/health', function () {
+// Public health check endpoint (no auth required, but rate limited to prevent abuse)
+Route::middleware('throttle:health')->get('/health', function () {
     return response()->json([
         'status' => 'ok',
         'timestamp' => now()->toIso8601String(),

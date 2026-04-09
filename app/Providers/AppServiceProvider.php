@@ -151,6 +151,14 @@ class AppServiceProvider extends ServiceProvider
         });
 
         // =========================================================================
+        // Health Check: 30 requests/minuto por IP
+        // =========================================================================
+        // Público pero limitado para prevenir reconnaissance/abuse
+        RateLimiter::for('health', function (Request $request) {
+            return Limit::perMinute(30)->by($request->ip());
+        });
+
+        // =========================================================================
         // AI Chat: 20 requests/minuto
         // =========================================================================
         // Para el chat de IA que consume tokens de API externos
