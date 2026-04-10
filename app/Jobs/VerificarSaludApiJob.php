@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Events\CircuitBreakerClosed;
 use App\Models\FlujoEjecucionEtapa;
 use App\Services\AthenaCampaignService;
+use App\Services\Email\EmailProviderResolver;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Cache;
@@ -38,6 +39,9 @@ class VerificarSaludApiJob implements ShouldQueue
         foreach (['email', 'sms'] as $channel) {
             $this->verificarCanal($channel, $athenaCampaignService);
         }
+
+        // Verificar Certificada (para prospectos de Grupo Deudas e IC)
+        $this->verificarCertificada();
 
         // También verificar etapas que deberían reanudarse por timeout
         $this->verificarEtapasConTimeoutExpirado();
@@ -135,6 +139,55 @@ class VerificarSaludApiJob implements ShouldQueue
             ]);
 
             return true;
+        }
+    }
+
+    /**
+     * Verifica la API de Certificada (para emails de Grupo Deudas e IC).
+     */
+    private function verificarCertificada(): void
+    {
+        try {
+            $baseUrl = config('services.certificada.base_url', 'https://sistema.certificada.cl/api');
+            $apiKey = config('services.certificada.api_key');
+            $enabled = config('services.certificada.enabled', true);
+
+            if (! $enabled || empty($apiKey)) {
+                Log::debug('VerificarSaludApiJob: Certificada no está configurado o está deshabilitado');
+                return;
+            }
+
+            // Hacer un health check simple - request con timeout corto
+            // Usamos el endpoint de enviar con datos vacíos para verificar que responde
+            $response = Http::timeout(10)
+                ->post("{$baseUrl}/transaccional/enviar_html", [
+                    'IdApi' => $apiKey,
+                    'From' => ['Email' => 'test@test.com', 'Nombre' => 'Test'],
+                    'To' => ['Email' => 'test@test.com', 'Nombre' => 'Test'],
+                    'Despacho' => ['Html' => '', 'Texto' => '', 'Asunto' => ''],
+                ]);
+
+            // Si la API responde (aunque sea con error de validación), está healthy
+            // Un error de validación (Estado != 1) es esperado y significa que la API funciona
+            if ($response->successful() || $response->status() < 500) {
+                EmailProviderResolver::markCertificadaHealthy();
+                Log::debug('VerificarSaludApiJob: Certificada respondió OK');
+            } else {
+                EmailProviderResolver::markCertificadaUnhealthy(
+                    'HTTP ' . $response->status() . ': ' . ($response->json()['Mensaje'] ?? 'Unknown error'),
+                    300 // 5 minutes
+                );
+            }
+        } catch (\Illuminate\Http\Client\ConnectionException $e) {
+            Log::warning('VerificarSaludApiJob: Certificada no responde (connection error)', [
+                'error' => $e->getMessage(),
+            ]);
+            EmailProviderResolver::markCertificadaUnhealthy('Connection error: ' . $e->getMessage(), 300);
+        } catch (\Exception $e) {
+            Log::warning('VerificarSaludApiJob: Error verificando Certificada', [
+                'error' => $e->getMessage(),
+            ]);
+            // No marcamos unhealthy por errores inesperados, solo por connection errors
         }
     }
 

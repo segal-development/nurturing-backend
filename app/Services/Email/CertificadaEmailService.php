@@ -127,6 +127,9 @@ class CertificadaEmailService implements EmailServiceInterface
                 'error' => $e->getMessage(),
             ]);
 
+            // Mark service as unhealthy so resolver falls back to SMTP
+            EmailProviderResolver::markCertificadaUnhealthy('Connection timeout: ' . $e->getMessage());
+
             return [
                 'success' => false,
                 'message_id' => null,
@@ -138,6 +141,11 @@ class CertificadaEmailService implements EmailServiceInterface
                 'email' => $prospecto->email,
                 'error' => $e->getMessage(),
             ]);
+
+            // Only mark unhealthy for connection/server errors, not for individual email failures
+            if ($this->isServiceError($e)) {
+                EmailProviderResolver::markCertificadaUnhealthy('Service error: ' . $e->getMessage());
+            }
 
             return [
                 'success' => false,
@@ -182,5 +190,42 @@ class CertificadaEmailService implements EmailServiceInterface
     public function isAvailable(): bool
     {
         return $this->enabled && ! empty($this->apiKey);
+    }
+
+    /**
+     * Determine if an exception indicates a service-level error (vs individual email error).
+     * 
+     * Service errors should trigger fallback to SMTP.
+     * Individual errors (invalid email, etc.) should not.
+     */
+    private function isServiceError(\Exception $e): bool
+    {
+        $message = strtolower($e->getMessage());
+
+        // Connection/network errors
+        $serviceErrorPatterns = [
+            'connection',
+            'timeout',
+            'curl',
+            'ssl',
+            'certificate',
+            'dns',
+            'resolve',
+            '500',
+            '502',
+            '503',
+            '504',
+            'service unavailable',
+            'internal server error',
+            'bad gateway',
+        ];
+
+        foreach ($serviceErrorPatterns as $pattern) {
+            if (str_contains($message, $pattern)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
