@@ -43,35 +43,42 @@ class GrupoDeudaFakeDataSeederTest extends TestCase
 
     /**
      * Crea los tipos de prospecto necesarios para el seeder.
+     * Usa firstOrCreate para evitar conflictos con datos existentes.
      */
     private function createTiposProspecto(): void
     {
-        TipoProspecto::create([
-            'nombre' => 'Deuda Baja',
-            'descripcion' => 'Deuda entre $0 y $699,999',
-            'monto_min' => 0,
-            'monto_max' => 699999,
-            'orden' => 1,
-            'activo' => true,
-        ]);
+        TipoProspecto::firstOrCreate(
+            ['nombre' => 'Deuda Baja'],
+            [
+                'descripcion' => 'Deuda entre $0 y $699,999',
+                'monto_min' => 0,
+                'monto_max' => 699999,
+                'orden' => 1,
+                'activo' => true,
+            ]
+        );
 
-        TipoProspecto::create([
-            'nombre' => 'Deuda Media',
-            'descripcion' => 'Deuda entre $700,000 y $1,499,999',
-            'monto_min' => 700000,
-            'monto_max' => 1499999,
-            'orden' => 2,
-            'activo' => true,
-        ]);
+        TipoProspecto::firstOrCreate(
+            ['nombre' => 'Deuda Media'],
+            [
+                'descripcion' => 'Deuda entre $700,000 y $1,499,999',
+                'monto_min' => 700000,
+                'monto_max' => 1499999,
+                'orden' => 2,
+                'activo' => true,
+            ]
+        );
 
-        TipoProspecto::create([
-            'nombre' => 'Deuda Alta',
-            'descripcion' => 'Deuda desde $1,500,000',
-            'monto_min' => 1500000,
-            'monto_max' => null,
-            'orden' => 3,
-            'activo' => true,
-        ]);
+        TipoProspecto::firstOrCreate(
+            ['nombre' => 'Deuda Alta'],
+            [
+                'descripcion' => 'Deuda desde $1,500,000',
+                'monto_min' => 1500000,
+                'monto_max' => null,
+                'orden' => 3,
+                'activo' => true,
+            ]
+        );
     }
 
     /**
