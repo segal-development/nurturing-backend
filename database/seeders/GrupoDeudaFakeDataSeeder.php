@@ -170,7 +170,7 @@ class GrupoDeudaFakeDataSeeder extends Seeder
                     'monto_deuda' => $montoDeuda,
                     'tipo_prospecto_id' => $tipoProspecto->id,
                     'estado' => 'activo',
-                    'metadata' => $this->buildContratosMetadata($index + 1),
+                    'metadata' => $this->buildContratosMetadata($index + 1, $contact, $montoDeuda),
                 ]);
                 $creados++;
                 continue;
@@ -185,7 +185,7 @@ class GrupoDeudaFakeDataSeeder extends Seeder
                 'tipo_prospecto_id' => $tipoProspecto->id,
                 'estado' => 'activo',
                 'monto_deuda' => $montoDeuda,
-                'metadata' => $this->buildContratosMetadata($index + 1),
+                'metadata' => $this->buildContratosMetadata($index + 1, $contact, $montoDeuda),
             ]);
             $creados++;
         }
@@ -196,21 +196,30 @@ class GrupoDeudaFakeDataSeeder extends Seeder
             $tipoProspecto = $this->getTipoProspectoPorMonto($tiposProspecto, $montoDeuda);
             $fakeName = self::FAKE_NAMES[$i];
             $fakeEmail = 'fake.contrato.' . ($i + 1) . '@test.local';
+            $fakePhone = '+5691234' . str_pad((string)($i + 1), 4, '0', STR_PAD_LEFT);
 
             // Skip si ya existe
             if (Prospecto::where('email', $fakeEmail)->exists()) {
                 continue;
             }
 
+            $fakeContact = [
+                'nombre' => $fakeName,
+                'email' => $fakeEmail,
+                'telefono' => $fakePhone,
+                'rut' => $this->generateFakeRut(),
+            ];
+
             Prospecto::create([
                 'importacion_id' => $importacion->id,
                 'nombre' => $fakeName,
                 'email' => $fakeEmail,
-                'telefono' => '+5691234' . str_pad((string)($i + 1), 4, '0', STR_PAD_LEFT),
+                'telefono' => $fakePhone,
+                'rut' => str_replace('-', '', $fakeContact['rut']),
                 'tipo_prospecto_id' => $tipoProspecto->id,
                 'estado' => 'activo',
                 'monto_deuda' => $montoDeuda,
-                'metadata' => $this->buildContratosMetadata($i + 100),
+                'metadata' => $this->buildContratosMetadata($i + 100, $fakeContact, $montoDeuda),
             ]);
             $creados++;
         }
@@ -381,18 +390,41 @@ class GrupoDeudaFakeDataSeeder extends Seeder
 
     /**
      * Construye metadata para Contratos Nuevos.
+     * Simula exactamente la estructura de la API /ContratosNuevos
      */
-    private function buildContratosMetadata(int $contratoId): array
+    private function buildContratosMetadata(int $contratoId, array $contact, int $montoDeuda): array
     {
+        $vendedores = [
+            ['Id' => '93', 'Nombre' => 'Carla Lavin', 'Email' => 'clavin@segal.cl'],
+            ['Id' => '261', 'Nombre' => 'Michael Walter', 'Email' => 'mwalter@segal.cl'],
+            ['Id' => '142', 'Nombre' => 'Andrea Muñoz', 'Email' => 'amunoz@segal.cl'],
+        ];
+        $vendedor = $vendedores[array_rand($vendedores)];
+        
+        $cuotas = rand(12, 48);
+        $fechaInicio = now()->format('Y-m-d');
+        $fechaTermino = now()->addMonths($cuotas)->format('Y-m-d');
+
         return [
+            // Campos del sistema
             'source' => 'grupo_deuda',
             'endpoint' => 'contratos_nuevos',
             'synced_at' => now()->toISOString(),
-            'contrato_id' => $contratoId,
-            'cuotas' => rand(12, 48),
-            'vigencia' => now()->addMonths(rand(12, 48))->format('Y-m-d'),
-            'vendedor' => 'Vendedor Prueba',
             'is_fake_data' => true,
+            
+            // Estructura exacta de la API /ContratosNuevos
+            'Id' => (string) (1080057000 + $contratoId),
+            'Cliente' => $contact['nombre'] ?? 'Cliente Prueba',
+            'Rut' => $contact['rut'] ?? $this->generateFakeRut(),
+            'Email' => $contact['email'] ?? 'test@example.com',
+            'Telefono' => ltrim($contact['telefono'] ?? '+56912345678', '+56'),
+            'Monto' => (string) $montoDeuda,
+            'Cuotas' => (string) $cuotas,
+            'Vigencia' => [
+                'Inicio' => $fechaInicio,
+                'Termino' => $fechaTermino,
+            ],
+            'Vendedor' => $vendedor,
         ];
     }
 
