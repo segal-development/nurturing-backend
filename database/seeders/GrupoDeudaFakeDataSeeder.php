@@ -114,19 +114,16 @@ class GrupoDeudaFakeDataSeeder extends Seeder
     {
         $this->command->info('📋 Creando datos para CONTRATOS NUEVOS...');
 
-        // Buscar o crear el ExternalApiSource
-        $source = ExternalApiSource::where('name', 'grupo_deuda_contratos')->first();
-        if (!$source) {
-            $this->command->warn('  ⚠️  No existe grupo_deuda_contratos. Ejecuta GrupoDeudaApiSourceSeeder primero.');
-            $this->command->info('  Creando source temporal...');
-            $source = ExternalApiSource::create([
-                'name' => 'grupo_deuda_contratos',
+        // Crear ExternalApiSource de TEST separado (no interfiere con jobs reales)
+        $source = ExternalApiSource::firstOrCreate(
+            ['name' => 'grupo_deuda_contratos_test'],
+            [
                 'display_name' => 'Grupo Deudas - Contratos Nuevos (Test)',
                 'endpoint_url' => 'https://example.com/test',
                 'auth_type' => 'none',
-                'is_active' => true,
-            ]);
-        }
+                'is_active' => false, // Inactivo para que los jobs no lo usen
+            ]
+        );
 
         // Crear Lote
         $lote = Lote::create([
@@ -251,18 +248,16 @@ class GrupoDeudaFakeDataSeeder extends Seeder
         $this->command->info('');
         $this->command->info('📋 Creando datos para CUOTAS VENCIDAS...');
 
-        // Buscar o crear el ExternalApiSource
-        $source = ExternalApiSource::where('name', 'grupo_deuda_cuotas_vencidas')->first();
-        if (!$source) {
-            $this->command->warn('  ⚠️  No existe grupo_deuda_cuotas_vencidas. Creando source temporal...');
-            $source = ExternalApiSource::create([
-                'name' => 'grupo_deuda_cuotas_vencidas',
+        // Crear ExternalApiSource de TEST separado (no interfiere con jobs reales)
+        $source = ExternalApiSource::firstOrCreate(
+            ['name' => 'grupo_deuda_cuotas_vencidas_test'],
+            [
                 'display_name' => 'Grupo Deudas - Cuotas Vencidas (Test)',
                 'endpoint_url' => 'https://example.com/test',
                 'auth_type' => 'none',
-                'is_active' => true,
-            ]);
-        }
+                'is_active' => false, // Inactivo para que los jobs no lo usen
+            ]
+        );
 
         // Crear Lote
         $lote = Lote::create([
@@ -386,18 +381,16 @@ class GrupoDeudaFakeDataSeeder extends Seeder
         $this->command->info('');
         $this->command->info('📋 Creando datos para CUOTAS POR VENCER...');
 
-        // Buscar o crear el ExternalApiSource
-        $source = ExternalApiSource::where('name', 'grupo_deuda_cuotas_por_vencer')->first();
-        if (!$source) {
-            $this->command->warn('  ⚠️  No existe grupo_deuda_cuotas_por_vencer. Creando source temporal...');
-            $source = ExternalApiSource::create([
-                'name' => 'grupo_deuda_cuotas_por_vencer',
+        // Crear ExternalApiSource de TEST separado (no interfiere con jobs reales)
+        $source = ExternalApiSource::firstOrCreate(
+            ['name' => 'grupo_deuda_cuotas_por_vencer_test'],
+            [
                 'display_name' => 'Grupo Deudas - Cuotas Por Vencer (Test)',
                 'endpoint_url' => 'https://example.com/test',
                 'auth_type' => 'none',
-                'is_active' => true,
-            ]);
-        }
+                'is_active' => false, // Inactivo para que los jobs no lo usen
+            ]
+        );
 
         // Crear Lote
         $lote = Lote::create([
@@ -521,18 +514,16 @@ class GrupoDeudaFakeDataSeeder extends Seeder
         $this->command->info('');
         $this->command->info('📋 Creando datos para CLIENTES POR FECHA INGRESO...');
 
-        // Buscar o crear el ExternalApiSource
-        $source = ExternalApiSource::where('name', 'grupo_deuda_clientes_ingreso')->first();
-        if (!$source) {
-            $this->command->warn('  ⚠️  No existe grupo_deuda_clientes_ingreso. Creando source temporal...');
-            $source = ExternalApiSource::create([
-                'name' => 'grupo_deuda_clientes_ingreso',
+        // Crear ExternalApiSource de TEST separado (no interfiere con jobs reales)
+        $source = ExternalApiSource::firstOrCreate(
+            ['name' => 'grupo_deuda_clientes_ingreso_test'],
+            [
                 'display_name' => 'Grupo Deudas - Clientes Ingreso (Test)',
                 'endpoint_url' => 'https://example.com/test',
                 'auth_type' => 'none',
-                'is_active' => true,
-            ]);
-        }
+                'is_active' => false, // Inactivo para que los jobs no lo usen
+            ]
+        );
 
         // Crear Lote
         $lote = Lote::create([
