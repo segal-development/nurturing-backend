@@ -28,6 +28,8 @@ class CleanupFakeDataCommand extends Command
     private const FAKE_LOTE_NAMES = [
         'CONTRATOS_NUEVOS_TEST',
         'CUOTAS_VENCIDAS_TEST',
+        'CUOTAS_POR_VENCER_TEST',
+        'CLIENTES_INGRESO_TEST',
     ];
 
     public function handle(): int
