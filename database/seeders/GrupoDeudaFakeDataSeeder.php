@@ -137,12 +137,12 @@ class GrupoDeudaFakeDataSeeder extends Seeder
 
         $this->command->info("  ✓ Lote creado: {$lote->nombre} (ID: {$lote->id})");
 
-        // Crear Importación
+        // Crear Importación - usar display_name del source para consistencia con API real
         $importacion = Importacion::create([
             'lote_id' => $lote->id,
             'nombre_archivo' => 'fake_contratos_nuevos.json',
             'ruta_archivo' => '/fake/contratos_nuevos.json',
-            'origen' => 'Grupo Deudas',
+            'origen' => $source->display_name,
             'user_id' => $user->id,
             'estado' => 'completado',
             'fecha_importacion' => now(),
@@ -264,12 +264,12 @@ class GrupoDeudaFakeDataSeeder extends Seeder
 
         $this->command->info("  ✓ Lote creado: {$lote->nombre} (ID: {$lote->id})");
 
-        // Crear Importación
+        // Crear Importación - usar display_name del source para consistencia con API real
         $importacion = Importacion::create([
             'lote_id' => $lote->id,
             'nombre_archivo' => 'fake_cuotas_vencidas.json',
             'ruta_archivo' => '/fake/cuotas_vencidas.json',
-            'origen' => 'Grupo Deudas',
+            'origen' => $source->display_name,
             'user_id' => $user->id,
             'estado' => 'completado',
             'fecha_importacion' => now(),

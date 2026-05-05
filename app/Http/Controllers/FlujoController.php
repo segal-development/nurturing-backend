@@ -742,10 +742,8 @@ class FlujoController extends Controller
             ->map(fn ($name) => str_replace('[DEPRECATED] ', '', $name))
             ->toArray();
 
-        // Inferir flujos por origen via: importaciones → prospectos → prospecto_en_flujo → flujos
-        // Un flujo con prospectos de múltiples orígenes aparece en TODOS los filtros relevantes
-        // (correcto: permite filtrar flujos que contengan prospectos de ese origen)
-        $origenes = DB::table('importaciones')
+        // Orígenes que tienen prospectos importados (para crear flujos nuevos)
+        $origenesConProspectos = DB::table('importaciones')
             ->select('importaciones.origen')
             ->selectRaw('COUNT(DISTINCT prospecto_en_flujo.flujo_id) as total_flujos')
             ->join('prospectos', 'prospectos.importacion_id', '=', 'importaciones.id')
@@ -755,11 +753,46 @@ class FlujoController extends Controller
             })
             ->groupBy('importaciones.origen')
             ->get()
-            ->map(fn ($row) => [
-                'id' => $row->origen,
-                'nombre' => $row->origen,
-                'total_flujos' => (int) $row->total_flujos,
+            ->keyBy('origen');
+
+        // Orígenes que tienen flujos existentes (para filtrar flujos aunque no tengan prospectos)
+        $origenesConFlujos = DB::table('flujos')
+            ->select('origen')
+            ->selectRaw('COUNT(*) as total_flujos')
+            ->whereNotNull('origen')
+            ->where('origen', '!=', '')
+            ->when(count($deprecatedOrigins) > 0, function ($query) use ($deprecatedOrigins) {
+                $query->whereNotIn('origen', $deprecatedOrigins);
+            })
+            ->groupBy('origen')
+            ->get()
+            ->keyBy('origen');
+
+        // Combinar ambos: orígenes con prospectos O con flujos
+        $todosOrigenes = collect();
+        
+        // Agregar orígenes con prospectos
+        foreach ($origenesConProspectos as $origen => $data) {
+            $flujosDesdeProspectos = (int) $data->total_flujos;
+            $flujosDirectos = isset($origenesConFlujos[$origen]) ? (int) $origenesConFlujos[$origen]->total_flujos : 0;
+            // Usar el máximo entre ambos conteos (evitar duplicados)
+            $todosOrigenes[$origen] = max($flujosDesdeProspectos, $flujosDirectos);
+        }
+        
+        // Agregar orígenes con flujos que no tienen prospectos
+        foreach ($origenesConFlujos as $origen => $data) {
+            if (!isset($todosOrigenes[$origen])) {
+                $todosOrigenes[$origen] = (int) $data->total_flujos;
+            }
+        }
+
+        $origenes = $todosOrigenes
+            ->map(fn ($totalFlujos, $origen) => [
+                'id' => $origen,
+                'nombre' => $origen,
+                'total_flujos' => $totalFlujos,
             ])
+            ->sortBy('nombre')
             ->values();
 
         // Obtener tipos de deudor (tipos de prospecto)
