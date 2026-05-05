@@ -297,6 +297,7 @@ class GrupoDeudaFakeDataSeeder extends Seeder
             
             // Email único para cuotas vencidas
             $email = str_replace('@', '.cuotas@', $contact['email']);
+            $nombre = str_replace('(Prueba)', '(Cuotas Vencidas)', $contact['nombre']);
 
             // Verificar si ya existe
             if (Prospecto::where('email', $email)->exists()) {
@@ -304,16 +305,23 @@ class GrupoDeudaFakeDataSeeder extends Seeder
                 continue;
             }
 
+            $contactCuotas = [
+                'nombre' => $nombre,
+                'email' => $email,
+                'telefono' => $contact['telefono'],
+                'rut' => $contact['rut'],
+            ];
+
             Prospecto::create([
                 'importacion_id' => $importacion->id,
-                'nombre' => str_replace('(Prueba)', '(Cuotas Vencidas)', $contact['nombre']),
+                'nombre' => $nombre,
                 'email' => $email,
                 'telefono' => $contact['telefono'],
                 'rut' => $contact['rut'] ? str_replace('.', '', $contact['rut']) : null,
                 'tipo_prospecto_id' => $tipoProspecto->id,
                 'estado' => 'activo',
                 'monto_deuda' => $montoDeuda,
-                'metadata' => $this->buildCuotasVencidasMetadata($index + 1, $contact['rut']),
+                'metadata' => $this->buildCuotasVencidasMetadata($index + 1, $contactCuotas, $montoDeuda),
             ]);
             $creados++;
         }
@@ -324,21 +332,29 @@ class GrupoDeudaFakeDataSeeder extends Seeder
             $tipoProspecto = $this->getTipoProspectoPorMonto($tiposProspecto, $montoDeuda);
             $fakeName = self::FAKE_NAMES[$i + 5] ?? self::FAKE_NAMES[$i];
             $fakeEmail = 'fake.cuotas.' . ($i + 1) . '@test.local';
+            $fakePhone = '+5698765' . str_pad((string)($i + 1), 4, '0', STR_PAD_LEFT);
 
             if (Prospecto::where('email', $fakeEmail)->exists()) {
                 continue;
             }
 
+            $fakeContact = [
+                'nombre' => $fakeName,
+                'email' => $fakeEmail,
+                'telefono' => $fakePhone,
+                'rut' => $this->generateFakeRut(),
+            ];
+
             Prospecto::create([
                 'importacion_id' => $importacion->id,
                 'nombre' => $fakeName,
                 'email' => $fakeEmail,
-                'telefono' => '+5698765' . str_pad((string)($i + 1), 4, '0', STR_PAD_LEFT),
-                'rut' => $this->generateFakeRut(),
+                'telefono' => $fakePhone,
+                'rut' => str_replace('-', '', $fakeContact['rut']),
                 'tipo_prospecto_id' => $tipoProspecto->id,
                 'estado' => 'activo',
                 'monto_deuda' => $montoDeuda,
-                'metadata' => $this->buildCuotasVencidasMetadata($i + 100, null),
+                'metadata' => $this->buildCuotasVencidasMetadata($i + 100, $fakeContact, $montoDeuda),
             ]);
             $creados++;
         }
@@ -430,29 +446,57 @@ class GrupoDeudaFakeDataSeeder extends Seeder
 
     /**
      * Construye metadata para Cuotas Vencidas.
+     * Simula exactamente la estructura de la API /CuotasVencidas
      */
-    private function buildCuotasVencidasMetadata(int $clienteId, ?string $rut): array
+    private function buildCuotasVencidasMetadata(int $clienteId, array $contact, int $montoDeuda): array
     {
-        $cuotasVencidas = [];
-        $numCuotas = rand(1, 3);
+        // Abogados disponibles
+        $abogados = [
+            ['Id' => '216', 'Nombre' => 'Bryan', 'Apellido_Paterno' => 'Morales', 'Apellido_Materno' => 'Aedo', 'Email' => 'bmorales@segal.cl', 'Telefono' => '931954203'],
+            ['Id' => '85', 'Nombre' => 'Rodrigo', 'Apellido_Paterno' => 'Campos', 'Apellido_Materno' => 'Espinoza', 'Email' => 'rcampos@segal.cl', 'Telefono' => '933919240'],
+            ['Id' => '142', 'Nombre' => 'Carolina', 'Apellido_Paterno' => 'Pérez', 'Apellido_Materno' => 'Silva', 'Email' => 'cperez@segal.cl', 'Telefono' => '932456789'],
+        ];
+        $abogado = $abogados[array_rand($abogados)];
 
+        // Generar cuotas vencidas (1 a 3 cuotas)
+        $numCuotas = rand(1, 3);
+        $cuotas = [];
+        $contratoBase = 1000029000 + $clienteId;
+        
         for ($i = 0; $i < $numCuotas; $i++) {
-            $cuotasVencidas[] = [
-                'numero' => $i + 1,
-                'monto' => rand(50000, 200000),
-                'fecha_vencimiento' => now()->subDays(rand(1, 30))->format('Y-m-d'),
+            $cuotas[] = [
+                'Contrato' => (string) $contratoBase,
+                'Cuota' => (string) rand(1, 24),
+                'Vencimiento' => now()->subDays(rand(1, 60))->format('Y-m-d'),
+                'Monto' => (string) rand(50000, 200000),
+                'Abono' => '0',
+                'Estado' => 'MOROSO',
             ];
         }
 
+        // Separar nombre en partes
+        $nombreCompleto = $contact['nombre'] ?? 'Cliente Prueba';
+        $partes = explode(' ', $nombreCompleto);
+        $nombre = $partes[0] ?? 'Cliente';
+        $apellidoPaterno = $partes[1] ?? 'Apellido';
+        $apellidoMaterno = $partes[2] ?? '';
+
         return [
+            // Campos del sistema
             'source' => 'grupo_deuda',
             'endpoint' => 'cuotas_vencidas',
             'synced_at' => now()->toISOString(),
-            'cliente_id' => $clienteId,
-            'rut_original' => $rut,
-            'abogado' => 'Abogado Prueba',
-            'cuotas' => $cuotasVencidas,
             'is_fake_data' => true,
+            
+            // Estructura exacta de la API /CuotasVencidas
+            'Id' => (string) (6000 + $clienteId),
+            'Nombre' => $nombre,
+            'Apellido_Paterno' => $apellidoPaterno,
+            'Apellido_Materno' => $apellidoMaterno,
+            'Email' => $contact['email'] ?? 'test@example.com',
+            'Telefono' => ltrim($contact['telefono'] ?? '+56912345678', '+56'),
+            'Abogado' => $abogado,
+            'Cuotas' => $cuotas,
         ];
     }
 
