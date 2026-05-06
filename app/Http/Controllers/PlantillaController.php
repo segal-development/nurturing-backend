@@ -270,17 +270,48 @@ class PlantillaController extends Controller
     private function reemplazarVariablesEjemplo(string $contenido): string
     {
         $ejemplos = [
+            // Básicas
             'nombre' => 'Juan Pérez',
             'email' => 'juan.perez@ejemplo.com',
             'telefono' => '+56 9 1234 5678',
             'rut' => '12.345.678-9',
             'monto_deuda' => '$150.000',
             'monto' => '$150.000',
-            'fecha_vencimiento' => '15/04/2026',
             'empresa' => 'Grupo Segal',
             'url_informe' => 'https://ejemplo.com/informe/abc123',
             'url_pago' => 'https://ejemplo.com/pagar/abc123',
             'link' => 'https://ejemplo.com/accion',
+            
+            // Sistema
+            'fecha_hoy' => now()->format('d/m/Y'),
+            'fecha_hora' => now()->format('d/m/Y H:i'),
+            'anio' => now()->format('Y'),
+            'link_pago' => 'https://system.segal.cl/',
+            
+            // Abogado
+            'nombre_abogado' => 'Bryan Morales Aedo',
+            'email_abogado' => 'bmorales@segal.cl',
+            'telefono_abogado' => '+56931954203',
+            'Abogado.Nombre' => 'Bryan',
+            'Abogado.Apellido_Paterno' => 'Morales',
+            'Abogado.Apellido_Materno' => 'Aedo',
+            'Abogado.Email' => 'bmorales@segal.cl',
+            'Abogado.Telefono' => '931954203',
+            
+            // Cuotas
+            'numero_contrato' => '1000029001',
+            'numero_cuota' => '5',
+            'monto_cuota' => '$85.000',
+            'fecha_vencimiento' => '15/04/2026',
+            'estado_cuota' => 'MOROSO',
+            'Cuotas.0.Contrato' => '1000029001',
+            'Cuotas.0.Cuota' => '5',
+            'Cuotas.0.Monto' => '85000',
+            'Cuotas.0.Vencimiento' => '2026-04-15',
+            'Cuotas.0.Estado' => 'MOROSO',
+            
+            // Tabla de cuotas ejemplo
+            'tabla_cuotas' => $this->generarTablaCuotasEjemplo(),
         ];
 
         // Reemplazar {{variable}} y {variable}
@@ -290,6 +321,41 @@ class PlantillaController extends Controller
         }
 
         return $contenido;
+    }
+    
+    /**
+     * Genera tabla de cuotas de ejemplo para preview
+     */
+    private function generarTablaCuotasEjemplo(): string
+    {
+        return '
+        <table style="width: 100%; border-collapse: collapse; margin: 16px 0; font-family: Arial, sans-serif;">
+            <thead>
+                <tr style="background-color: #1e3a5f; color: white;">
+                    <th style="padding: 12px 8px; text-align: left; border: 1px solid #ddd;">Contrato</th>
+                    <th style="padding: 12px 8px; text-align: center; border: 1px solid #ddd;">Nro Cuota</th>
+                    <th style="padding: 12px 8px; text-align: right; border: 1px solid #ddd;">Monto</th>
+                    <th style="padding: 12px 8px; text-align: center; border: 1px solid #ddd;">Vencimiento</th>
+                    <th style="padding: 12px 8px; text-align: center; border: 1px solid #ddd;">Estado</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr style="background-color: #f9f9f9;">
+                    <td style="padding: 10px 8px; border: 1px solid #ddd;">1000029001</td>
+                    <td style="padding: 10px 8px; text-align: center; border: 1px solid #ddd;">5</td>
+                    <td style="padding: 10px 8px; text-align: right; border: 1px solid #ddd; font-weight: bold;">$85.000</td>
+                    <td style="padding: 10px 8px; text-align: center; border: 1px solid #ddd;">15/04/2026</td>
+                    <td style="padding: 10px 8px; text-align: center; border: 1px solid #ddd; color: #dc2626; font-weight: bold;">MOROSO</td>
+                </tr>
+                <tr style="background-color: #ffffff;">
+                    <td style="padding: 10px 8px; border: 1px solid #ddd;">1000029001</td>
+                    <td style="padding: 10px 8px; text-align: center; border: 1px solid #ddd;">6</td>
+                    <td style="padding: 10px 8px; text-align: right; border: 1px solid #ddd; font-weight: bold;">$85.000</td>
+                    <td style="padding: 10px 8px; text-align: center; border: 1px solid #ddd;">15/05/2026</td>
+                    <td style="padding: 10px 8px; text-align: center; border: 1px solid #ddd; color: #16a34a; font-weight: bold;">VIGENTE</td>
+                </tr>
+            </tbody>
+        </table>';
     }
 
     /**
@@ -329,6 +395,34 @@ class PlantillaController extends Controller
             ['key' => 'fecha_hoy', 'label' => 'Fecha actual', 'ejemplo' => now()->format('d/m/Y')],
             ['key' => 'fecha_hora', 'label' => 'Fecha y hora actual', 'ejemplo' => now()->format('d/m/Y H:i')],
             ['key' => 'anio', 'label' => 'Año actual', 'ejemplo' => now()->format('Y')],
+            ['key' => 'link_pago', 'label' => 'Link de pago Segal', 'ejemplo' => 'https://system.segal.cl/'],
+        ];
+        
+        // Variables de abogado (Grupo Deudas)
+        $abogado = [
+            ['key' => 'nombre_abogado', 'label' => 'Nombre completo del abogado', 'ejemplo' => 'Bryan Morales Aedo'],
+            ['key' => 'email_abogado', 'label' => 'Email del abogado', 'ejemplo' => 'bmorales@segal.cl'],
+            ['key' => 'telefono_abogado', 'label' => 'Teléfono del abogado', 'ejemplo' => '+56931954203'],
+            ['key' => 'Abogado.Nombre', 'label' => 'Nombre del abogado', 'ejemplo' => 'Bryan'],
+            ['key' => 'Abogado.Apellido_Paterno', 'label' => 'Apellido paterno', 'ejemplo' => 'Morales'],
+            ['key' => 'Abogado.Apellido_Materno', 'label' => 'Apellido materno', 'ejemplo' => 'Aedo'],
+            ['key' => 'Abogado.Email', 'label' => 'Email del abogado (raw)', 'ejemplo' => 'bmorales@segal.cl'],
+            ['key' => 'Abogado.Telefono', 'label' => 'Teléfono abogado (sin +56)', 'ejemplo' => '931954203'],
+        ];
+        
+        // Variables de cuotas (Grupo Deudas)
+        $cuotas = [
+            ['key' => 'numero_contrato', 'label' => 'Número de contrato', 'ejemplo' => '1000029001'],
+            ['key' => 'numero_cuota', 'label' => 'Número de cuota actual', 'ejemplo' => '5'],
+            ['key' => 'monto_cuota', 'label' => 'Monto de la cuota (formateado)', 'ejemplo' => '$85.000'],
+            ['key' => 'fecha_vencimiento', 'label' => 'Fecha vencimiento cuota', 'ejemplo' => '15/04/2026'],
+            ['key' => 'estado_cuota', 'label' => 'Estado de la cuota', 'ejemplo' => 'MOROSO'],
+            ['key' => 'tabla_cuotas', 'label' => 'Tabla HTML con todas las cuotas', 'ejemplo' => '<table>...</table>'],
+            ['key' => 'Cuotas.0.Contrato', 'label' => 'Contrato (primera cuota)', 'ejemplo' => '1000029001'],
+            ['key' => 'Cuotas.0.Cuota', 'label' => 'Número cuota (primera)', 'ejemplo' => '5'],
+            ['key' => 'Cuotas.0.Monto', 'label' => 'Monto cuota (raw)', 'ejemplo' => '85000'],
+            ['key' => 'Cuotas.0.Vencimiento', 'label' => 'Vencimiento (raw)', 'ejemplo' => '2026-04-15'],
+            ['key' => 'Cuotas.0.Estado', 'label' => 'Estado cuota', 'ejemplo' => 'MOROSO'],
         ];
 
         // Variables de metadata - detectadas dinámicamente de los prospectos
@@ -338,6 +432,8 @@ class PlantillaController extends Controller
             'data' => [
                 'basicas' => $basicas,
                 'sistema' => $sistema,
+                'abogado' => $abogado,
+                'cuotas' => $cuotas,
                 'metadata' => $metadata,
             ],
         ]);

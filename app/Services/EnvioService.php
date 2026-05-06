@@ -692,7 +692,8 @@ class EnvioService
      * 1. Variables de sistema (fecha_hoy, etc.)
      * 2. Campos fijos del prospecto con formato especial (monto_deuda, monto)
      * 3. Campos fijos del prospecto (nombre, email, telefono, etc.)
-     * 4. Metadata con notación punto (abogado.Nombre, cuotas.0.Monto)
+     * 4. Variables de conveniencia para abogado y cuotas
+     * 5. Metadata con notación punto (Abogado.Nombre, Cuotas.0.Monto)
      */
     private function resolverVariable(string $variable, Prospecto $prospecto): string
     {
@@ -721,15 +722,149 @@ class EnvioService
             return (string) ($prospecto->{$variable} ?? '');
         }
 
-        // 4. Metadata con notación punto
-        // Soporta: {{nivel_deuda}}, {{abogado.Nombre}}, {{cuotas.0.Monto}}
+        // 4. Variables de conveniencia para datos de Grupo Deudas
         $metadata = $prospecto->metadata ?? [];
+        
+        // Variables de abogado (conveniencia)
+        if ($variable === 'nombre_abogado') {
+            return $this->resolverNombreAbogado($metadata);
+        }
+        if ($variable === 'email_abogado') {
+            return (string) (data_get($metadata, 'Abogado.Email') ?? '');
+        }
+        if ($variable === 'telefono_abogado') {
+            $telefono = data_get($metadata, 'Abogado.Telefono');
+            return $telefono ? '+56' . ltrim($telefono, '+56') : '';
+        }
+        
+        // Variables de cuota actual (primera cuota del array)
+        if ($variable === 'numero_contrato') {
+            return (string) (data_get($metadata, 'Cuotas.0.Contrato') ?? data_get($metadata, 'Id') ?? '');
+        }
+        if ($variable === 'numero_cuota') {
+            return (string) (data_get($metadata, 'Cuotas.0.Cuota') ?? '');
+        }
+        if ($variable === 'monto_cuota') {
+            $monto = data_get($metadata, 'Cuotas.0.Monto');
+            return $monto ? '$' . number_format((int) $monto, 0, ',', '.') : '';
+        }
+        if ($variable === 'fecha_vencimiento') {
+            $fecha = data_get($metadata, 'Cuotas.0.Vencimiento');
+            return $fecha ? $this->formatearFecha($fecha) : '';
+        }
+        if ($variable === 'estado_cuota') {
+            return (string) (data_get($metadata, 'Cuotas.0.Estado') ?? '');
+        }
+        
+        // Tabla de cuotas renderizada (HTML)
+        if ($variable === 'tabla_cuotas') {
+            return $this->renderizarTablaCuotas($metadata);
+        }
+        
+        // Link de pago
+        if ($variable === 'link_pago') {
+            return 'https://system.segal.cl/';
+        }
 
+        // 5. Metadata con notación punto
+        // Soporta: {{nivel_deuda}}, {{Abogado.Nombre}}, {{Cuotas.0.Monto}}
         if (empty($metadata)) {
             return ''; // No hay metadata, retornar vacío
         }
 
         return (string) (data_get($metadata, $variable) ?? '');
+    }
+    
+    /**
+     * Resuelve el nombre completo del abogado desde metadata.
+     */
+    private function resolverNombreAbogado(array $metadata): string
+    {
+        $abogado = data_get($metadata, 'Abogado');
+        
+        if (!$abogado || !is_array($abogado)) {
+            return '';
+        }
+        
+        // Si no hay ID o ID es 0, no hay abogado asignado
+        if (empty($abogado['Id']) || $abogado['Id'] === '0') {
+            return 'Sin abogado asignado';
+        }
+        
+        $nombre = $abogado['Nombre'] ?? '';
+        $apellidoPaterno = $abogado['Apellido_Paterno'] ?? '';
+        $apellidoMaterno = $abogado['Apellido_Materno'] ?? '';
+        
+        return trim("{$nombre} {$apellidoPaterno} {$apellidoMaterno}");
+    }
+    
+    /**
+     * Formatea una fecha de Y-m-d a d/m/Y
+     */
+    private function formatearFecha(string $fecha): string
+    {
+        try {
+            return \Carbon\Carbon::parse($fecha)->format('d/m/Y');
+        } catch (\Exception $e) {
+            return $fecha; // Devolver sin formato si falla
+        }
+    }
+    
+    /**
+     * Renderiza la tabla de cuotas en HTML.
+     */
+    private function renderizarTablaCuotas(array $metadata): string
+    {
+        $cuotas = data_get($metadata, 'Cuotas');
+        
+        if (!$cuotas || !is_array($cuotas) || empty($cuotas)) {
+            return '<p style="color: #666; font-style: italic;">No hay cuotas registradas.</p>';
+        }
+        
+        $html = '
+        <table style="width: 100%; border-collapse: collapse; margin: 16px 0; font-family: Arial, sans-serif;">
+            <thead>
+                <tr style="background-color: #1e3a5f; color: white;">
+                    <th style="padding: 12px 8px; text-align: left; border: 1px solid #ddd;">Contrato</th>
+                    <th style="padding: 12px 8px; text-align: center; border: 1px solid #ddd;">Nro Cuota</th>
+                    <th style="padding: 12px 8px; text-align: right; border: 1px solid #ddd;">Monto</th>
+                    <th style="padding: 12px 8px; text-align: center; border: 1px solid #ddd;">Vencimiento</th>
+                    <th style="padding: 12px 8px; text-align: center; border: 1px solid #ddd;">Estado</th>
+                </tr>
+            </thead>
+            <tbody>';
+        
+        foreach ($cuotas as $index => $cuota) {
+            $bgColor = $index % 2 === 0 ? '#f9f9f9' : '#ffffff';
+            $contrato = $cuota['Contrato'] ?? '-';
+            $numeroCuota = $cuota['Cuota'] ?? '-';
+            $monto = isset($cuota['Monto']) ? '$' . number_format((int) $cuota['Monto'], 0, ',', '.') : '-';
+            $vencimiento = isset($cuota['Vencimiento']) ? $this->formatearFecha($cuota['Vencimiento']) : '-';
+            $estado = $cuota['Estado'] ?? '-';
+            
+            // Color del estado
+            $estadoColor = match(strtoupper($estado)) {
+                'MOROSO' => '#dc2626',
+                'VIGENTE' => '#16a34a',
+                'PAGADO' => '#2563eb',
+                default => '#666666',
+            };
+            
+            $html .= "
+                <tr style=\"background-color: {$bgColor};\">
+                    <td style=\"padding: 10px 8px; border: 1px solid #ddd;\">{$contrato}</td>
+                    <td style=\"padding: 10px 8px; text-align: center; border: 1px solid #ddd;\">{$numeroCuota}</td>
+                    <td style=\"padding: 10px 8px; text-align: right; border: 1px solid #ddd; font-weight: bold;\">{$monto}</td>
+                    <td style=\"padding: 10px 8px; text-align: center; border: 1px solid #ddd;\">{$vencimiento}</td>
+                    <td style=\"padding: 10px 8px; text-align: center; border: 1px solid #ddd; color: {$estadoColor}; font-weight: bold;\">{$estado}</td>
+                </tr>";
+        }
+        
+        $html .= '
+            </tbody>
+        </table>';
+        
+        return $html;
     }
 
     /**
