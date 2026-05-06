@@ -310,8 +310,10 @@ class PlantillaController extends Controller
             'Cuotas.0.Vencimiento' => '2026-04-15',
             'Cuotas.0.Estado' => 'MOROSO',
             
-            // Tabla de cuotas ejemplo
+            // Tablas de cuotas ejemplo
             'tabla_cuotas' => $this->generarTablaCuotasEjemplo(),
+            'tabla_cuotas_pendientes' => $this->generarTablaCuotasPendientesEjemplo(),
+            'tabla_proxima_cuota' => $this->generarProximaCuotaEjemplo(),
         ];
 
         // Reemplazar {{variable}} y {variable}
@@ -353,6 +355,64 @@ class PlantillaController extends Controller
                     <td style="padding: 10px 8px; text-align: right; border: 1px solid #ddd; font-weight: bold;">$85.000</td>
                     <td style="padding: 10px 8px; text-align: center; border: 1px solid #ddd;">15/05/2026</td>
                     <td style="padding: 10px 8px; text-align: center; border: 1px solid #ddd; color: #16a34a; font-weight: bold;">VIGENTE</td>
+                </tr>
+            </tbody>
+        </table>';
+    }
+    
+    /**
+     * Genera tabla de cuotas pendientes de ejemplo (sin estado)
+     */
+    private function generarTablaCuotasPendientesEjemplo(): string
+    {
+        return '
+        <table style="width: 100%; border-collapse: collapse; margin: 16px 0; font-family: Arial, sans-serif;">
+            <thead>
+                <tr style="background-color: #1e3a5f; color: white;">
+                    <th style="padding: 12px 8px; text-align: left; border: 1px solid #ddd;">Contrato</th>
+                    <th style="padding: 12px 8px; text-align: center; border: 1px solid #ddd;">Nro Cuota</th>
+                    <th style="padding: 12px 8px; text-align: right; border: 1px solid #ddd;">Monto</th>
+                    <th style="padding: 12px 8px; text-align: center; border: 1px solid #ddd;">Vencimiento</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr style="background-color: #f9f9f9;">
+                    <td style="padding: 10px 8px; border: 1px solid #ddd;">1000029001</td>
+                    <td style="padding: 10px 8px; text-align: center; border: 1px solid #ddd;">5</td>
+                    <td style="padding: 10px 8px; text-align: right; border: 1px solid #ddd; font-weight: bold;">$85.000</td>
+                    <td style="padding: 10px 8px; text-align: center; border: 1px solid #ddd;">15/04/2026</td>
+                </tr>
+                <tr style="background-color: #ffffff;">
+                    <td style="padding: 10px 8px; border: 1px solid #ddd;">1000029001</td>
+                    <td style="padding: 10px 8px; text-align: center; border: 1px solid #ddd;">6</td>
+                    <td style="padding: 10px 8px; text-align: right; border: 1px solid #ddd; font-weight: bold;">$85.000</td>
+                    <td style="padding: 10px 8px; text-align: center; border: 1px solid #ddd;">15/05/2026</td>
+                </tr>
+            </tbody>
+        </table>';
+    }
+    
+    /**
+     * Genera ejemplo de próxima cuota (una sola fila)
+     */
+    private function generarProximaCuotaEjemplo(): string
+    {
+        return '
+        <table style="width: 100%; border-collapse: collapse; margin: 16px 0; font-family: Arial, sans-serif;">
+            <thead>
+                <tr style="background-color: #1e3a5f; color: white;">
+                    <th style="padding: 12px 8px; text-align: left; border: 1px solid #ddd;">Contrato</th>
+                    <th style="padding: 12px 8px; text-align: center; border: 1px solid #ddd;">Nro Cuota</th>
+                    <th style="padding: 12px 8px; text-align: right; border: 1px solid #ddd;">Monto</th>
+                    <th style="padding: 12px 8px; text-align: center; border: 1px solid #ddd;">Vencimiento</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr style="background-color: #f9f9f9;">
+                    <td style="padding: 10px 8px; border: 1px solid #ddd;">1000029001</td>
+                    <td style="padding: 10px 8px; text-align: center; border: 1px solid #ddd;">5</td>
+                    <td style="padding: 10px 8px; text-align: right; border: 1px solid #ddd; font-weight: bold;">$85.000</td>
+                    <td style="padding: 10px 8px; text-align: center; border: 1px solid #ddd;">15/04/2026</td>
                 </tr>
             </tbody>
         </table>';
@@ -417,7 +477,9 @@ class PlantillaController extends Controller
             ['key' => 'monto_cuota', 'label' => 'Monto de la cuota (formateado)', 'ejemplo' => '$85.000'],
             ['key' => 'fecha_vencimiento', 'label' => 'Fecha vencimiento cuota', 'ejemplo' => '15/04/2026'],
             ['key' => 'estado_cuota', 'label' => 'Estado de la cuota', 'ejemplo' => 'MOROSO'],
-            ['key' => 'tabla_cuotas', 'label' => 'Tabla HTML con todas las cuotas', 'ejemplo' => '<table>...</table>'],
+            ['key' => 'tabla_cuotas', 'label' => 'Tabla completa con estado (confirmaciones)', 'ejemplo' => '<table>...</table>'],
+            ['key' => 'tabla_cuotas_pendientes', 'label' => 'Tabla cuotas pendientes sin estado (recordatorios)', 'ejemplo' => '<table>...</table>'],
+            ['key' => 'tabla_proxima_cuota', 'label' => 'Solo próxima cuota a vencer', 'ejemplo' => '<table>...</table>'],
             ['key' => 'Cuotas.0.Contrato', 'label' => 'Contrato (primera cuota)', 'ejemplo' => '1000029001'],
             ['key' => 'Cuotas.0.Cuota', 'label' => 'Número cuota (primera)', 'ejemplo' => '5'],
             ['key' => 'Cuotas.0.Monto', 'label' => 'Monto cuota (raw)', 'ejemplo' => '85000'],

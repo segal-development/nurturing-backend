@@ -756,9 +756,21 @@ class EnvioService
             return (string) (data_get($metadata, 'Cuotas.0.Estado') ?? '');
         }
         
-        // Tabla de cuotas renderizada (HTML)
+        // Tabla de cuotas renderizada (HTML) - CON estado (para confirmaciones de pago)
         if ($variable === 'tabla_cuotas') {
             return $this->renderizarTablaCuotas($metadata);
+        }
+        
+        // Tabla de cuotas pendientes - SIN estado (para recordatorios)
+        // Muestra solo cuotas VIGENTES y MOROSAS
+        if ($variable === 'tabla_cuotas_pendientes') {
+            return $this->renderizarTablaCuotasPendientes($metadata);
+        }
+        
+        // Próxima cuota a vencer - SIN estado (para avisos puntuales)
+        // Muestra solo la cuota más próxima a vencer
+        if ($variable === 'tabla_proxima_cuota') {
+            return $this->renderizarProximaCuota($metadata);
         }
         
         // Link de pago
@@ -861,6 +873,133 @@ class EnvioService
         }
         
         $html .= '
+            </tbody>
+        </table>';
+        
+        return $html;
+    }
+    
+    /**
+     * Renderiza tabla de cuotas pendientes (VIGENTES + MOROSAS) SIN columna de estado.
+     * Ideal para recordatorios de pago (Día 18, Día -4, Día vencimiento, etc.)
+     */
+    private function renderizarTablaCuotasPendientes(array $metadata): string
+    {
+        $cuotas = data_get($metadata, 'Cuotas');
+        
+        if (!$cuotas || !is_array($cuotas) || empty($cuotas)) {
+            return '<p style="color: #666; font-style: italic;">No hay cuotas pendientes.</p>';
+        }
+        
+        // Filtrar solo cuotas VIGENTES y MOROSAS
+        $cuotasPendientes = array_filter($cuotas, function ($cuota) {
+            $estado = strtoupper($cuota['Estado'] ?? '');
+            return in_array($estado, ['VIGENTE', 'MOROSO', 'PENDIENTE']);
+        });
+        
+        if (empty($cuotasPendientes)) {
+            return '<p style="color: #16a34a; font-style: italic;">✓ Todas las cuotas están al día.</p>';
+        }
+        
+        // Ordenar por fecha de vencimiento
+        usort($cuotasPendientes, function ($a, $b) {
+            return strtotime($a['Vencimiento'] ?? '9999-12-31') - strtotime($b['Vencimiento'] ?? '9999-12-31');
+        });
+        
+        $html = '
+        <table style="width: 100%; border-collapse: collapse; margin: 16px 0; font-family: Arial, sans-serif;">
+            <thead>
+                <tr style="background-color: #1e3a5f; color: white;">
+                    <th style="padding: 12px 8px; text-align: left; border: 1px solid #ddd;">Contrato</th>
+                    <th style="padding: 12px 8px; text-align: center; border: 1px solid #ddd;">Nro Cuota</th>
+                    <th style="padding: 12px 8px; text-align: right; border: 1px solid #ddd;">Monto</th>
+                    <th style="padding: 12px 8px; text-align: center; border: 1px solid #ddd;">Vencimiento</th>
+                </tr>
+            </thead>
+            <tbody>';
+        
+        foreach (array_values($cuotasPendientes) as $index => $cuota) {
+            $bgColor = $index % 2 === 0 ? '#f9f9f9' : '#ffffff';
+            $contrato = $cuota['Contrato'] ?? '-';
+            $numeroCuota = $cuota['Cuota'] ?? '-';
+            $monto = isset($cuota['Monto']) ? '$' . number_format((int) $cuota['Monto'], 0, ',', '.') : '-';
+            $vencimiento = isset($cuota['Vencimiento']) ? $this->formatearFecha($cuota['Vencimiento']) : '-';
+            
+            $html .= "
+                <tr style=\"background-color: {$bgColor};\">
+                    <td style=\"padding: 10px 8px; border: 1px solid #ddd;\">{$contrato}</td>
+                    <td style=\"padding: 10px 8px; text-align: center; border: 1px solid #ddd;\">{$numeroCuota}</td>
+                    <td style=\"padding: 10px 8px; text-align: right; border: 1px solid #ddd; font-weight: bold;\">{$monto}</td>
+                    <td style=\"padding: 10px 8px; text-align: center; border: 1px solid #ddd;\">{$vencimiento}</td>
+                </tr>";
+        }
+        
+        $html .= '
+            </tbody>
+        </table>';
+        
+        return $html;
+    }
+    
+    /**
+     * Renderiza solo la próxima cuota a vencer.
+     * Ideal para avisos de vencimiento inminente.
+     */
+    private function renderizarProximaCuota(array $metadata): string
+    {
+        $cuotas = data_get($metadata, 'Cuotas');
+        
+        if (!$cuotas || !is_array($cuotas) || empty($cuotas)) {
+            return '<p style="color: #666; font-style: italic;">No hay cuotas registradas.</p>';
+        }
+        
+        // Filtrar solo cuotas VIGENTES (próximas a vencer, no morosas)
+        $cuotasVigentes = array_filter($cuotas, function ($cuota) {
+            $estado = strtoupper($cuota['Estado'] ?? '');
+            return $estado === 'VIGENTE';
+        });
+        
+        if (empty($cuotasVigentes)) {
+            // Si no hay vigentes, buscar morosas
+            $cuotasVigentes = array_filter($cuotas, function ($cuota) {
+                $estado = strtoupper($cuota['Estado'] ?? '');
+                return in_array($estado, ['MOROSO', 'PENDIENTE']);
+            });
+        }
+        
+        if (empty($cuotasVigentes)) {
+            return '<p style="color: #16a34a; font-style: italic;">✓ No hay cuotas pendientes.</p>';
+        }
+        
+        // Ordenar por fecha de vencimiento y tomar la primera
+        usort($cuotasVigentes, function ($a, $b) {
+            return strtotime($a['Vencimiento'] ?? '9999-12-31') - strtotime($b['Vencimiento'] ?? '9999-12-31');
+        });
+        
+        $cuota = reset($cuotasVigentes);
+        
+        $contrato = $cuota['Contrato'] ?? '-';
+        $numeroCuota = $cuota['Cuota'] ?? '-';
+        $monto = isset($cuota['Monto']) ? '$' . number_format((int) $cuota['Monto'], 0, ',', '.') : '-';
+        $vencimiento = isset($cuota['Vencimiento']) ? $this->formatearFecha($cuota['Vencimiento']) : '-';
+        
+        $html = '
+        <table style="width: 100%; border-collapse: collapse; margin: 16px 0; font-family: Arial, sans-serif;">
+            <thead>
+                <tr style="background-color: #1e3a5f; color: white;">
+                    <th style="padding: 12px 8px; text-align: left; border: 1px solid #ddd;">Contrato</th>
+                    <th style="padding: 12px 8px; text-align: center; border: 1px solid #ddd;">Nro Cuota</th>
+                    <th style="padding: 12px 8px; text-align: right; border: 1px solid #ddd;">Monto</th>
+                    <th style="padding: 12px 8px; text-align: center; border: 1px solid #ddd;">Vencimiento</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr style="background-color: #f9f9f9;">
+                    <td style="padding: 10px 8px; border: 1px solid #ddd;">' . $contrato . '</td>
+                    <td style="padding: 10px 8px; text-align: center; border: 1px solid #ddd;">' . $numeroCuota . '</td>
+                    <td style="padding: 10px 8px; text-align: right; border: 1px solid #ddd; font-weight: bold;">' . $monto . '</td>
+                    <td style="padding: 10px 8px; text-align: center; border: 1px solid #ddd;">' . $vencimiento . '</td>
+                </tr>
             </tbody>
         </table>';
         
