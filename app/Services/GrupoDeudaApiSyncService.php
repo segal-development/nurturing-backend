@@ -1102,10 +1102,19 @@ class GrupoDeudaApiSyncService
     }
 
     /**
-     * Sincroniza clientes por fecha de ingreso (firmaron contrato hoy).
+     * Sincroniza clientes por fecha de ingreso para onboarding.
      *
-     * Siempre trae datos del día actual (00:00:00 a 23:59:59).
-     * No es sync incremental.
+     * Trae clientes que firmaron contrato hace exactamente 3 días.
+     * Esto permite que entren al flujo de onboarding el día 3 después de firmar.
+     *
+     * Arquitectura:
+     * - Día 0: Cliente firma → entra a Flujo Contratos Nuevos (email bienvenida)
+     * - Día 3: Este sync lo trae → entra a Flujo Onboarding
+     * - Día 3: Nodo 1 - "Soy tu abogado" (inmediato)
+     * - Día 4: Nodo 2 - "Cómo funciona" (+1 día)
+     * - Día 5: Nodo 3 - "No repactes" (+1 día)
+     * - Día 10: Nodo 4 - "Monitoreo" (+5 días)
+     * - Día 18: Nodo 5 - "Tabla cuotas" (+8 días)
      */
     public function syncClientesPorFechaIngreso(ExternalApiSource $source, ?int $userId = null): array
     {
@@ -1117,8 +1126,10 @@ class GrupoDeudaApiSyncService
             $this->cacheService->loadExistingProspectos();
             $this->loadProspectosEnFlujoActivo();
 
-            $desde = now()->startOfDay();
-            $hasta = now()->endOfDay();
+            // Traer clientes que firmaron hace exactamente 3 días
+            // para que entren al flujo de onboarding
+            $desde = now()->subDays(3)->startOfDay();
+            $hasta = now()->subDays(3)->endOfDay();
 
             Log::info('GrupoDeudaApiSyncService: Rango de fechas ClientesPorFechaIngreso', [
                 'desde' => $desde->format('Y-m-d H:i:s'),
@@ -1171,6 +1182,7 @@ class GrupoDeudaApiSyncService
         $body = [
             'desde' => $desde->format('Y-m-d H:i:s'),
             'hasta' => $hasta->format('Y-m-d H:i:s'),
+            'cuotas' => true, // Incluir info de cuotas para tabla en emails
         ];
 
         Log::info('GrupoDeudaApiSyncService: Llamando a API ClientesPorFechaIngreso', [
