@@ -226,6 +226,22 @@ Schedule::command('etapas:recover-stuck --minutes=30')
     });
 
 // ============================================================================
+// SINCRONIZACIÓN HORARIA DE CONTRATOS NUEVOS (Grupo Deudas)
+// Cada hora sincroniza contratos firmados desde el último sync.
+// Después del sync, dispara auto-asignación a flujos perpetuos (ver SyncGrupoDeudaCommand).
+// ============================================================================
+Schedule::command('sync:grupo-deuda --endpoint=contratos')
+    ->hourly()
+    ->name('grupo-deuda:sync-contratos-horario')
+    ->withoutOverlapping()
+    ->onSuccess(function () {
+        Log::info('Scheduler: Sincronización horaria de contratos nuevos completada');
+    })
+    ->onFailure(function () {
+        Log::error('Scheduler: Falló la sincronización horaria de contratos nuevos');
+    });
+
+// ============================================================================
 // SINCRONIZACIÓN SEMANAL DE APIs EXTERNAS (Informes Comerciales, Sysgal, etc.)
 // Todos los viernes a las 6:00 AM sincroniza prospectos desde APIs externas.
 // Usa sync incremental: solo trae registros nuevos desde el último sync.
