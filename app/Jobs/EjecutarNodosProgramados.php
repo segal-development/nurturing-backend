@@ -1032,6 +1032,20 @@ class EjecutarNodosProgramados implements ShouldQueue
                 'fecha_proximo_nodo' => null,
             ]);
 
+            // Marcar todos los prospectos de esta ejecución como completados
+            $prospectosCompletados = \App\Models\ProspectoEnFlujo::where('flujo_id', $ejecucion->flujo_id)
+                ->whereIn('prospecto_id', $ejecucion->prospectos_ids ?? [])
+                ->where('completado', false)
+                ->update([
+                    'completado' => true,
+                    'estado' => 'completado',
+                ]);
+
+            Log::info('EjecutarNodosProgramados: Prospectos marcados como completados', [
+                'ejecucion_id' => $ejecucion->id,
+                'prospectos_completados' => $prospectosCompletados,
+            ]);
+
             return;
         }
 
