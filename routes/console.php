@@ -242,6 +242,22 @@ Schedule::command('sync:grupo-deuda --endpoint=contratos')
     });
 
 // ============================================================================
+// SINCRONIZACIÓN DIARIA DE CLIENTES POR FECHA INGRESO (Grupo Deudas)
+// Todos los días a las 7:00 AM trae clientes que firmaron hace 3 días.
+// Después del sync, dispara auto-asignación a flujos de onboarding.
+// ============================================================================
+Schedule::command('sync:grupo-deuda --endpoint=clientes-ingreso')
+    ->dailyAt('07:00')
+    ->name('grupo-deuda:sync-clientes-ingreso-diario')
+    ->withoutOverlapping()
+    ->onSuccess(function () {
+        Log::info('Scheduler: Sincronización diaria de clientes ingreso completada');
+    })
+    ->onFailure(function () {
+        Log::error('Scheduler: Falló la sincronización diaria de clientes ingreso');
+    });
+
+// ============================================================================
 // SINCRONIZACIÓN SEMANAL DE APIs EXTERNAS (Informes Comerciales, Sysgal, etc.)
 // Todos los viernes a las 6:00 AM sincroniza prospectos desde APIs externas.
 // Usa sync incremental: solo trae registros nuevos desde el último sync.

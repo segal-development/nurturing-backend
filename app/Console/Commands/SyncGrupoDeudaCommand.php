@@ -120,8 +120,13 @@ class SyncGrupoDeudaCommand extends Command
                 $source->last_synced_at = $originalLastSyncedAt;
             }
 
-            // Disparar asignación automática solo para contratos nuevos (sync horario)
-            if ($endpoint === GrupoDeudaApiSyncService::ENDPOINT_CONTRATOS_NUEVOS && $resultado['nuevos'] > 0) {
+            // Disparar asignación automática para contratos nuevos y clientes ingreso
+            $endpointsConAutoAsignar = [
+                GrupoDeudaApiSyncService::ENDPOINT_CONTRATOS_NUEVOS,
+                GrupoDeudaApiSyncService::ENDPOINT_CLIENTES_INGRESO,
+            ];
+            
+            if (in_array($endpoint, $endpointsConAutoAsignar) && $resultado['nuevos'] > 0) {
                 $this->info('Disparando asignación automática a flujos...');
                 \App\Jobs\AsignarNuevosProspectosAFlujoJob::dispatch();
             }
