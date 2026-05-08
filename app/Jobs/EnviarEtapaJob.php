@@ -386,21 +386,49 @@ class EnviarEtapaJob implements ShouldQueue
     private function obtenerContenidoMensaje(): array
     {
         $tipoMensaje = $this->stage['tipo_mensaje'] ?? 'email';
-        $stageId = $this->stage['id'] ?? null;
+        $plantillaType = $this->stage['plantilla_type'] ?? 'inline';
 
-        if ($stageId) {
-            $flujoEtapa = FlujoEtapa::find($stageId);
+        // Si usa plantilla de referencia, obtener de la base de datos
+        if ($plantillaType === 'reference') {
+            // Para tipo 'ambos' o 'email', usar plantilla_id_email si existe
+            $plantillaId = ($tipoMensaje === 'email' || $tipoMensaje === 'ambos')
+                ? ($this->stage['plantilla_id_email'] ?? $this->stage['plantilla_id'] ?? null)
+                : ($this->stage['plantilla_id'] ?? null);
 
-            if ($flujoEtapa && $flujoEtapa->usaPlantillaReferencia()) {
-                Log::info('EnviarEtapaJob: Usando plantilla de referencia', [
-                    'stage_id' => $stageId,
-                    'plantilla_id' => $flujoEtapa->plantilla_id,
+            if ($plantillaId) {
+                $plantilla = \App\Models\Plantilla::find($plantillaId);
+
+                if ($plantilla) {
+                    Log::info('EnviarEtapaJob: Usando plantilla de referencia', [
+                        'stage_id' => $this->stage['id'] ?? null,
+                        'plantilla_id' => $plantillaId,
+                        'plantilla_nombre' => $plantilla->nombre,
+                        'tipo_mensaje' => $tipoMensaje,
+                    ]);
+
+                    if ($plantilla->esEmail()) {
+                        return [
+                            'contenido' => $plantilla->generarPreview() ?? '',
+                            'asunto' => $plantilla->asunto,
+                            'es_html' => true,
+                        ];
+                    } else {
+                        return [
+                            'contenido' => $plantilla->contenido ?? '',
+                            'asunto' => null,
+                            'es_html' => false,
+                        ];
+                    }
+                }
+
+                Log::warning('EnviarEtapaJob: Plantilla no encontrada', [
+                    'plantilla_id' => $plantillaId,
+                    'stage_id' => $this->stage['id'] ?? null,
                 ]);
-
-                return $flujoEtapa->obtenerContenidoParaEnvio($tipoMensaje);
             }
         }
 
+        // Fallback: contenido inline
         $contenido = $this->stage['plantilla_mensaje'] ?? $this->stage['data']['contenido'] ?? '';
         $esHtml = $this->detectarSiEsHtml($contenido);
 
