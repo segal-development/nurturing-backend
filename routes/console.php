@@ -243,10 +243,12 @@ Schedule::command('sync:grupo-deuda --endpoint=contratos')
 
 // ============================================================================
 // SINCRONIZACIÓN DIARIA DE CLIENTES POR FECHA INGRESO (Grupo Deudas)
-// Todos los días a las 7:00 AM trae clientes que firmaron hace 3 días.
+// De lunes a viernes a las 7:00 AM trae clientes que firmaron hace 3 días.
 // Después del sync, dispara auto-asignación a flujos de onboarding.
+// Inicia: Lunes 11 de mayo 2026
 // ============================================================================
 Schedule::command('sync:grupo-deuda --endpoint=clientes-ingreso')
+    ->weekdays()
     ->dailyAt('07:00')
     ->name('grupo-deuda:sync-clientes-ingreso-diario')
     ->withoutOverlapping()
