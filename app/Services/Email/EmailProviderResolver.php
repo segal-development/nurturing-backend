@@ -8,11 +8,13 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Resolves which email service to use with configurable primary provider and automatic fallback.
+ * Resolves which email service to use based on prospect type and provider health.
  *
- * Configuration via EMAIL_PRIMARY_PROVIDER env variable:
- * - 'athena' (default): Uses SMTP (Athena) as primary, Certificada as fallback
- * - 'certificada': Uses Certificada as primary, SMTP (Athena) as fallback
+ * Routing Rules:
+ * 1. IC prospects (lote starts with "IC_") → ALWAYS Certificada (business requirement)
+ * 2. All other prospects → Based on EMAIL_PRIMARY_PROVIDER config:
+ *    - 'athena' (default): Uses SMTP (Athena) as primary, Certificada as fallback
+ *    - 'certificada': Uses Certificada as primary, SMTP (Athena) as fallback
  *
  * Fallback Logic:
  * - If primary provider is unhealthy, automatically switches to fallback
@@ -33,7 +35,7 @@ class EmailProviderResolver
     ) {}
 
     /**
-     * Get the configured primary provider.
+     * Get the configured primary provider for non-IC prospects.
      * 
      * @return 'athena'|'certificada'
      */
@@ -55,12 +57,18 @@ class EmailProviderResolver
     /**
      * Resolve the appropriate email service for a prospect.
      * 
-     * Uses configured primary provider with automatic fallback:
-     * - Primary: athena (SMTP) or certificada based on EMAIL_PRIMARY_PROVIDER
-     * - Fallback: the other provider if primary is unhealthy
+     * Priority:
+     * 1. IC prospects → ALWAYS Certificada (with Athena fallback if unhealthy)
+     * 2. Other prospects → Based on EMAIL_PRIMARY_PROVIDER config
      */
     public function resolve(Prospecto $prospecto): EmailServiceInterface
     {
+        // IC prospects MUST use Certificada (business requirement)
+        if ($this->isICProspect($prospecto)) {
+            return $this->resolveForICProspect($prospecto);
+        }
+
+        // All other prospects use configured primary provider
         $primary = $this->getPrimaryProvider();
 
         if ($primary === 'athena') {
@@ -68,6 +76,36 @@ class EmailProviderResolver
         }
 
         return $this->resolveWithCertificadaAsPrimary($prospecto);
+    }
+
+    /**
+     * Resolve for IC prospects - Certificada is required, Athena is fallback.
+     */
+    private function resolveForICProspect(Prospecto $prospecto): EmailServiceInterface
+    {
+        if ($this->isCertificadaHealthy()) {
+            return $this->certificadaService;
+        }
+
+        // Fallback to Athena only if Certificada is down
+        Log::warning('EmailProviderResolver: Certificada unhealthy for IC prospect, falling back to Athena', [
+            'prospecto_id' => $prospecto->id,
+            'source' => 'ic_lote',
+            'reason' => $this->getCertificadaUnhealthyReason(),
+        ]);
+
+        if ($this->isAthenaHealthy()) {
+            return $this->smtpService;
+        }
+
+        // Both unhealthy - try Certificada anyway (it's required for IC)
+        Log::error('EmailProviderResolver: Both providers unhealthy for IC prospect, attempting Certificada anyway', [
+            'prospecto_id' => $prospecto->id,
+            'certificada_reason' => $this->getCertificadaUnhealthyReason(),
+            'athena_reason' => $this->getAthenaUnhealthyReason(),
+        ]);
+
+        return $this->certificadaService;
     }
 
     /**
@@ -137,6 +175,18 @@ class EmailProviderResolver
      */
     public function getProviderName(Prospecto $prospecto): string
     {
+        // IC prospects always try Certificada first
+        if ($this->isICProspect($prospecto)) {
+            if ($this->isCertificadaHealthy()) {
+                return 'certificada';
+            }
+            if ($this->isAthenaHealthy()) {
+                return 'athena';
+            }
+            return 'certificada'; // Both unhealthy, will try certificada for IC
+        }
+
+        // Other prospects use configured primary
         $primary = $this->getPrimaryProvider();
 
         if ($primary === 'athena') {
@@ -157,6 +207,23 @@ class EmailProviderResolver
             return 'athena';
         }
         return 'certificada'; // Both unhealthy, will try certificada
+    }
+
+    /**
+     * Check if a prospect belongs to an IC lote (must use Certificada).
+     */
+    private function isICProspect(Prospecto $prospecto): bool
+    {
+        // Load the relationship if not already loaded to avoid N+1
+        if (! $prospecto->relationLoaded('importacion')) {
+            $prospecto->load('importacion.lote');
+        } elseif ($prospecto->importacion && ! $prospecto->importacion->relationLoaded('lote')) {
+            $prospecto->importacion->load('lote');
+        }
+
+        $loteName = $prospecto->importacion?->lote?->nombre ?? '';
+
+        return str_starts_with($loteName, 'IC_');
     }
 
     /**
