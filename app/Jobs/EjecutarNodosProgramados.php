@@ -1020,19 +1020,10 @@ class EjecutarNodosProgramados implements ShouldQueue
 
         // ✅ VERIFICAR SI ES UN NODO FINAL (end-*)
         if (str_starts_with($siguienteNodoId, 'end-')) {
-            Log::info('EjecutarNodosProgramados: Nodo final alcanzado, completando ejecución', [
-                'ejecucion_id' => $ejecucion->id,
-                'end_node_id' => $siguienteNodoId,
-            ]);
+            $flujo = $ejecucion->flujo;
+            $esPerpetuo = $flujo->auto_asignar_nuevos ?? false;
 
-            $ejecucion->update([
-                'estado' => 'completed',
-                'fecha_fin' => now(),
-                'proximo_nodo' => null,
-                'fecha_proximo_nodo' => null,
-            ]);
-
-            // Marcar todos los prospectos de esta ejecución como completados
+            // Marcar los prospectos de ESTA ejecución como completados
             $prospectosCompletados = \App\Models\ProspectoEnFlujo::where('flujo_id', $ejecucion->flujo_id)
                 ->whereIn('prospecto_id', $ejecucion->prospectos_ids ?? [])
                 ->where('completado', false)
@@ -1041,10 +1032,37 @@ class EjecutarNodosProgramados implements ShouldQueue
                     'estado' => 'completado',
                 ]);
 
-            Log::info('EjecutarNodosProgramados: Prospectos marcados como completados', [
+            Log::info('EjecutarNodosProgramados: Prospectos de cohorte marcados como completados', [
                 'ejecucion_id' => $ejecucion->id,
                 'prospectos_completados' => $prospectosCompletados,
+                'es_perpetuo' => $esPerpetuo,
             ]);
+
+            if ($esPerpetuo) {
+                // Flujo perpetuo: la ejecución queda "waiting" esperando nuevos prospectos
+                $ejecucion->update([
+                    'estado' => 'waiting',
+                    'proximo_nodo' => null,
+                    'fecha_proximo_nodo' => null,
+                ]);
+
+                Log::info('EjecutarNodosProgramados: Flujo perpetuo en espera de nuevos prospectos', [
+                    'ejecucion_id' => $ejecucion->id,
+                    'flujo_id' => $flujo->id,
+                ]);
+            } else {
+                // Flujo normal: marcar como completado
+                $ejecucion->update([
+                    'estado' => 'completed',
+                    'fecha_fin' => now(),
+                    'proximo_nodo' => null,
+                    'fecha_proximo_nodo' => null,
+                ]);
+
+                Log::info('EjecutarNodosProgramados: Ejecución completada', [
+                    'ejecucion_id' => $ejecucion->id,
+                ]);
+            }
 
             return;
         }
