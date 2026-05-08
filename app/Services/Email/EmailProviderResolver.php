@@ -8,18 +8,16 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Resolves which email service to use based on prospect characteristics.
+ * Resolves which email service to use with configurable primary provider and automatic fallback.
  *
- * Implements the Strategy Pattern to route emails dynamically:
- * - Grupo Deudas prospects (metadata.source = 'grupo_deuda') use CertificadaEmailService
- * - IC prospects (lote name starts with "IC_") use CertificadaEmailService
- * - All other prospects use SmtpEmailService
- * - Falls back to SMTP if Certificada is unavailable or unhealthy
+ * Configuration via EMAIL_PRIMARY_PROVIDER env variable:
+ * - 'athena' (default): Uses SMTP (Athena) as primary, Certificada as fallback
+ * - 'certificada': Uses Certificada as primary, SMTP (Athena) as fallback
  *
- * Health Check Integration:
- * - Checks cache key 'certificada_health_status' set by VerificarSaludApiJob
- * - If Certificada is unhealthy, automatically falls back to SMTP
- * - When Certificada recovers, automatically switches back
+ * Fallback Logic:
+ * - If primary provider is unhealthy, automatically switches to fallback
+ * - Health status is tracked via cache keys set by VerificarSaludApiJob
+ * - When primary recovers, automatically switches back
  *
  * @see \App\Services\EnvioService::enviarEmailAProspecto()
  * @see \App\Jobs\VerificarSaludApiJob
@@ -27,6 +25,7 @@ use Illuminate\Support\Facades\Log;
 class EmailProviderResolver
 {
     private const CERTIFICADA_HEALTH_CACHE_KEY = 'certificada_health_status';
+    private const ATHENA_HEALTH_CACHE_KEY = 'athena_smtp_health_status';
 
     public function __construct(
         private SmtpEmailService $smtpService,
@@ -34,51 +33,140 @@ class EmailProviderResolver
     ) {}
 
     /**
+     * Get the configured primary provider.
+     * 
+     * @return 'athena'|'certificada'
+     */
+    private function getPrimaryProvider(): string
+    {
+        $configured = config('services.email.primary_provider', 'athena');
+        
+        // Validate and default to athena if invalid
+        if (!in_array($configured, ['athena', 'certificada'], true)) {
+            Log::warning('EmailProviderResolver: Invalid EMAIL_PRIMARY_PROVIDER value, defaulting to athena', [
+                'configured' => $configured,
+            ]);
+            return 'athena';
+        }
+
+        return $configured;
+    }
+
+    /**
      * Resolve the appropriate email service for a prospect.
      * 
-     * Priority:
-     * 1. Grupo Deudas prospects → Certificada (with SMTP fallback)
-     * 2. IC prospects → Certificada (with SMTP fallback)
-     * 3. All others → SMTP
+     * Uses configured primary provider with automatic fallback:
+     * - Primary: athena (SMTP) or certificada based on EMAIL_PRIMARY_PROVIDER
+     * - Fallback: the other provider if primary is unhealthy
      */
     public function resolve(Prospecto $prospecto): EmailServiceInterface
     {
-        // Check if prospect should use Certificada
-        if ($this->shouldUseCertificada($prospecto)) {
-            // Check if Certificada is available AND healthy
-            if ($this->isCertificadaHealthy()) {
-                return $this->certificadaService;
-            }
+        $primary = $this->getPrimaryProvider();
 
-            // Fallback to SMTP if Certificada is not healthy
-            Log::warning('EmailProviderResolver: Certificada unhealthy, falling back to SMTP', [
-                'prospecto_id' => $prospecto->id,
-                'source' => $this->getProspectoSource($prospecto),
-                'reason' => $this->getCertificadaUnhealthyReason(),
-            ]);
+        if ($primary === 'athena') {
+            return $this->resolveWithAthenaAsPrimary($prospecto);
         }
+
+        return $this->resolveWithCertificadaAsPrimary($prospecto);
+    }
+
+    /**
+     * Resolve with Athena (SMTP) as primary, Certificada as fallback.
+     */
+    private function resolveWithAthenaAsPrimary(Prospecto $prospecto): EmailServiceInterface
+    {
+        // Try Athena first
+        if ($this->isAthenaHealthy()) {
+            return $this->smtpService;
+        }
+
+        // Fallback to Certificada
+        Log::warning('EmailProviderResolver: Athena unhealthy, falling back to Certificada', [
+            'prospecto_id' => $prospecto->id,
+            'source' => $this->getProspectoSource($prospecto),
+            'reason' => $this->getAthenaUnhealthyReason(),
+        ]);
+
+        if ($this->isCertificadaHealthy()) {
+            return $this->certificadaService;
+        }
+
+        // Both unhealthy - try Athena anyway (might recover)
+        Log::error('EmailProviderResolver: Both providers unhealthy, attempting Athena anyway', [
+            'prospecto_id' => $prospecto->id,
+            'athena_reason' => $this->getAthenaUnhealthyReason(),
+            'certificada_reason' => $this->getCertificadaUnhealthyReason(),
+        ]);
 
         return $this->smtpService;
     }
 
     /**
-     * Determine the provider name for a prospect (for logging/storage).
+     * Resolve with Certificada as primary, Athena (SMTP) as fallback.
      */
-    public function getProviderName(Prospecto $prospecto): string
+    private function resolveWithCertificadaAsPrimary(Prospecto $prospecto): EmailServiceInterface
     {
-        if ($this->shouldUseCertificada($prospecto) && $this->isCertificadaHealthy()) {
-            return 'certificada';
+        // Try Certificada first
+        if ($this->isCertificadaHealthy()) {
+            return $this->certificadaService;
         }
 
-        return 'smtp';
+        // Fallback to Athena
+        Log::warning('EmailProviderResolver: Certificada unhealthy, falling back to Athena', [
+            'prospecto_id' => $prospecto->id,
+            'source' => $this->getProspectoSource($prospecto),
+            'reason' => $this->getCertificadaUnhealthyReason(),
+        ]);
+
+        if ($this->isAthenaHealthy()) {
+            return $this->smtpService;
+        }
+
+        // Both unhealthy - try Certificada anyway (might recover)
+        Log::error('EmailProviderResolver: Both providers unhealthy, attempting Certificada anyway', [
+            'prospecto_id' => $prospecto->id,
+            'certificada_reason' => $this->getCertificadaUnhealthyReason(),
+            'athena_reason' => $this->getAthenaUnhealthyReason(),
+        ]);
+
+        return $this->certificadaService;
     }
 
     /**
-     * Check if a prospect should use Certificada based on source or lote.
+     * Determine the provider name that will be used (for logging/storage).
      */
-    private function shouldUseCertificada(Prospecto $prospecto): bool
+    public function getProviderName(Prospecto $prospecto): string
     {
-        return $this->isGrupoDeudaProspect($prospecto) || $this->isICProspect($prospecto);
+        $primary = $this->getPrimaryProvider();
+
+        if ($primary === 'athena') {
+            if ($this->isAthenaHealthy()) {
+                return 'athena';
+            }
+            if ($this->isCertificadaHealthy()) {
+                return 'certificada';
+            }
+            return 'athena'; // Both unhealthy, will try athena
+        }
+
+        // Primary is certificada
+        if ($this->isCertificadaHealthy()) {
+            return 'certificada';
+        }
+        if ($this->isAthenaHealthy()) {
+            return 'athena';
+        }
+        return 'certificada'; // Both unhealthy, will try certificada
+    }
+
+    /**
+     * Check if Athena (SMTP) service is healthy.
+     */
+    private function isAthenaHealthy(): bool
+    {
+        $healthStatus = Cache::get(self::ATHENA_HEALTH_CACHE_KEY, ['healthy' => true]);
+
+        return $healthStatus['healthy'] ?? true;
     }
 
     /**
@@ -98,6 +186,16 @@ class EmailProviderResolver
     }
 
     /**
+     * Get reason why Athena is unhealthy (for logging).
+     */
+    private function getAthenaUnhealthyReason(): string
+    {
+        $healthStatus = Cache::get(self::ATHENA_HEALTH_CACHE_KEY, ['healthy' => true]);
+
+        return $healthStatus['reason'] ?? 'Unknown';
+    }
+
+    /**
      * Get reason why Certificada is unhealthy (for logging).
      */
     private function getCertificadaUnhealthyReason(): string
@@ -112,54 +210,61 @@ class EmailProviderResolver
     }
 
     /**
-     * Check if a prospect is from Grupo Deudas API sync.
-     * 
-     * Grupo Deudas prospects have metadata.source = 'grupo_deuda'
-     * This includes: Contratos Nuevos, Cuotas por Vencer, Cuotas Vencidas, Clientes Ingreso
-     */
-    private function isGrupoDeudaProspect(Prospecto $prospecto): bool
-    {
-        $metadata = $prospecto->metadata;
-
-        if (! is_array($metadata)) {
-            return false;
-        }
-
-        return ($metadata['source'] ?? null) === 'grupo_deuda';
-    }
-
-    /**
-     * Check if a prospect belongs to an IC lote.
-     */
-    private function isICProspect(Prospecto $prospecto): bool
-    {
-        // Load the relationship if not already loaded to avoid N+1
-        if (! $prospecto->relationLoaded('importacion')) {
-            $prospecto->load('importacion.lote');
-        } elseif ($prospecto->importacion && ! $prospecto->importacion->relationLoaded('lote')) {
-            $prospecto->importacion->load('lote');
-        }
-
-        $loteName = $prospecto->importacion?->lote?->nombre ?? '';
-
-        return str_starts_with($loteName, 'IC_');
-    }
-
-    /**
      * Get the source identifier for a prospect (for logging).
      */
     private function getProspectoSource(Prospecto $prospecto): string
     {
-        if ($this->isGrupoDeudaProspect($prospecto)) {
-            $endpoint = $prospecto->metadata['endpoint'] ?? 'unknown';
+        $metadata = $prospecto->metadata;
+
+        if (is_array($metadata) && ($metadata['source'] ?? null) === 'grupo_deuda') {
+            $endpoint = $metadata['endpoint'] ?? 'unknown';
             return "grupo_deuda:{$endpoint}";
         }
 
-        if ($this->isICProspect($prospecto)) {
+        // Check IC lote
+        if (! $prospecto->relationLoaded('importacion')) {
+            $prospecto->load('importacion.lote');
+        }
+
+        $loteName = $prospecto->importacion?->lote?->nombre ?? '';
+        if (str_starts_with($loteName, 'IC_')) {
             return 'ic_lote';
         }
 
         return 'other';
+    }
+
+    /**
+     * Mark Athena (SMTP) as unhealthy (called when send fails).
+     * 
+     * @param string $reason Reason for marking unhealthy
+     * @param int $ttlSeconds How long to keep unhealthy status (default: 5 minutes)
+     */
+    public static function markAthenaUnhealthy(string $reason, int $ttlSeconds = 300): void
+    {
+        Cache::put(self::ATHENA_HEALTH_CACHE_KEY, [
+            'healthy' => false,
+            'reason' => $reason,
+            'marked_at' => now()->toIso8601String(),
+        ], $ttlSeconds);
+
+        Log::warning('EmailProviderResolver: Athena marked as unhealthy', [
+            'reason' => $reason,
+            'ttl_seconds' => $ttlSeconds,
+        ]);
+    }
+
+    /**
+     * Mark Athena (SMTP) as healthy.
+     */
+    public static function markAthenaHealthy(): void
+    {
+        Cache::put(self::ATHENA_HEALTH_CACHE_KEY, [
+            'healthy' => true,
+            'checked_at' => now()->toIso8601String(),
+        ], 600); // 10 minutes TTL
+
+        Log::info('EmailProviderResolver: Athena marked as healthy');
     }
 
     /**

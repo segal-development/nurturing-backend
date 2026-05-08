@@ -53,4 +53,18 @@ return [
         'timeout' => env('CERTIFICADA_TIMEOUT', 30),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Email Provider Configuration
+    |--------------------------------------------------------------------------
+    |
+    | Configure which email provider to use as primary with automatic fallback.
+    | - 'athena': Uses SMTP (Athena) as primary, Certificada as fallback
+    | - 'certificada': Uses Certificada as primary, SMTP (Athena) as fallback
+    |
+    */
+    'email' => [
+        'primary_provider' => env('EMAIL_PRIMARY_PROVIDER', 'athena'),
+    ],
+
 ];
