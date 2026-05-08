@@ -293,7 +293,7 @@ class EjecutarNodosProgramados implements ShouldQueue
             }
         }
 
-        if (in_array($tipoNodo, ['email', 'sms', 'stage'])) {
+        if (in_array($tipoNodo, ['email', 'sms', 'stage', 'ambos'])) {
             $this->ejecutarNodoEnvio($ejecucion, $etapaExistente, $stage, $branches, $envioService);
         } elseif ($tipoNodo === 'condition') {
             $this->ejecutarNodoCondicion($ejecucion, $etapaExistente, $stage, $branches);

@@ -309,7 +309,7 @@ class AsignarNuevosProspectosAFlujoJob implements ShouldQueue
             if (! $primeraConexion) {
                 // Fallback: primera etapa por orden
                 $primeraEtapa = collect($stages)
-                    ->filter(fn ($s) => in_array($s['type'] ?? '', ['email', 'sms', 'stage']))
+                    ->filter(fn ($s) => in_array($s['type'] ?? '', ['email', 'sms', 'stage', 'ambos']))
                     ->sortBy('orden')
                     ->first();
 
@@ -451,7 +451,7 @@ class AsignarNuevosProspectosAFlujoJob implements ShouldQueue
             if ($stage) {
                 $type = $stage['type'] ?? null;
 
-                if (in_array($type, ['email', 'sms', 'stage', 'condition', 'end'])) {
+                if (in_array($type, ['email', 'sms', 'stage', 'ambos', 'condition', 'end'])) {
                     $orden[] = $nodoActual;
                 }
             }

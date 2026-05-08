@@ -178,7 +178,7 @@ class StageOrderResolver
         if (! $startNodeId) {
             // No start node, try to find first executable stage by orden
             $firstExecutable = collect($stages)
-                ->filter(fn ($s) => in_array($s['type'] ?? '', ['email', 'sms', 'stage']))
+                ->filter(fn ($s) => in_array($s['type'] ?? '', ['email', 'sms', 'stage', 'ambos']))
                 ->sortBy('orden')
                 ->first();
 
@@ -194,7 +194,7 @@ class StageOrderResolver
 
         // Fallback: first executable stage
         $firstExecutable = collect($stages)
-            ->filter(fn ($s) => in_array($s['type'] ?? '', ['email', 'sms', 'stage']))
+            ->filter(fn ($s) => in_array($s['type'] ?? '', ['email', 'sms', 'stage', 'ambos']))
             ->sortBy('orden')
             ->first();
 
@@ -219,9 +219,9 @@ class StageOrderResolver
             if ($stage) {
                 $type = $stage['type'] ?? null;
 
-                // Include executable stages (email, sms, stage) and end nodes
+                // Include executable stages (email, sms, stage, ambos) and end nodes
                 // Condition nodes are skipped (they're routing, not stages)
-                if (in_array($type, ['email', 'sms', 'stage', 'end'])) {
+                if (in_array($type, ['email', 'sms', 'stage', 'ambos', 'end'])) {
                     $orden[] = $nodoActual;
                 }
             }
@@ -237,7 +237,7 @@ class StageOrderResolver
     }
 
     /**
-     * Filter stage order to only executable stages (email, sms, stage).
+     * Filter stage order to only executable stages (email, sms, stage, ambos).
      * Excludes 'end' nodes as they're not actual stages to execute.
      *
      * @return string[] Array of executable node_ids
@@ -251,7 +251,7 @@ class StageOrderResolver
             $stage = collect($stages)->firstWhere('id', $nodeId);
             $type = $stage['type'] ?? null;
 
-            return in_array($type, ['email', 'sms', 'stage']);
+            return in_array($type, ['email', 'sms', 'stage', 'ambos']);
         }));
     }
 }

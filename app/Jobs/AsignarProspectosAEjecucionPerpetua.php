@@ -264,7 +264,7 @@ class AsignarProspectosAEjecucionPerpetua implements ShouldQueue
             if ($stage) {
                 $type = $stage['type'] ?? null;
 
-                if (in_array($type, ['email', 'sms', 'stage', 'end'])) {
+                if (in_array($type, ['email', 'sms', 'stage', 'ambos', 'end'])) {
                     $orden[] = $nodoActual;
                 }
             }

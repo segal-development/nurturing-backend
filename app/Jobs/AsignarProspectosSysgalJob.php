@@ -240,7 +240,7 @@ class AsignarProspectosSysgalJob implements ShouldQueue
             if (! $primeraConexion) {
                 // Fallback: primera etapa por orden
                 $primeraEtapa = collect($stages)
-                    ->filter(fn ($s) => in_array($s['type'] ?? '', ['email', 'sms', 'stage']))
+                    ->filter(fn ($s) => in_array($s['type'] ?? '', ['email', 'sms', 'stage', 'ambos']))
                     ->sortBy('orden')
                     ->first();
 
@@ -386,7 +386,7 @@ class AsignarProspectosSysgalJob implements ShouldQueue
 
             // Solo agregar nodos ejecutables (no start, no end)
             $tipo = $stage['type'] ?? null;
-            if (in_array($tipo, ['email', 'sms', 'stage', 'condition'])) {
+            if (in_array($tipo, ['email', 'sms', 'stage', 'ambos', 'condition'])) {
                 $orden[] = $nodoActual;
             }
 

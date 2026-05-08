@@ -251,11 +251,12 @@ class FlujoEjecucionController extends Controller
             ]);
 
             // ✅ CREAR REGISTROS PARA TODAS LAS ETAPAS DEL FLUJO
-            // Filtrar solo etapas ejecutables (email, sms, stage, condition, end)
+            // Filtrar solo etapas ejecutables (email, sms, stage, ambos, condition, end)
+            // 'ambos' is legacy - new flows use 'stage' with tipo_mensaje='ambos'
             $etapasEjecutables = collect($stages)->filter(function ($stage) {
                 $type = $stage['type'] ?? null;
 
-                return in_array($type, ['email', 'sms', 'stage', 'condition', 'end']);
+                return in_array($type, ['email', 'sms', 'stage', 'ambos', 'condition', 'end']);
             });
 
             // Construir el orden de ejecución siguiendo las conexiones
@@ -1427,7 +1428,7 @@ class FlujoEjecucionController extends Controller
                     'stage_keys' => array_keys($stage),
                 ]);
 
-                if (in_array($type, ['email', 'sms', 'stage', 'condition', 'end'])) {
+                if (in_array($type, ['email', 'sms', 'stage', 'ambos', 'condition', 'end'])) {
                     $orden[] = $nodoActual;
                     Log::info('construirOrdenEjecucion: Nodo agregado al orden', ['node_id' => $nodoActual]);
                 } else {
