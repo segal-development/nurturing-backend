@@ -278,15 +278,22 @@ class EnviarEtapaJob implements ShouldQueue
         $tipoMensaje = $this->stage['tipo_mensaje'] ?? 'email';
         $jobs = [];
 
+        // Para tipo "ambos", obtener contenido de SMS también
+        $contenidoSms = null;
+        if ($tipoMensaje === 'ambos') {
+            $contenidoSms = $this->obtenerContenidoSms();
+        }
+
         foreach ($prospectosEnFlujo as $prospectoEnFlujo) {
-            $job = $this->createJobForProspecto(
+            $createdJobs = $this->createJobsForProspecto(
                 prospectoEnFlujo: $prospectoEnFlujo,
-                contenidoData: $contenidoData,
+                contenidoEmail: $contenidoData,
+                contenidoSms: $contenidoSms,
                 tipoMensaje: $tipoMensaje,
                 flujoId: $ejecucion->flujo_id
             );
 
-            if ($job) {
+            foreach ($createdJobs as $job) {
                 $jobs[] = $job;
             }
         }
@@ -299,25 +306,100 @@ class EnviarEtapaJob implements ShouldQueue
         return $jobs;
     }
 
-    private function createJobForProspecto(ProspectoEnFlujo $prospectoEnFlujo, array $contenidoData, string $tipoMensaje, int $flujoId): ?ShouldQueue
-    {
+    /**
+     * Crea los jobs necesarios para un prospecto según el tipo de mensaje.
+     *
+     * @return array<ShouldQueue>
+     */
+    private function createJobsForProspecto(
+        ProspectoEnFlujo $prospectoEnFlujo,
+        array $contenidoEmail,
+        ?array $contenidoSms,
+        string $tipoMensaje,
+        int $flujoId
+    ): array {
+        $jobs = [];
+
+        // SMS only
         if ($tipoMensaje === 'sms') {
-            return new EnviarSmsEtapaProspectoJob(
+            $jobs[] = new EnviarSmsEtapaProspectoJob(
                 prospectoEnFlujoId: $prospectoEnFlujo->id,
-                contenido: $contenidoData['contenido'],
+                contenido: $contenidoEmail['contenido'], // En este caso contenidoEmail tiene el SMS
+                flujoId: $flujoId,
+                etapaEjecucionId: $this->etapaEjecucionId
+            );
+
+            return $jobs;
+        }
+
+        // Email (siempre para 'email' o 'ambos')
+        $jobs[] = new EnviarEmailEtapaProspectoJob(
+            prospectoEnFlujoId: $prospectoEnFlujo->id,
+            contenido: $contenidoEmail['contenido'],
+            asunto: $contenidoEmail['asunto'] ?? $this->stage['template']['asunto'] ?? 'Mensaje',
+            flujoId: $flujoId,
+            etapaEjecucionId: $this->etapaEjecucionId,
+            esHtml: $contenidoEmail['es_html']
+        );
+
+        // SMS adicional para tipo 'ambos'
+        if ($tipoMensaje === 'ambos' && $contenidoSms !== null) {
+            $jobs[] = new EnviarSmsEtapaProspectoJob(
+                prospectoEnFlujoId: $prospectoEnFlujo->id,
+                contenido: $contenidoSms['contenido'],
                 flujoId: $flujoId,
                 etapaEjecucionId: $this->etapaEjecucionId
             );
         }
 
-        return new EnviarEmailEtapaProspectoJob(
-            prospectoEnFlujoId: $prospectoEnFlujo->id,
-            contenido: $contenidoData['contenido'],
-            asunto: $contenidoData['asunto'] ?? $this->stage['template']['asunto'] ?? 'Mensaje',
-            flujoId: $flujoId,
-            etapaEjecucionId: $this->etapaEjecucionId,
-            esHtml: $contenidoData['es_html']
-        );
+        return $jobs;
+    }
+
+    /**
+     * Obtiene el contenido de la plantilla SMS para tipo 'ambos'.
+     */
+    private function obtenerContenidoSms(): ?array
+    {
+        $plantillaType = $this->stage['plantilla_type'] ?? 'inline';
+
+        if ($plantillaType === 'reference') {
+            $plantillaId = $this->stage['plantilla_id'] ?? null;
+
+            if ($plantillaId) {
+                $plantilla = \App\Models\Plantilla::find($plantillaId);
+
+                if ($plantilla && $plantilla->esSMS()) {
+                    Log::info('EnviarEtapaJob: Usando plantilla SMS de referencia', [
+                        'stage_id' => $this->stage['id'] ?? null,
+                        'plantilla_id' => $plantillaId,
+                        'plantilla_nombre' => $plantilla->nombre,
+                    ]);
+
+                    return [
+                        'contenido' => $plantilla->contenido ?? '',
+                        'asunto' => null,
+                        'es_html' => false,
+                    ];
+                }
+            }
+        }
+
+        // Fallback: contenido inline para SMS (si existe)
+        $contenido = $this->stage['plantilla_mensaje_sms'] ?? $this->stage['data']['contenido_sms'] ?? null;
+
+        if ($contenido) {
+            return [
+                'contenido' => $contenido,
+                'asunto' => null,
+                'es_html' => false,
+            ];
+        }
+
+        Log::warning('EnviarEtapaJob: No se encontró plantilla SMS para tipo ambos', [
+            'stage_id' => $this->stage['id'] ?? null,
+        ]);
+
+        return null;
     }
 
     private function dispatchBatch(array $jobs, FlujoEjecucion $ejecucion, FlujoEjecucionEtapa $etapaEjecucion, array $contenidoData): void
