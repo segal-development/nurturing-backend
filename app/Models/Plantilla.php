@@ -284,35 +284,55 @@ class Plantilla extends Model
         // El texto puede venir en 'texto' (desde JSON parseado) o 'contenido' (legacy)
         $texto = $comp['texto'] ?? $comp['contenido'] ?? '';
         $alineacion = $comp['alineacion'] ?? 'left';
-        $tamano = $comp['tamanio_fuente'] ?? $comp['tamano'] ?? 16;
-        $color = $comp['color'] ?? '#333333';
-        $negrita = $comp['negrita'] ?? false;
-        $italica = $comp['italica'] ?? false;
 
-        $textStyle = sprintf(
-            'font-family: Arial, Helvetica, sans-serif; font-size: %dpx; color: %s; line-height: 1.6; margin: 0; white-space: pre-line;%s%s',
-            $tamano,
-            $color,
-            $negrita ? ' font-weight: bold;' : ' font-weight: normal;',
-            $italica ? ' font-style: italic;' : ''
-        );
+        // Detectar si el texto ya contiene HTML (del editor WYSIWYG)
+        $esHtml = $this->detectarSiEsHtml($texto);
 
         $html = '<tr>';
         $html .= sprintf(
-            '<td align="%s" style="padding: %dpx %dpx;">',
+            '<td align="%s" style="padding: %dpx %dpx; font-family: Arial, Helvetica, sans-serif; font-size: 16px; color: #333333; line-height: 1.6;">',
             $alineacion,
             20, // padding vertical
             self::CONTENT_PADDING // padding horizontal
         );
-        $html .= sprintf(
-            '<p style="%s">%s</p>',
-            $textStyle,
-            nl2br(htmlspecialchars($texto))
-        );
+
+        if ($esHtml) {
+            // El texto ya tiene HTML formateado del editor WYSIWYG, no escapar
+            $html .= $texto;
+        } else {
+            // Texto plano legacy, aplicar estilos y escapar
+            $tamano = $comp['tamanio_fuente'] ?? $comp['tamano'] ?? 16;
+            $color = $comp['color'] ?? '#333333';
+            $negrita = $comp['negrita'] ?? false;
+            $italica = $comp['italica'] ?? false;
+
+            $textStyle = sprintf(
+                'font-family: Arial, Helvetica, sans-serif; font-size: %dpx; color: %s; line-height: 1.6; margin: 0;%s%s',
+                $tamano,
+                $color,
+                $negrita ? ' font-weight: bold;' : '',
+                $italica ? ' font-style: italic;' : ''
+            );
+
+            $html .= sprintf(
+                '<p style="%s">%s</p>',
+                $textStyle,
+                nl2br(htmlspecialchars($texto))
+            );
+        }
+
         $html .= '</td>';
         $html .= '</tr>';
 
         return $html;
+    }
+
+    /**
+     * Detecta si un string contiene HTML
+     */
+    private function detectarSiEsHtml(string $texto): bool
+    {
+        return preg_match('/<[a-z][\s\S]*>/i', $texto) === 1;
     }
 
     private function renderBoton(array $comp): string
