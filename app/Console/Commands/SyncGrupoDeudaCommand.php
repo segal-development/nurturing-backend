@@ -120,6 +120,12 @@ class SyncGrupoDeudaCommand extends Command
                 $source->last_synced_at = $originalLastSyncedAt;
             }
 
+            // Disparar asignación automática para flujos con auto_asignar_nuevos
+            if ($resultado['nuevos'] > 0) {
+                $this->info('Disparando asignación automática a flujos...');
+                \App\Jobs\AsignarNuevosProspectosAFlujoJob::dispatch();
+            }
+
             return Command::SUCCESS;
 
         } catch (\Exception $e) {
