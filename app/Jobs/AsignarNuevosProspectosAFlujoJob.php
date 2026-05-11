@@ -112,7 +112,10 @@ class AsignarNuevosProspectosAFlujoJob implements ShouldQueue
         if ($totalNuevos === 0) {
             Log::info("No hay prospectos nuevos para flujo {$flujo->id}");
 
-            return ['asignados' => 0, 'ejecucion_creada' => false];
+            // Para flujos perpetuos: verificar si hay prospectos pendientes sin ejecución activa
+            $ejecucionCreada = $this->verificarYCrearEjecucionPendiente($flujo, $configStructure);
+
+            return ['asignados' => 0, 'ejecucion_creada' => $ejecucionCreada];
         }
 
         Log::info("Encontrados {$totalNuevos} prospectos nuevos para flujo {$flujo->id}");
@@ -274,6 +277,47 @@ class AsignarNuevosProspectosAFlujoJob implements ShouldQueue
         }
 
         return $asignados;
+    }
+
+    /**
+     * Para flujos perpetuos: verifica si hay prospectos asignados pero sin ejecución activa.
+     * Si es así, crea una nueva ejecución para procesarlos.
+     */
+    private function verificarYCrearEjecucionPendiente(Flujo $flujo, array $configStructure): bool
+    {
+        // Solo para flujos perpetuos
+        if (! $flujo->auto_asignar_nuevos) {
+            return false;
+        }
+
+        // Verificar si hay una ejecución activa o en espera
+        $ejecucionActiva = FlujoEjecucion::where('flujo_id', $flujo->id)
+            ->whereIn('estado', ['in_progress', 'paused', 'waiting', 'pending'])
+            ->exists();
+
+        if ($ejecucionActiva) {
+            Log::info("Flujo perpetuo {$flujo->id} ya tiene ejecución activa");
+            return false;
+        }
+
+        // Buscar prospectos pendientes (asignados pero no completados)
+        $prospectosPendientes = \App\Models\ProspectoEnFlujo::where('flujo_id', $flujo->id)
+            ->where('completado', false)
+            ->where('cancelado', false)
+            ->pluck('prospecto_id')
+            ->toArray();
+
+        if (empty($prospectosPendientes)) {
+            Log::info("Flujo perpetuo {$flujo->id} no tiene prospectos pendientes");
+            return false;
+        }
+
+        Log::info("Flujo perpetuo tiene prospectos pendientes sin ejecución, creando ejecución", [
+            'flujo_id' => $flujo->id,
+            'prospectos_pendientes' => count($prospectosPendientes),
+        ]);
+
+        return $this->crearEjecucion($flujo, $prospectosPendientes, $configStructure);
     }
 
     /**
