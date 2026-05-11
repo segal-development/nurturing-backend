@@ -334,3 +334,20 @@ Schedule::job(new \App\Jobs\CatchUpProspectosJob)
     ->onFailure(function () {
         Log::error('Scheduler: Falló el catch-up de prospectos rezagados');
     });
+
+// ============================================================================
+// LIMPIEZA DIARIA DE PROSPECTOS COMPLETADOS EN FLUJOS PERPETUOS
+// Diariamente a las 3:00 AM elimina prospectos con completado=true
+// que llevan más de 1 día. Mantiene la tabla liviana para flujos perpetuos
+// que procesan muchos prospectos continuamente.
+// ============================================================================
+Schedule::job(new \App\Jobs\LimpiezaProspectosPerpetuosJob)
+    ->dailyAt('03:00')
+    ->name('limpieza:prospectos-perpetuos')
+    ->withoutOverlapping()
+    ->onSuccess(function () {
+        Log::info('Scheduler: Limpieza de prospectos perpetuos completada');
+    })
+    ->onFailure(function () {
+        Log::error('Scheduler: Falló la limpieza de prospectos perpetuos');
+    });

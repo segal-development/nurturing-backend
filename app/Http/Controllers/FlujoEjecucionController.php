@@ -241,6 +241,7 @@ class FlujoEjecucionController extends Controller
                 'fecha_inicio_programada' => $fechaInicioProgramada,
                 'fecha_inicio_real' => now(),
                 'estado' => 'in_progress',
+                'es_perpetuo' => $flujo->es_perpetuo ?? false,
                 'nodo_actual' => null,
                 'proximo_nodo' => $primeraEtapaId,
                 'fecha_proximo_nodo' => $fechaEjecucionPrimeraEtapa,

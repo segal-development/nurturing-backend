@@ -25,6 +25,7 @@ class Flujo extends Model
         'canal_envio',
         'activo',
         'auto_asignar_nuevos',
+        'es_perpetuo',
         'estado_procesamiento',
         'user_id',
         'metadata',
@@ -37,6 +38,7 @@ class Flujo extends Model
         return [
             'activo' => 'boolean',
             'auto_asignar_nuevos' => 'boolean',
+            'es_perpetuo' => 'boolean',
             'lotes_ids' => 'array',
             'nivel_deuda_target' => 'array',
             'metadata' => 'array',

@@ -286,7 +286,7 @@ class AsignarNuevosProspectosAFlujoJob implements ShouldQueue
     private function verificarYCrearEjecucionPendiente(Flujo $flujo, array $configStructure): bool
     {
         // Solo para flujos perpetuos
-        if (! $flujo->auto_asignar_nuevos) {
+        if (! $flujo->es_perpetuo) {
             return false;
         }
 
@@ -390,6 +390,7 @@ class AsignarNuevosProspectosAFlujoJob implements ShouldQueue
                 'fecha_inicio_programada' => $fechaInicio,
                 'fecha_inicio_real' => $fechaInicio,
                 'estado' => 'in_progress',
+                'es_perpetuo' => $flujo->es_perpetuo ?? false,
                 'nodo_actual' => null,
                 'proximo_nodo' => $primeraEtapaId,
                 'fecha_proximo_nodo' => $fechaEjecucionPrimeraEtapa,

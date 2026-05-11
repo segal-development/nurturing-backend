@@ -1021,7 +1021,7 @@ class EjecutarNodosProgramados implements ShouldQueue
         // ✅ VERIFICAR SI ES UN NODO FINAL (end-*)
         if (str_starts_with($siguienteNodoId, 'end-')) {
             $flujo = $ejecucion->flujo;
-            $esPerpetuo = $flujo->auto_asignar_nuevos ?? false;
+            $esPerpetuo = $flujo->es_perpetuo ?? false;
 
             // Marcar los prospectos de ESTA ejecución como completados
             $prospectosCompletados = \App\Models\ProspectoEnFlujo::where('flujo_id', $ejecucion->flujo_id)
