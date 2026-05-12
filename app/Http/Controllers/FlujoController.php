@@ -1904,8 +1904,9 @@ class FlujoController extends Controller
     {
         // Obtener ejecuciones activas SIN cargar prospectos_ids (evita memory exhaustion)
         // Usamos prospectos_count en lugar de contar el JSON en memoria
+        // Incluimos 'waiting' para flujos perpetuos que esperan nuevos prospectos
         $ejecucionesActivas = $flujo->ejecuciones()
-            ->whereIn('estado', ['in_progress', 'paused'])
+            ->whereIn('estado', ['in_progress', 'paused', 'waiting'])
             ->select([
                 'id',
                 'flujo_id',
@@ -1963,6 +1964,7 @@ class FlujoController extends Controller
             $estadoLegible = match ($ejecucion->estado) {
                 'in_progress' => $etapasEjecutando > 0 ? 'Procesando' : 'En progreso',
                 'paused' => 'Pausado',
+                'waiting' => 'Esperando nuevos',
                 default => $ejecucion->estado,
             };
 
