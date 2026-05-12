@@ -81,21 +81,37 @@ class AsignarProspectosAEjecucionPerpetua implements ShouldQueue
             return;
         }
 
-        // Filter out prospects already in the flow
-        $nuevosProspectoIds = $this->filtrarProspectosExistentes($flujo, $this->prospectoIds);
+        // Filter out prospects already in the EXECUTION (not the flow)
+        // Prospectos pueden estar en prospecto_en_flujo pero no en la ejecución activa
+        $existentesEnEjecucion = $ejecucionPerpetua->prospectos_ids ?? [];
+        $nuevosProspectoIds = array_values(array_diff($this->prospectoIds, $existentesEnEjecucion));
 
         if (empty($nuevosProspectoIds)) {
-            Log::info('AsignarProspectosAEjecucionPerpetua: Todos los prospectos ya estan en el flujo', [
+            Log::info('AsignarProspectosAEjecucionPerpetua: Todos los prospectos ya estan en la ejecucion', [
                 'flujo_id' => $this->flujoId,
+                'ejecucion_id' => $ejecucionPerpetua->id,
             ]);
 
             return;
         }
 
-        // Assign prospects to prospecto_en_flujo
-        $asignados = $this->asignarProspectos($flujo, $nuevosProspectoIds);
+        // Check if prospects need to be added to prospecto_en_flujo
+        // (they might already be there from a previous job)
+        $yaEnFlujo = DB::table('prospecto_en_flujo')
+            ->where('flujo_id', $flujo->id)
+            ->whereIn('prospecto_id', $nuevosProspectoIds)
+            ->pluck('prospecto_id')
+            ->toArray();
+        
+        $necesitanInsertar = array_values(array_diff($nuevosProspectoIds, $yaEnFlujo));
+        
+        // Assign only prospects NOT already in prospecto_en_flujo
+        $asignados = 0;
+        if (! empty($necesitanInsertar)) {
+            $asignados = $this->asignarProspectos($flujo, $necesitanInsertar);
+        }
 
-        // Update execution's prospectos_ids
+        // Update execution's prospectos_ids (ALL nuevos, even if already in prospecto_en_flujo)
         $this->actualizarEjecucion($ejecucionPerpetua, $nuevosProspectoIds);
 
         // Update first stage's prospectos_ids
