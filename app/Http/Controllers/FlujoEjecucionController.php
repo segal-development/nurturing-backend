@@ -1479,25 +1479,22 @@ class FlujoEjecucionController extends Controller
             return null;
         }
 
-        // Determinar la fuente de sync según el flujo
-        $fechaUltimoSync = $this->obtenerFechaUltimoSync($flujo);
+        // Usar últimas 24 horas como período de referencia (más útil que "desde último sync")
+        $hace24Horas = now()->subDay();
 
-        if (! $fechaUltimoSync) {
-            return null;
-        }
-
-        // Obtener prospectos que entraron al flujo desde el último sync
+        // Obtener prospectos que entraron al flujo en las últimas 24 horas
         $prospectosNuevos = \App\Models\ProspectoEnFlujo::where('flujo_id', $flujo->id)
-            ->where('fecha_inicio', '>=', $fechaUltimoSync)
+            ->where('fecha_inicio', '>=', $hace24Horas)
             ->pluck('prospecto_id')
             ->toArray();
 
         $totalNuevos = count($prospectosNuevos);
 
+        // Siempre devolver la estructura (aunque no haya nuevos)
         if ($totalNuevos === 0) {
             return [
-                'fecha_ultimo_sync' => $fechaUltimoSync->toISOString(),
-                'fecha_ultimo_sync_legible' => $fechaUltimoSync->format('d/m/Y H:i'),
+                'periodo' => 'ultimas_24h',
+                'periodo_legible' => 'Últimas 24 horas',
                 'total_nuevos' => 0,
                 'nuevos_por_etapa' => [],
                 'resumen' => [
@@ -1561,8 +1558,8 @@ class FlujoEjecucionController extends Controller
         $clicks = $resumenTotal->clicks ?? 0;
 
         return [
-            'fecha_ultimo_sync' => $fechaUltimoSync->toISOString(),
-            'fecha_ultimo_sync_legible' => $fechaUltimoSync->format('d/m/Y H:i'),
+            'periodo' => 'ultimas_24h',
+            'periodo_legible' => 'Últimas 24 horas',
             'total_nuevos' => $totalNuevos,
             'nuevos_por_etapa' => $nuevosPorEtapa,
             'resumen' => [
@@ -1577,6 +1574,7 @@ class FlujoEjecucionController extends Controller
 
     /**
      * Obtiene la fecha del último sync según la configuración del flujo.
+     * @deprecated No se usa más, mantenido por compatibilidad
      */
     private function obtenerFechaUltimoSync(Flujo $flujo): ?\Carbon\Carbon
     {
