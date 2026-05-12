@@ -141,7 +141,31 @@ class AsignarNuevosProspectosAFlujoJob implements ShouldQueue
 
         Log::info("Asignados {$asignados} prospectos al flujo {$flujo->id}");
 
-        // Crear FlujoEjecucion para esta cohorte
+        // Para flujos perpetuos: agregar a ejecución existente en vez de crear nueva
+        if ($flujo->es_perpetuo) {
+            $ejecucionExistente = FlujoEjecucion::where('flujo_id', $flujo->id)
+                ->where('es_perpetuo', true)
+                ->whereIn('estado', ['in_progress', 'waiting'])
+                ->first();
+            
+            if ($ejecucionExistente) {
+                Log::info("Flujo perpetuo {$flujo->id}: agregando prospectos a ejecución existente", [
+                    'ejecucion_id' => $ejecucionExistente->id,
+                    'nuevos_prospectos' => count($prospectoIds),
+                ]);
+                
+                // Dispatch job para agregar a la ejecución existente
+                AsignarProspectosAEjecucionPerpetua::dispatch($flujo->id, $prospectoIds);
+                
+                return [
+                    'asignados' => $asignados,
+                    'ejecucion_creada' => false,
+                    'agregados_a_perpetua' => true,
+                ];
+            }
+        }
+
+        // Crear FlujoEjecucion para esta cohorte (flujos no perpetuos o perpetuos sin ejecución)
         $ejecucionCreada = $this->crearEjecucion($flujo, $prospectoIds, $configStructure);
 
         return [
