@@ -655,6 +655,9 @@ class FlujoEjecucionController extends Controller
             ];
         });
 
+        // Calcular métricas de nuevos desde último sync (solo para flujos perpetuos)
+        $metricasSync = $this->calcularMetricasSync($flujo, $ejecucion, $etapaIds);
+
         return response()->json([
             'error' => false,
             'data' => [
@@ -681,6 +684,7 @@ class FlujoEjecucionController extends Controller
                 'proximo_nodo' => $proximoNodo,
                 'condiciones_evaluadas' => $condicionesEvaluadas,
                 'jobs' => $ejecucion->jobs,
+                'metricas_sync' => $metricasSync,
                 'created_at' => $ejecucion->created_at,
                 'updated_at' => $ejecucion->updated_at,
             ],
@@ -1457,5 +1461,158 @@ class FlujoEjecucionController extends Controller
         ]);
 
         return $orden;
+    }
+
+    /**
+     * Calcula métricas de nuevos prospectos desde el último sync.
+     *
+     * Retorna:
+     * - fecha_ultimo_sync: Fecha del último sync
+     * - total_nuevos: Total de prospectos nuevos desde el sync
+     * - nuevos_por_etapa: Desglose de nuevos por cada etapa (cuántos llegaron a cada una)
+     * - resumen: Totales de enviados, abiertos, clicks de los nuevos
+     */
+    private function calcularMetricasSync(Flujo $flujo, FlujoEjecucion $ejecucion, $etapaIds): ?array
+    {
+        // Solo para flujos perpetuos
+        if (! $flujo->es_perpetuo) {
+            return null;
+        }
+
+        // Determinar la fuente de sync según el flujo
+        $fechaUltimoSync = $this->obtenerFechaUltimoSync($flujo);
+
+        if (! $fechaUltimoSync) {
+            return null;
+        }
+
+        // Obtener prospectos que entraron al flujo desde el último sync
+        $prospectosNuevos = \App\Models\ProspectoEnFlujo::where('flujo_id', $flujo->id)
+            ->where('fecha_inicio', '>=', $fechaUltimoSync)
+            ->pluck('prospecto_id')
+            ->toArray();
+
+        $totalNuevos = count($prospectosNuevos);
+
+        if ($totalNuevos === 0) {
+            return [
+                'fecha_ultimo_sync' => $fechaUltimoSync->toISOString(),
+                'fecha_ultimo_sync_legible' => $fechaUltimoSync->format('d/m/Y H:i'),
+                'total_nuevos' => 0,
+                'nuevos_por_etapa' => [],
+                'resumen' => [
+                    'enviados' => 0,
+                    'abiertos' => 0,
+                    'clicks' => 0,
+                    'tasa_apertura' => 0,
+                    'tasa_clicks' => 0,
+                ],
+            ];
+        }
+
+        // Obtener métricas de envíos de los nuevos prospectos por etapa
+        $enviosNuevosPorEtapa = \DB::table('envios')
+            ->select(
+                'flujo_ejecucion_etapa_id',
+                \DB::raw('COUNT(DISTINCT prospecto_id) as prospectos_alcanzados'),
+                \DB::raw("SUM(CASE WHEN estado IN ('enviado', 'abierto', 'clickeado') THEN 1 ELSE 0 END) as enviados"),
+                \DB::raw("SUM(CASE WHEN estado IN ('abierto', 'clickeado') THEN 1 ELSE 0 END) as abiertos"),
+                \DB::raw("SUM(CASE WHEN estado = 'clickeado' THEN 1 ELSE 0 END) as clicks")
+            )
+            ->whereIn('flujo_ejecucion_etapa_id', $etapaIds)
+            ->whereIn('prospecto_id', $prospectosNuevos)
+            ->groupBy('flujo_ejecucion_etapa_id')
+            ->get()
+            ->keyBy('flujo_ejecucion_etapa_id');
+
+        // Obtener node_id para cada etapa
+        $etapasMap = \App\Models\FlujoEjecucionEtapa::whereIn('id', $etapaIds)
+            ->pluck('node_id', 'id');
+
+        // Construir métricas por etapa con node_id
+        $nuevosPorEtapa = [];
+        foreach ($enviosNuevosPorEtapa as $etapaId => $stats) {
+            $nodeId = $etapasMap->get($etapaId);
+            if ($nodeId) {
+                $nuevosPorEtapa[$nodeId] = [
+                    'prospectos_alcanzados' => $stats->prospectos_alcanzados,
+                    'enviados' => $stats->enviados,
+                    'abiertos' => $stats->abiertos,
+                    'clicks' => $stats->clicks,
+                    'tasa_apertura' => $stats->enviados > 0 ? round(($stats->abiertos / $stats->enviados) * 100, 1) : 0,
+                    'tasa_clicks' => $stats->enviados > 0 ? round(($stats->clicks / $stats->enviados) * 100, 1) : 0,
+                ];
+            }
+        }
+
+        // Calcular resumen total de los nuevos
+        $resumenTotal = \DB::table('envios')
+            ->whereIn('flujo_ejecucion_etapa_id', $etapaIds)
+            ->whereIn('prospecto_id', $prospectosNuevos)
+            ->selectRaw("
+                SUM(CASE WHEN estado IN ('enviado', 'abierto', 'clickeado') THEN 1 ELSE 0 END) as enviados,
+                SUM(CASE WHEN estado IN ('abierto', 'clickeado') THEN 1 ELSE 0 END) as abiertos,
+                SUM(CASE WHEN estado = 'clickeado' THEN 1 ELSE 0 END) as clicks
+            ")
+            ->first();
+
+        $enviados = $resumenTotal->enviados ?? 0;
+        $abiertos = $resumenTotal->abiertos ?? 0;
+        $clicks = $resumenTotal->clicks ?? 0;
+
+        return [
+            'fecha_ultimo_sync' => $fechaUltimoSync->toISOString(),
+            'fecha_ultimo_sync_legible' => $fechaUltimoSync->format('d/m/Y H:i'),
+            'total_nuevos' => $totalNuevos,
+            'nuevos_por_etapa' => $nuevosPorEtapa,
+            'resumen' => [
+                'enviados' => $enviados,
+                'abiertos' => $abiertos,
+                'clicks' => $clicks,
+                'tasa_apertura' => $enviados > 0 ? round(($abiertos / $enviados) * 100, 1) : 0,
+                'tasa_clicks' => $enviados > 0 ? round(($clicks / $enviados) * 100, 1) : 0,
+            ],
+        ];
+    }
+
+    /**
+     * Obtiene la fecha del último sync según la configuración del flujo.
+     */
+    private function obtenerFechaUltimoSync(Flujo $flujo): ?\Carbon\Carbon
+    {
+        // Intentar obtener desde lotes_ids del flujo
+        if (! empty($flujo->lotes_ids)) {
+            $lote = \App\Models\Lote::whereIn('id', $flujo->lotes_ids)->first();
+
+            if ($lote && $lote->external_api_source_id) {
+                $source = \App\Models\ExternalApiSource::find($lote->external_api_source_id);
+                if ($source && $source->last_synced_at) {
+                    return $source->last_synced_at;
+                }
+            }
+
+            // Fallback: última importación del lote
+            if ($lote) {
+                $ultimaImportacion = $lote->importaciones()
+                    ->where('estado', 'completado')
+                    ->orderBy('created_at', 'desc')
+                    ->first();
+
+                if ($ultimaImportacion) {
+                    return $ultimaImportacion->created_at;
+                }
+            }
+        }
+
+        // Fallback para flujos Sysgal (legacy)
+        if ($flujo->origen === 'sysgal' || str_contains(strtolower($flujo->nombre ?? ''), 'sysgal')) {
+            $sysgalSource = \App\Models\ExternalApiSource::where('name', 'sysgal')->first();
+            if ($sysgalSource && $sysgalSource->last_synced_at) {
+                return $sysgalSource->last_synced_at;
+            }
+        }
+
+        // Fallback: usar fecha de hace 24 horas
+        return now()->subDay();
     }
 }
