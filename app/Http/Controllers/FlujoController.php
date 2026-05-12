@@ -2082,6 +2082,35 @@ class FlujoController extends Controller
         // Calcular prospectos nuevos del último sync de Sysgal para este flujo
         $nuevosUltimoSync = $this->calcularNuevosSysgalPorFlujo($flujo);
 
+        // Calcular estadísticas de envíos totales del flujo
+        $etapaIds = $ejecucionesActivas->flatMap(fn ($e) => $e->etapas->pluck('id'))->unique();
+        $estadisticasEnvios = null;
+
+        if ($etapaIds->isNotEmpty()) {
+            $stats = \DB::table('envios')
+                ->whereIn('flujo_ejecucion_etapa_id', $etapaIds)
+                ->selectRaw("
+                    COUNT(DISTINCT prospecto_id) as total_prospectos,
+                    SUM(CASE WHEN estado IN ('enviado', 'abierto', 'clickeado') THEN 1 ELSE 0 END) as enviados,
+                    SUM(CASE WHEN estado IN ('abierto', 'clickeado') THEN 1 ELSE 0 END) as abiertos,
+                    SUM(CASE WHEN estado = 'clickeado' THEN 1 ELSE 0 END) as clicks
+                ")
+                ->first();
+
+            $enviados = $stats->enviados ?? 0;
+            $abiertos = $stats->abiertos ?? 0;
+            $clicks = $stats->clicks ?? 0;
+
+            $estadisticasEnvios = [
+                'total_prospectos' => $stats->total_prospectos ?? 0,
+                'enviados' => $enviados,
+                'abiertos' => $abiertos,
+                'clicks' => $clicks,
+                'tasa_apertura' => $enviados > 0 ? round(($abiertos / $enviados) * 100, 1) : 0,
+                'tasa_clicks' => $enviados > 0 ? round(($clicks / $enviados) * 100, 1) : 0,
+            ];
+        }
+
         return response()->json([
             'error' => false,
             'data' => [
@@ -2090,6 +2119,7 @@ class FlujoController extends Controller
                 'resumen_por_nodo' => $resumenPorNodo,
                 'ultimos_ingresos' => $ultimosIngresos,
                 'nuevos_ultimo_sync' => $nuevosUltimoSync,
+                'estadisticas_envios' => $estadisticasEnvios,
             ],
         ]);
     }
