@@ -1126,10 +1126,11 @@ class GrupoDeudaApiSyncService
             $this->cacheService->loadExistingProspectos();
             $this->loadProspectosEnFlujoActivo();
 
-            // Traer clientes que firmaron hace exactamente 3 días
-            // para que entren al flujo de onboarding
+            // Traer clientes que firmaron en los últimos 3 días (ventana móvil)
+            // Esto evita perder clientes por fines de semana cuando el sync no corre
+            // El servicio de deduplicación evita procesar el mismo cliente dos veces
             $desde = now()->subDays(3)->startOfDay();
-            $hasta = now()->subDays(3)->endOfDay();
+            $hasta = now()->subDays(1)->endOfDay();
 
             Log::info('GrupoDeudaApiSyncService: Rango de fechas ClientesPorFechaIngreso', [
                 'desde' => $desde->format('Y-m-d H:i:s'),
