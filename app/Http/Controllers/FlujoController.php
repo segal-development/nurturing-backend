@@ -1954,12 +1954,7 @@ class FlujoController extends Controller
 
             // Calcular progreso basado en etapas completadas vs total del flujo
             // Use max() to handle cases where flow was modified after execution started
-            // Para flujos perpetuos, contar etapas que han procesado envíos (primer_envio_at)
-            if ($ejecucion->es_perpetuo) {
-                $etapasCompletadas = $ejecucion->etapas->whereNotNull('primer_envio_at')->count();
-            } else {
-                $etapasCompletadas = $ejecucion->etapas->where('estado', 'completed')->count();
-            }
+            $etapasCompletadas = $ejecucion->etapas->where('estado', 'completed')->count();
             $etapasEjecutando = $ejecucion->etapas->where('estado', 'executing')->count();
             $etapasEnEjecucion = $ejecucion->etapas->count();
             $etapasTotal = max($etapasTotalFlujo, $etapasEnEjecucion);
