@@ -114,6 +114,12 @@ class EnviarEtapaJob implements ShouldQueue
             'total_chunks' => $totalChunks,
         ]);
 
+        // Marcar primer_envio_at si es la primera vez que esta etapa procesa envíos
+        // Esto permite contar "etapas que han trabajado" para gerencia, independiente del estado
+        if ($etapaEjecucion->primer_envio_at === null) {
+            $etapaEjecucion->update(['primer_envio_at' => now()]);
+        }
+
         // Guardar metadata del procesamiento
         $etapaEjecucion->update([
             'response_athenacampaign' => [
