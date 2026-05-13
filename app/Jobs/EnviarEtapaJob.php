@@ -188,23 +188,10 @@ class EnviarEtapaJob implements ShouldQueue
 
     private function isAlreadyCompleted(FlujoEjecucionEtapa $etapaEjecucion, FlujoEjecucion $ejecucion): bool
     {
-        // For PERPETUAL executions, allow re-processing completed stages
-        // because new prospects may need to receive this stage
-        if ($ejecucion->es_perpetuo) {
-            if ($etapaEjecucion->estado === 'completed') {
-                Log::info('EnviarEtapaJob: Etapa completada pero ejecución es perpetua - permitiendo reprocesar', [
-                    'etapa_id' => $this->etapaEjecucionId,
-                    'ejecucion_id' => $ejecucion->id,
-                    'prospectos_count' => count($this->prospectoIds),
-                ]);
-            }
-            return false;
-        }
-
-        // For non-perpetual executions, skip if already completed
         if ($etapaEjecucion->estado === 'completed') {
-            Log::warning('EnviarEtapaJob: Etapa ya completada', [
+            Log::warning('EnviarEtapaJob: Etapa ya completada - saltando', [
                 'etapa_id' => $this->etapaEjecucionId,
+                'es_perpetuo' => $ejecucion->es_perpetuo,
             ]);
 
             return true;
