@@ -387,6 +387,12 @@ class CatchUpProspectosJob implements ShouldQueue
 
         // Dispatch if: fecha_programada is past/today OR etapa was already completed (perpetual catch-up)
         if ($shouldDispatchNow) {
+            // FIX: Marcar como executing ANTES de despachar para que el visual refleje la realidad
+            // Esto evita el bug donde la etapa queda en 'pending' pero ya tiene envíos
+            if ($etapaEjecucion->estado === 'pending') {
+                $etapaEjecucion->update(['estado' => 'executing']);
+            }
+
             EnviarEtapaJob::dispatch(
                 flujoEjecucionId: $ejecucion->id,
                 etapaEjecucionId: $etapaEjecucion->id,
@@ -394,12 +400,13 @@ class CatchUpProspectosJob implements ShouldQueue
                 prospectoIds: $prospectoIds,
                 branches: $branches
             )->onQueue('envios');
-            
+
             Log::info('CatchUpProspectosJob: EnviarEtapaJob despachado', [
                 'ejecucion_id' => $ejecucion->id,
                 'etapa_ejecucion_id' => $etapaEjecucion->id,
                 'prospectos_count' => count($prospectoIds),
                 'queue' => 'envios',
+                'etapa_estado' => $etapaEjecucion->estado,
             ]);
         }
     }
