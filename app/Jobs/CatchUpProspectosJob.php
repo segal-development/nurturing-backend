@@ -319,6 +319,9 @@ class CatchUpProspectosJob implements ShouldQueue
      * fecha_programada based on tiempo_espera. It does NOT dispatch immediately -
      * the EjecutarNodosProgramados job will pick it up when the time comes.
      *
+     * EXCEPTION: For COMPLETED stages in perpetual flows, we dispatch immediately
+     * because those stages won't be picked up by EjecutarNodosProgramados.
+     *
      * @param  array  $prospectoIds  Array of prospect IDs
      * @param  \Carbon\Carbon  $fechaProgramada  When this stage should execute
      */
@@ -336,10 +339,14 @@ class CatchUpProspectosJob implements ShouldQueue
         $flujo = $ejecucion->flujo;
         $configStructure = $flujo->config_structure ?? [];
         $stages = $configStructure['stages'] ?? [];
+        $nodes = $configStructure['nodes'] ?? [];
         $branches = $configStructure['branches'] ?? [];
 
-        // Find stage data
+        // Find stage data - check both 'stages' and 'nodes' arrays
         $stage = collect($stages)->firstWhere('id', $stageNodeId);
+        if (! $stage) {
+            $stage = collect($nodes)->firstWhere('id', $stageNodeId);
+        }
 
         if (! $stage) {
             Log::warning('CatchUpProspectosJob: Stage no encontrado', [
@@ -351,9 +358,9 @@ class CatchUpProspectosJob implements ShouldQueue
         }
 
         // Find or create FlujoEjecucionEtapa for this stage with proper fecha_programada
-        $etapaEjecucion = $this->findOrCreateEtapaEjecucion($ejecucion, $stageNodeId, $prospectoIds, $fechaProgramada);
-
-        if (! $etapaEjecucion) {
+        $result = $this->findOrCreateEtapaEjecucion($ejecucion, $stageNodeId, $prospectoIds, $fechaProgramada);
+        
+        if (! $result || ! $result['etapa']) {
             Log::error('CatchUpProspectosJob: No se pudo crear etapa de ejecucion', [
                 'ejecucion_id' => $ejecucion->id,
                 'stage_node_id' => $stageNodeId,
@@ -362,7 +369,10 @@ class CatchUpProspectosJob implements ShouldQueue
             return;
         }
 
-        $shouldDispatchNow = $fechaProgramada->isPast() || $fechaProgramada->isToday();
+        $etapaEjecucion = $result['etapa'];
+        $forceDispatch = $result['force_dispatch'] ?? false;
+        
+        $shouldDispatchNow = $forceDispatch || $fechaProgramada->isPast() || $fechaProgramada->isToday();
 
         Log::info('CatchUpProspectosJob: Etapa programada', [
             'ejecucion_id' => $ejecucion->id,
@@ -371,10 +381,11 @@ class CatchUpProspectosJob implements ShouldQueue
             'prospectos_count' => count($prospectoIds),
             'fecha_programada' => $fechaProgramada->toDateTimeString(),
             'dispatch_now' => $shouldDispatchNow,
+            'force_dispatch' => $forceDispatch,
+            'etapa_estado' => $etapaEjecucion->estado,
         ]);
 
-        // Only dispatch immediately if the fecha_programada is in the past or today
-        // Otherwise, EjecutarNodosProgramados will pick it up when the time comes
+        // Dispatch if: fecha_programada is past/today OR etapa was already completed (perpetual catch-up)
         if ($shouldDispatchNow) {
             EnviarEtapaJob::dispatch(
                 flujoEjecucionId: $ejecucion->id,
@@ -382,7 +393,14 @@ class CatchUpProspectosJob implements ShouldQueue
                 stage: $stage,
                 prospectoIds: $prospectoIds,
                 branches: $branches
-            )->onQueue('default');
+            )->onQueue('envios');
+            
+            Log::info('CatchUpProspectosJob: EnviarEtapaJob despachado', [
+                'ejecucion_id' => $ejecucion->id,
+                'etapa_ejecucion_id' => $etapaEjecucion->id,
+                'prospectos_count' => count($prospectoIds),
+                'queue' => 'envios',
+            ]);
         }
     }
 
@@ -390,16 +408,17 @@ class CatchUpProspectosJob implements ShouldQueue
      * Find existing or create new FlujoEjecucionEtapa for catch-up processing.
      *
      * For COMPLETED stages in perpetual flows, we reuse the existing etapa
-     * and dispatch EnviarEtapaJob with only the new prospects.
+     * and set force_dispatch=true so EnviarEtapaJob is dispatched immediately.
      *
      * @param  \Carbon\Carbon  $fechaProgramada  When this stage should execute
+     * @return array{etapa: ?FlujoEjecucionEtapa, force_dispatch: bool}|null
      */
     private function findOrCreateEtapaEjecucion(
         FlujoEjecucion $ejecucion,
         string $stageNodeId,
         array $prospectoIds,
         \Carbon\Carbon $fechaProgramada
-    ): ?FlujoEjecucionEtapa {
+    ): ?array {
         // First, check if there's ANY existing etapa for this stage (pending or completed)
         $existingEtapa = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
             ->where('node_id', $stageNodeId)
@@ -407,9 +426,9 @@ class CatchUpProspectosJob implements ShouldQueue
 
         if ($existingEtapa) {
             // For COMPLETED stages in perpetual flows, we reuse the etapa
-            // The new prospects will be sent via EnviarEtapaJob
+            // and FORCE dispatch because EjecutarNodosProgramados won't pick it up
             if ($existingEtapa->estado === 'completed') {
-                Log::info('CatchUpProspectosJob: Reusing completed etapa for new prospects', [
+                Log::info('CatchUpProspectosJob: Reusing completed etapa for new prospects - WILL FORCE DISPATCH', [
                     'etapa_id' => $existingEtapa->id,
                     'node_id' => $stageNodeId,
                     'new_prospectos_count' => count($prospectoIds),
@@ -425,10 +444,11 @@ class CatchUpProspectosJob implements ShouldQueue
                     'prospectos_count' => count($mergedIds),
                 ]);
 
-                return $existingEtapa;
+                // FORCE DISPATCH for completed etapas - this is the key fix!
+                return ['etapa' => $existingEtapa, 'force_dispatch' => true];
             }
 
-            // For PENDING stages, merge prospectoIds
+            // For PENDING stages, merge prospectoIds (no force dispatch - scheduler will pick up)
             if ($existingEtapa->estado === 'pending') {
                 $existingIds = $existingEtapa->prospectos_ids ?? [];
                 $mergedIds = array_values(array_unique(array_merge($existingIds, $prospectoIds)));
@@ -451,7 +471,7 @@ class CatchUpProspectosJob implements ShouldQueue
                     'fecha_programada' => $newFechaProgramada->toDateTimeString(),
                 ]);
 
-                return $existingEtapa;
+                return ['etapa' => $existingEtapa, 'force_dispatch' => false];
             }
 
             // For other states (executing, failed), return the etapa but log warning
@@ -460,7 +480,7 @@ class CatchUpProspectosJob implements ShouldQueue
                 'estado' => $existingEtapa->estado,
             ]);
 
-            return $existingEtapa;
+            return ['etapa' => $existingEtapa, 'force_dispatch' => false];
         }
 
         // Create new etapa for catch-up with proper fecha_programada
@@ -488,7 +508,7 @@ class CatchUpProspectosJob implements ShouldQueue
                 'fecha_programada' => $fechaProgramada->toDateTimeString(),
             ]);
 
-            return $etapa;
+            return ['etapa' => $etapa, 'force_dispatch' => false];
         } catch (\Exception $e) {
             Log::error('CatchUpProspectosJob: Error creando etapa de ejecucion', [
                 'ejecucion_id' => $ejecucion->id,
