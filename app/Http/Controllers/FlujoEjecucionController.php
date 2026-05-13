@@ -1067,6 +1067,7 @@ class FlujoEjecucionController extends Controller
                     $query->select([
                         'id', 'flujo_ejecucion_id', 'node_id', 'estado',
                         'ejecutado', 'fecha_programada', 'fecha_ejecucion',
+                        'primer_envio_at', // Required for perpetual flow progress calculation
                     ])->orderBy('fecha_programada', 'asc');
                 }])
                 ->get()
@@ -1091,6 +1092,7 @@ class FlujoEjecucionController extends Controller
                         $query->select([
                             'id', 'flujo_ejecucion_id', 'node_id', 'estado',
                             'ejecutado', 'fecha_programada', 'fecha_ejecucion',
+                            'primer_envio_at', // Required for perpetual flow progress calculation
                         ])->orderBy('fecha_programada', 'asc');
                     }])
                     ->get()

@@ -1911,6 +1911,7 @@ class FlujoController extends Controller
                 'id',
                 'flujo_id',
                 'estado',
+                'es_perpetuo', // Required for progress calculation logic
                 'prospectos_count',
                 'nodo_actual',
                 'proximo_nodo',
@@ -1928,6 +1929,7 @@ class FlujoController extends Controller
                     'fecha_programada',
                     'fecha_ejecucion',
                     'prospectos_count',
+                    'primer_envio_at', // Required for perpetual flow progress calculation
                 ]);
             }])
             ->orderBy('created_at', 'desc')
