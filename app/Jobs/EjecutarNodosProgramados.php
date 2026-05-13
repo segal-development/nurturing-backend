@@ -265,14 +265,18 @@ class EjecutarNodosProgramados implements ShouldQueue
         }
 
         if (! $etapaExistente) {
-            // Crear nueva etapa (operación atómica)
-            $etapaExistente = FlujoEjecucionEtapa::create([
-                'flujo_ejecucion_id' => $ejecucion->id,
-                'node_id' => $nodoId,
-                'fecha_programada' => now(),
-                'estado' => 'pending',
-                'ejecutado' => false,
-            ]);
+            // Usar firstOrCreate para evitar race conditions con otros jobs
+            $etapaExistente = FlujoEjecucionEtapa::firstOrCreate(
+                [
+                    'flujo_ejecucion_id' => $ejecucion->id,
+                    'node_id' => $nodoId,
+                ],
+                [
+                    'fecha_programada' => now(),
+                    'estado' => 'pending',
+                    'ejecutado' => false,
+                ]
+            );
         }
 
         // Actualizar nodo actual en la ejecución (operación atómica)
@@ -962,14 +966,18 @@ class EjecutarNodosProgramados implements ShouldQueue
                 'fecha_programada_preservada' => $siguienteEtapa->fecha_programada,
             ]);
         } else {
-            // Crear etapa nueva con fecha_programada calculada
+            // Usar firstOrCreate para evitar race conditions
             $etapaData['fecha_programada'] = $fechaProgramada;
-            $siguienteEtapa = FlujoEjecucionEtapa::create(array_merge($etapaData, [
-                'flujo_ejecucion_id' => $ejecucion->id,
-                'etapa_id' => null,
-                'node_id' => $siguienteNodoId,
-            ]));
-            Log::info('EjecutarNodosProgramados: Etapa siguiente creada', [
+            $siguienteEtapa = FlujoEjecucionEtapa::firstOrCreate(
+                [
+                    'flujo_ejecucion_id' => $ejecucion->id,
+                    'node_id' => $siguienteNodoId,
+                ],
+                array_merge($etapaData, [
+                    'etapa_id' => null,
+                ])
+            );
+            Log::info('EjecutarNodosProgramados: Etapa siguiente creada/encontrada', [
                 'etapa_id' => $siguienteEtapa->id,
                 'node_id' => $siguienteNodoId,
                 'prospectos_count' => count($prospectoIds),

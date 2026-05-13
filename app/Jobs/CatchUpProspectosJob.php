@@ -485,23 +485,48 @@ class CatchUpProspectosJob implements ShouldQueue
             return ['etapa' => $existingEtapa, 'force_dispatch' => false];
         }
 
-        // Create new etapa for catch-up with proper fecha_programada
+        // Use firstOrCreate to avoid race conditions with other jobs
         try {
-            $etapa = FlujoEjecucionEtapa::create([
-                'flujo_ejecucion_id' => $ejecucion->id,
-                'etapa_id' => null,
-                'node_id' => $stageNodeId,
-                'fecha_programada' => $fechaProgramada,
-                'estado' => 'pending',
-                'ejecutado' => false,
-                'prospectos_ids' => $prospectoIds,
-                'prospectos_count' => count($prospectoIds),
-                'response_athenacampaign' => [
-                    'source' => 'catch_up_job',
-                    'created_at' => now()->toISOString(),
-                    'tiempo_espera_respetado' => true,
+            $etapa = FlujoEjecucionEtapa::firstOrCreate(
+                [
+                    'flujo_ejecucion_id' => $ejecucion->id,
+                    'node_id' => $stageNodeId,
                 ],
-            ]);
+                [
+                    'etapa_id' => null,
+                    'fecha_programada' => $fechaProgramada,
+                    'estado' => 'pending',
+                    'ejecutado' => false,
+                    'prospectos_ids' => $prospectoIds,
+                    'prospectos_count' => count($prospectoIds),
+                    'response_athenacampaign' => [
+                        'source' => 'catch_up_job',
+                        'created_at' => now()->toISOString(),
+                        'tiempo_espera_respetado' => true,
+                    ],
+                ]
+            );
+
+            // If etapa already existed, merge prospectos
+            if (!$etapa->wasRecentlyCreated) {
+                $existingIds = $etapa->prospectos_ids ?? [];
+                $mergedIds = array_values(array_unique(array_merge($existingIds, $prospectoIds)));
+                $etapa->update([
+                    'prospectos_ids' => $mergedIds,
+                    'prospectos_count' => count($mergedIds),
+                ]);
+                
+                Log::debug('CatchUpProspectosJob: Etapa existente actualizada con nuevos prospectos', [
+                    'etapa_id' => $etapa->id,
+                    'node_id' => $stageNodeId,
+                    'estado' => $etapa->estado,
+                    'prospectos_count' => count($mergedIds),
+                ]);
+                
+                // Force dispatch if etapa is completed (perpetual flow catch-up)
+                $forceDispatch = $etapa->estado === 'completed';
+                return ['etapa' => $etapa, 'force_dispatch' => $forceDispatch];
+            }
 
             Log::debug('CatchUpProspectosJob: Creada nueva etapa de ejecucion', [
                 'etapa_id' => $etapa->id,

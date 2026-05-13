@@ -157,21 +157,36 @@ class BatchCompletedCallback
             ->first();
 
         if (! $condicionEtapa) {
-            FlujoEjecucionEtapa::create([
-                'flujo_ejecucion_id' => $this->callbackData['flujo_ejecucion_id'],
-                'etapa_id' => null,
-                'node_id' => $targetNodeId,
-                'prospectos_ids' => $prospectoIds,
-                'prospectos_count' => count($prospectoIds),
-                'fecha_programada' => $fechaVerificacion,
-                'estado' => 'pending',
-                'response_athenacampaign' => [
-                    'pending_condition' => true,
-                    'source_message_id' => $messageId,
-                    'source_etapa_id' => $etapaEjecucion->id,
-                    'conexion' => $conexion,
+            // Use firstOrCreate to avoid race conditions
+            $condicionEtapa = FlujoEjecucionEtapa::firstOrCreate(
+                [
+                    'flujo_ejecucion_id' => $this->callbackData['flujo_ejecucion_id'],
+                    'node_id' => $targetNodeId,
                 ],
-            ]);
+                [
+                    'etapa_id' => null,
+                    'prospectos_ids' => $prospectoIds,
+                    'prospectos_count' => count($prospectoIds),
+                    'fecha_programada' => $fechaVerificacion,
+                    'estado' => 'pending',
+                    'response_athenacampaign' => [
+                        'pending_condition' => true,
+                        'source_message_id' => $messageId,
+                        'source_etapa_id' => $etapaEjecucion->id,
+                        'conexion' => $conexion,
+                    ],
+                ]
+            );
+            
+            // If it already existed, we need to merge prospectos
+            if (!$condicionEtapa->wasRecentlyCreated) {
+                $existingProspectos = $condicionEtapa->prospectos_ids ?? [];
+                $mergedProspectos = array_values(array_unique(array_merge($existingProspectos, $prospectoIds)));
+                $condicionEtapa->update([
+                    'prospectos_ids' => $mergedProspectos,
+                    'prospectos_count' => count($mergedProspectos),
+                ]);
+            }
         } else {
             // ✅ FIX: MERGE prospectos en lugar de sobrescribir (soporta múltiples inputs al mismo nodo)
             $existingProspectos = $condicionEtapa->prospectos_ids ?? [];
@@ -228,15 +243,30 @@ class BatchCompletedCallback
         }
 
         if (! $siguienteEtapaEjecucion) {
-            FlujoEjecucionEtapa::create([
-                'flujo_ejecucion_id' => $this->callbackData['flujo_ejecucion_id'],
-                'etapa_id' => null,
-                'node_id' => $targetNodeId,
-                'prospectos_ids' => $prospectoIds,
-                'prospectos_count' => count($prospectoIds),
-                'fecha_programada' => $fechaProgramada,
-                'estado' => 'pending',
-            ]);
+            // Use firstOrCreate to avoid race conditions
+            $siguienteEtapaEjecucion = FlujoEjecucionEtapa::firstOrCreate(
+                [
+                    'flujo_ejecucion_id' => $this->callbackData['flujo_ejecucion_id'],
+                    'node_id' => $targetNodeId,
+                ],
+                [
+                    'etapa_id' => null,
+                    'prospectos_ids' => $prospectoIds,
+                    'prospectos_count' => count($prospectoIds),
+                    'fecha_programada' => $fechaProgramada,
+                    'estado' => 'pending',
+                ]
+            );
+            
+            // If it already existed, we need to merge prospectos
+            if (!$siguienteEtapaEjecucion->wasRecentlyCreated) {
+                $existingProspectos = $siguienteEtapaEjecucion->prospectos_ids ?? [];
+                $mergedProspectos = array_values(array_unique(array_merge($existingProspectos, $prospectoIds)));
+                $siguienteEtapaEjecucion->update([
+                    'prospectos_ids' => $mergedProspectos,
+                    'prospectos_count' => count($mergedProspectos),
+                ]);
+            }
         } else {
             // ✅ FIX: MERGE prospectos en lugar de sobrescribir (soporta múltiples inputs al mismo nodo)
             $existingProspectos = $siguienteEtapaEjecucion->prospectos_ids ?? [];
