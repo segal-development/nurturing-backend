@@ -416,6 +416,12 @@ class EnviarEtapaJob implements ShouldQueue
 
     private function dispatchBatch(array $jobs, FlujoEjecucion $ejecucion, FlujoEjecucionEtapa $etapaEjecucion, array $contenidoData): void
     {
+        // Marcar primer_envio_at si es la primera vez que esta etapa procesa envíos
+        // Esto permite contar "etapas que han trabajado" para gerencia, independiente del estado
+        if ($etapaEjecucion->primer_envio_at === null) {
+            $etapaEjecucion->update(['primer_envio_at' => now()]);
+        }
+
         $batchName = sprintf(
             'Etapa %s - Flujo %d (%d prospectos)',
             $this->stage['label'] ?? 'Sin nombre',

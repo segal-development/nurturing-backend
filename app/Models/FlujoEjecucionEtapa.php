@@ -20,6 +20,7 @@ class FlujoEjecucionEtapa extends Model
         'prospectos_count', // Cache del count para evitar cargar el JSON completo
         'fecha_programada',
         'fecha_ejecucion',
+        'primer_envio_at', // Cuándo procesó envíos por primera vez (para contar etapas que han trabajado)
         'estado',
         'ejecutado',
         'message_id',
@@ -35,6 +36,7 @@ class FlujoEjecucionEtapa extends Model
         return [
             'fecha_programada' => 'datetime',
             'fecha_ejecucion' => 'datetime',
+            'primer_envio_at' => 'datetime',
             'ejecutado' => 'boolean',
             'response_athenacampaign' => 'array',
             'prospectos_ids' => 'array',
@@ -80,6 +82,15 @@ class FlujoEjecucionEtapa extends Model
     public function scopeEjecutadas($query)
     {
         return $query->where('ejecutado', true);
+    }
+
+    /**
+     * Scope para etapas que han procesado envíos al menos una vez.
+     * Útil para contar progreso en flujos perpetuos donde el estado cambia constantemente.
+     */
+    public function scopeHanProcesadoEnvios($query)
+    {
+        return $query->whereNotNull('primer_envio_at');
     }
 
     /**

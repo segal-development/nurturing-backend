@@ -545,7 +545,14 @@ class FlujoEjecucionController extends Controller
         $etapasTotalFlujo = count($flujo->config_structure['stages'] ?? []);
         $etapasEnEjecucionCount = $ejecucion->etapas->count();
         $totalEtapas = max($etapasTotalFlujo, $etapasEnEjecucionCount);
-        $etapasCompletadas = $ejecucion->etapas->where('estado', 'completed')->count();
+        
+        // Para flujos perpetuos, contar etapas que han procesado envíos (primer_envio_at)
+        // Para flujos normales, contar etapas con estado completed
+        if ($ejecucion->es_perpetuo) {
+            $etapasCompletadas = $ejecucion->etapas->whereNotNull('primer_envio_at')->count();
+        } else {
+            $etapasCompletadas = $ejecucion->etapas->where('estado', 'completed')->count();
+        }
         $etapasFallidas = $ejecucion->etapas->where('estado', 'failed')->count();
         $etapasEnEjecucion = $ejecucion->etapas->where('estado', 'executing')->count();
 
@@ -751,7 +758,14 @@ class FlujoEjecucionController extends Controller
             $etapasTotalFlujo = count($flujo->config_structure['stages'] ?? []);
             $etapasEnEjecucionCount = $ejecucion->etapas->count();
             $totalEtapas = max($etapasTotalFlujo, $etapasEnEjecucionCount);
-            $etapasCompletadas = $ejecucion->etapas->where('estado', 'completed')->count();
+            
+            // Para flujos perpetuos, contar etapas que han procesado envíos (primer_envio_at)
+            // Para flujos normales, contar etapas con estado completed
+            if ($ejecucion->es_perpetuo) {
+                $etapasCompletadas = $ejecucion->etapas->whereNotNull('primer_envio_at')->count();
+            } else {
+                $etapasCompletadas = $ejecucion->etapas->where('estado', 'completed')->count();
+            }
             $etapasFallidas = $ejecucion->etapas->where('estado', 'failed')->count();
             $etapasEnEjecucion = $ejecucion->etapas->where('estado', 'executing')->count();
             $etapasPendientes = max(0, $totalEtapas - $etapasCompletadas - $etapasFallidas - $etapasEnEjecucion);
@@ -798,8 +812,13 @@ class FlujoEjecucionController extends Controller
                     ")
                     ->first();
 
-                // Base = prospectos × etapas completadas (para que el % tenga sentido)
-                $etapasCompletadasCount = $ejecucion->etapas->whereIn('estado', ['completed', 'executing'])->count();
+                // Base = prospectos × etapas que han procesado (para que el % tenga sentido)
+                // Para flujos perpetuos usar primer_envio_at, para normales usar estado
+                if ($ejecucion->es_perpetuo) {
+                    $etapasCompletadasCount = $ejecucion->etapas->whereNotNull('primer_envio_at')->count();
+                } else {
+                    $etapasCompletadasCount = $ejecucion->etapas->whereIn('estado', ['completed', 'executing'])->count();
+                }
                 $baseProspectos = $totalProspectos * max(1, $etapasCompletadasCount);
             }
 
@@ -1113,7 +1132,14 @@ class FlujoEjecucionController extends Controller
                 $etapasTotalFlujo = count($flujoConfig?->config_structure['stages'] ?? []);
                 $etapasEnEjecucion = $ejecucion->etapas->count();
                 $totalEtapas = max($etapasTotalFlujo, $etapasEnEjecucion);
-                $etapasCompletadas = $ejecucion->etapas->where('estado', 'completed')->count();
+                
+                // Para flujos perpetuos, contar etapas que han procesado envíos (primer_envio_at)
+                // Para flujos normales, contar etapas con estado completed
+                if ($ejecucion->es_perpetuo) {
+                    $etapasCompletadas = $ejecucion->etapas->whereNotNull('primer_envio_at')->count();
+                } else {
+                    $etapasCompletadas = $ejecucion->etapas->where('estado', 'completed')->count();
+                }
                 $etapasFallidas = $ejecucion->etapas->where('estado', 'failed')->count();
 
                 $progreso = [
