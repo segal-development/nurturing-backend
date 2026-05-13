@@ -419,9 +419,11 @@ class CatchUpProspectosJob implements ShouldQueue
         array $prospectoIds,
         \Carbon\Carbon $fechaProgramada
     ): ?array {
-        // First, check if there's ANY existing etapa for this stage (pending or completed)
+        // First, check if there's ANY existing etapa for this stage
+        // Use orderBy('id') to always get the OLDEST (original) one if duplicates exist
         $existingEtapa = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
             ->where('node_id', $stageNodeId)
+            ->orderBy('id')
             ->first();
 
         if ($existingEtapa) {

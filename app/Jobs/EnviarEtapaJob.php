@@ -189,9 +189,20 @@ class EnviarEtapaJob implements ShouldQueue
     private function isAlreadyCompleted(FlujoEjecucionEtapa $etapaEjecucion, FlujoEjecucion $ejecucion): bool
     {
         if ($etapaEjecucion->estado === 'completed') {
+            // For perpetual executions with specific prospectoIds, allow processing
+            // This handles catch-up scenarios where new prospects need this stage
+            if ($ejecucion->es_perpetuo && !empty($this->prospectoIds)) {
+                Log::info('EnviarEtapaJob: Etapa completada pero perpetua con prospectos específicos - procesando', [
+                    'etapa_id' => $this->etapaEjecucionId,
+                    'prospectos_count' => count($this->prospectoIds),
+                ]);
+                return false;
+            }
+
             Log::warning('EnviarEtapaJob: Etapa ya completada - saltando', [
                 'etapa_id' => $this->etapaEjecucionId,
                 'es_perpetuo' => $ejecucion->es_perpetuo,
+                'tiene_prospectos' => !empty($this->prospectoIds),
             ]);
 
             return true;
