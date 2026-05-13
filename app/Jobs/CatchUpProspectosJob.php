@@ -49,7 +49,7 @@ class CatchUpProspectosJob implements ShouldQueue
 
     public function __construct()
     {
-        $this->onQueue('catchup');
+        $this->onQueue('default');
     }
 
     public function handle(StageOrderResolver $resolver): void
@@ -382,7 +382,7 @@ class CatchUpProspectosJob implements ShouldQueue
                 stage: $stage,
                 prospectoIds: $prospectoIds,
                 branches: $branches
-            )->onQueue('catchup');
+            )->onQueue('default');
         }
     }
 
