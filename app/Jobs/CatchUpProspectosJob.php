@@ -389,6 +389,9 @@ class CatchUpProspectosJob implements ShouldQueue
     /**
      * Find existing or create new FlujoEjecucionEtapa for catch-up processing.
      *
+     * For COMPLETED stages in perpetual flows, we reuse the existing etapa
+     * and dispatch EnviarEtapaJob with only the new prospects.
+     *
      * @param  \Carbon\Carbon  $fechaProgramada  When this stage should execute
      */
     private function findOrCreateEtapaEjecucion(
@@ -397,33 +400,64 @@ class CatchUpProspectosJob implements ShouldQueue
         array $prospectoIds,
         \Carbon\Carbon $fechaProgramada
     ): ?FlujoEjecucionEtapa {
-        // Check if there's already a pending etapa for this stage
+        // First, check if there's ANY existing etapa for this stage (pending or completed)
         $existingEtapa = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
             ->where('node_id', $stageNodeId)
-            ->where('estado', 'pending')
             ->first();
 
         if ($existingEtapa) {
-            // Merge prospectoIds into existing etapa
-            $existingIds = $existingEtapa->prospectos_ids ?? [];
-            $mergedIds = array_values(array_unique(array_merge($existingIds, $prospectoIds)));
+            // For COMPLETED stages in perpetual flows, we reuse the etapa
+            // The new prospects will be sent via EnviarEtapaJob
+            if ($existingEtapa->estado === 'completed') {
+                Log::info('CatchUpProspectosJob: Reusing completed etapa for new prospects', [
+                    'etapa_id' => $existingEtapa->id,
+                    'node_id' => $stageNodeId,
+                    'new_prospectos_count' => count($prospectoIds),
+                    'etapa_estado' => $existingEtapa->estado,
+                ]);
 
-            // Use the earlier fecha_programada if prospects have different schedules
-            $newFechaProgramada = $fechaProgramada->lt($existingEtapa->fecha_programada)
-                ? $fechaProgramada
-                : $existingEtapa->fecha_programada;
+                // Merge new prospectoIds into existing etapa's prospectos_ids
+                $existingIds = $existingEtapa->prospectos_ids ?? [];
+                $mergedIds = array_values(array_unique(array_merge($existingIds, $prospectoIds)));
 
-            $existingEtapa->update([
-                'prospectos_ids' => $mergedIds,
-                'prospectos_count' => count($mergedIds),
-                'fecha_programada' => $newFechaProgramada,
-            ]);
+                $existingEtapa->update([
+                    'prospectos_ids' => $mergedIds,
+                    'prospectos_count' => count($mergedIds),
+                ]);
 
-            Log::debug('CatchUpProspectosJob: Actualizando etapa existente', [
+                return $existingEtapa;
+            }
+
+            // For PENDING stages, merge prospectoIds
+            if ($existingEtapa->estado === 'pending') {
+                $existingIds = $existingEtapa->prospectos_ids ?? [];
+                $mergedIds = array_values(array_unique(array_merge($existingIds, $prospectoIds)));
+
+                // Use the earlier fecha_programada if prospects have different schedules
+                $newFechaProgramada = $fechaProgramada->lt($existingEtapa->fecha_programada)
+                    ? $fechaProgramada
+                    : $existingEtapa->fecha_programada;
+
+                $existingEtapa->update([
+                    'prospectos_ids' => $mergedIds,
+                    'prospectos_count' => count($mergedIds),
+                    'fecha_programada' => $newFechaProgramada,
+                ]);
+
+                Log::debug('CatchUpProspectosJob: Actualizando etapa pendiente', [
+                    'etapa_id' => $existingEtapa->id,
+                    'prospectos_added' => count($prospectoIds),
+                    'total_prospectos' => count($mergedIds),
+                    'fecha_programada' => $newFechaProgramada->toDateTimeString(),
+                ]);
+
+                return $existingEtapa;
+            }
+
+            // For other states (executing, failed), return the etapa but log warning
+            Log::warning('CatchUpProspectosJob: Etapa in unexpected state', [
                 'etapa_id' => $existingEtapa->id,
-                'prospectos_added' => count($prospectoIds),
-                'total_prospectos' => count($mergedIds),
-                'fecha_programada' => $newFechaProgramada->toDateTimeString(),
+                'estado' => $existingEtapa->estado,
             ]);
 
             return $existingEtapa;
