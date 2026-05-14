@@ -9,7 +9,6 @@ use Illuminate\Support\Facades\DB;
  * These indexes address N+1 and slow lookup patterns:
  * - prospectos.importacion_id: Batch loading for EmailProviderResolver IC checks
  * - envios.tracking_token: Pixel tracking lookups (O(n) → O(1))
- * - email_aperturas.tracking_token: Analytics queries for open tracking
  * - envios.prospecto_id: Prospecto email history lookups (standalone, complements composites)
  *
  * All indexes are created CONCURRENTLY to avoid locking tables in production.
@@ -38,11 +37,9 @@ return new class extends Migration
             DB::statement('CREATE INDEX CONCURRENTLY idx_envios_tracking_token ON envios (tracking_token)');
         }
 
-        // Index for email open tracking analytics
-        // Used in: Analytics queries filtering by tracking_token
-        if (! $this->indexExists('email_aperturas', 'idx_email_aperturas_tracking_token')) {
-            DB::statement('CREATE INDEX CONCURRENTLY idx_email_aperturas_tracking_token ON email_aperturas (tracking_token)');
-        }
+        // NOTE: email_aperturas already has index on envio_id (created in original table migration)
+        // The tracking_token lives in envios table, not email_aperturas
+        // No additional index needed here - lookups go through envio_id FK
 
         // Standalone index for prospecto email history lookups
         // Composites exist but standalone needed for prospecto-only queries
@@ -55,7 +52,6 @@ return new class extends Migration
     {
         DB::statement('DROP INDEX IF EXISTS idx_prospectos_importacion_id');
         DB::statement('DROP INDEX IF EXISTS idx_envios_tracking_token');
-        DB::statement('DROP INDEX IF EXISTS idx_email_aperturas_tracking_token');
         DB::statement('DROP INDEX IF EXISTS idx_envios_prospecto_id');
     }
 
