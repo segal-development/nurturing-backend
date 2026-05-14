@@ -12,6 +12,22 @@ class FlujoEjecucionEtapa extends Model
 
     protected $table = 'flujo_ejecucion_etapas';
 
+    /**
+     * Boot method to add model validation.
+     *
+     * Validates that node_id is required for all etapas to prevent
+     * orphaned records without proper node references.
+     */
+    protected static function booted(): void
+    {
+        static::saving(function (FlujoEjecucionEtapa $etapa) {
+            // node_id is required for all etapas
+            if (empty($etapa->nodo_id) && empty($etapa->node_id)) {
+                throw new \InvalidArgumentException('FlujoEjecucionEtapa requires nodo_id or node_id');
+            }
+        });
+    }
+
     protected $fillable = [
         'flujo_ejecucion_id',
         'etapa_id',

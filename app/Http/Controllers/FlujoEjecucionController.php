@@ -7,6 +7,7 @@ use App\Models\Flujo;
 use App\Models\FlujoEjecucion;
 use App\Models\FlujoEjecucionEtapa;
 use App\Models\Prospecto;
+use App\Services\FlujoEjecucionService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -15,6 +16,10 @@ use Illuminate\Support\Facades\Validator;
 
 class FlujoEjecucionController extends Controller
 {
+    public function __construct(
+        private readonly FlujoEjecucionService $flujoEjecucionService
+    ) {}
+
     /**
      * Ejecuta un flujo para un conjunto de prospectos
      *
@@ -937,11 +942,7 @@ class FlujoEjecucionController extends Controller
             ], 422);
         }
 
-        $ejecucion->update(['estado' => 'paused']);
-
-        Log::info('FlujoEjecucion: Ejecución pausada', [
-            'ejecucion_id' => $ejecucion->id,
-        ]);
+        $ejecucion = $this->flujoEjecucionService->pause($ejecucion);
 
         return response()->json([
             'error' => false,
@@ -954,6 +955,10 @@ class FlujoEjecucionController extends Controller
      * Reanuda una ejecución pausada
      *
      * POST /api/flujos/{flujo}/ejecuciones/{ejecucion}/reanudar
+     *
+     * IMPORTANT: This method recalculates all pending etapa dates to prevent
+     * mass-fire of past-dated etapas. The offset calculation shifts all future
+     * dates forward by the duration the execution was paused.
      */
     public function resume(Flujo $flujo, FlujoEjecucion $ejecucion): JsonResponse
     {
@@ -971,11 +976,7 @@ class FlujoEjecucionController extends Controller
             ], 422);
         }
 
-        $ejecucion->update(['estado' => 'in_progress']);
-
-        Log::info('FlujoEjecucion: Ejecución reanudada', [
-            'ejecucion_id' => $ejecucion->id,
-        ]);
+        $ejecucion = $this->flujoEjecucionService->resume($ejecucion);
 
         return response()->json([
             'error' => false,
