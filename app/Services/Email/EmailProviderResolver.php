@@ -171,6 +171,26 @@ class EmailProviderResolver
     }
 
     /**
+     * Get email service by provider name (for pre-resolved providers).
+     *
+     * Use this when the provider was determined at batch level to avoid
+     * per-prospecto resolver calls. This eliminates N+1 queries when
+     * processing large batches where all prospectos use the same provider.
+     *
+     * @param string $providerName Either 'athena' or 'certificada'
+     * @return EmailServiceInterface The corresponding email service
+     * @throws \InvalidArgumentException If provider name is unknown
+     */
+    public function getServiceByName(string $providerName): EmailServiceInterface
+    {
+        return match ($providerName) {
+            'athena' => $this->smtpService,
+            'certificada' => $this->certificadaService,
+            default => throw new \InvalidArgumentException("Unknown provider: {$providerName}"),
+        };
+    }
+
+    /**
      * Determine the provider name that will be used (for logging/storage).
      */
     public function getProviderName(Prospecto $prospecto): string

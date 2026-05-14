@@ -351,4 +351,73 @@ class EnviarEtapaJobTest extends TestCase
             return $batch->jobs->count() === 3;
         });
     }
+
+    /** @test */
+    public function job_pre_resolves_provider_for_email_jobs(): void
+    {
+        Bus::fake();
+
+        config(['services.email.primary_provider' => 'athena']);
+
+        $job = new EnviarEtapaJob(
+            flujoEjecucionId: $this->ejecucion->id,
+            etapaEjecucionId: $this->etapaEjecucion->id,
+            stage: [
+                'id' => 'stage1',
+                'tipo_mensaje' => 'email',
+                'plantilla_mensaje' => 'Test content',
+            ],
+            prospectoIds: [$this->prospecto->id]
+        );
+
+        $job->handle();
+
+        // Verify the batched email job receives the pre-resolved provider name
+        Bus::assertBatched(function ($batch) {
+            $emailJob = $batch->jobs->first();
+            // Non-IC prospects with athena as primary should get 'athena' provider
+            return $emailJob instanceof EnviarEmailEtapaProspectoJob
+                && $emailJob->providerName === 'athena';
+        });
+    }
+
+    /** @test */
+    public function job_eager_loads_importacion_lote_for_batch_provider_resolution(): void
+    {
+        Bus::fake();
+
+        // Track queries to verify eager loading prevents N+1
+        $queryLog = [];
+        \Illuminate\Support\Facades\DB::listen(function ($query) use (&$queryLog) {
+            $queryLog[] = $query->sql;
+        });
+
+        $tipoProspecto = TipoProspecto::first();
+        $prospecto2 = Prospecto::factory()->create([
+            'tipo_prospecto_id' => $tipoProspecto->id,
+            'email' => 'eager@example.com',
+        ]);
+
+        $job = new EnviarEtapaJob(
+            flujoEjecucionId: $this->ejecucion->id,
+            etapaEjecucionId: $this->etapaEjecucion->id,
+            stage: [
+                'id' => 'stage1',
+                'tipo_mensaje' => 'email',
+                'plantilla_mensaje' => 'Test',
+            ],
+            prospectoIds: [$this->prospecto->id, $prospecto2->id]
+        );
+
+        $job->handle();
+
+        // Count queries for importaciones and lotes
+        $importacionQueries = array_filter($queryLog, fn($sql) => str_contains($sql, 'importaciones'));
+        $loteQueries = array_filter($queryLog, fn($sql) => str_contains($sql, 'lotes'));
+
+        // With eager loading, should be at most 1 query for importaciones and 1 for lotes (batch load)
+        // Without eager loading, would be N queries (one per prospecto)
+        $this->assertLessThanOrEqual(1, count($importacionQueries), 'Should have at most 1 importaciones query (eager load)');
+        $this->assertLessThanOrEqual(1, count($loteQueries), 'Should have at most 1 lotes query (eager load)');
+    }
 }

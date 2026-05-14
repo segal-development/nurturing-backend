@@ -238,6 +238,10 @@ class EnvioService
      * @param  bool  $esHtml  Si el contenido es HTML
      * @return array{success: bool, envio_id: int|null, error: string|null}
      */
+    /**
+     * @param string|null $providerName Pre-resolved provider name ('athena'|'certificada').
+     *                                   When provided, skips provider resolution for N+1 optimization.
+     */
     public function enviarEmailAProspecto(
         \App\Models\ProspectoEnFlujo $prospectoEnFlujo,
         string $contenido,
@@ -246,7 +250,8 @@ class EnvioService
         ?int $etapaEjecucionId = null,
         bool $esHtml = false,
         ?string $senderEmail = null,
-        ?string $senderName = null
+        ?string $senderName = null,
+        ?string $providerName = null
     ): array {
         $prospecto = $prospectoEnFlujo->prospecto;
 
@@ -374,9 +379,16 @@ class EnvioService
                 $envio->update(['contenido_enviado' => $contenidoFinal]);
             }
 
-            // Resolve which email provider to use based on prospect's lote
-            $emailService = $this->emailProviderResolver->resolve($prospecto);
-            $providerName = $this->emailProviderResolver->getProviderName($prospecto);
+            // Resolve which email provider to use
+            // If providerName was pre-resolved at batch level, use it to avoid N+1 queries
+            if ($providerName !== null) {
+                $emailService = $this->emailProviderResolver->getServiceByName($providerName);
+                // providerName already set from parameter
+            } else {
+                // Fallback: resolve per-prospecto (used when job doesn't have pre-resolved provider)
+                $emailService = $this->emailProviderResolver->resolve($prospecto);
+                $providerName = $this->emailProviderResolver->getProviderName($prospecto);
+            }
 
             // Determine sender: use passed params first, then flujo's sender config, then service defaults
             $effectiveSenderEmail = $senderEmail;

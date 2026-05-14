@@ -72,6 +72,7 @@ class EnviarEtapaChunkJob implements ShouldQueue
         }
 
         // Obtener prospectos para este chunk desde la BD
+        // Eager loads prospecto.importacion.lote for batch provider pre-resolution
         $prospectosEnFlujo = $this->obtenerProspectosChunk();
 
         if ($prospectosEnFlujo->isEmpty()) {
@@ -86,10 +87,13 @@ class EnviarEtapaChunkJob implements ShouldQueue
         $contenidoData = $this->obtenerContenidoMensaje();
         $tipoMensaje = $this->stage['tipo_mensaje'] ?? 'email';
 
+        // Pre-resolve email provider at chunk level to avoid N+1 queries
+        $chunkProviderName = $this->preResolveChunkProvider($prospectosEnFlujo);
+
         // Crear jobs para este chunk
         $jobs = [];
         foreach ($prospectosEnFlujo as $prospectoEnFlujo) {
-            $job = $this->createJobForProspecto($prospectoEnFlujo, $contenidoData, $tipoMensaje);
+            $job = $this->createJobForProspecto($prospectoEnFlujo, $contenidoData, $tipoMensaje, $chunkProviderName);
             if ($job) {
                 $jobs[] = $job;
             }
@@ -205,15 +209,63 @@ class EnviarEtapaChunkJob implements ShouldQueue
         }
 
         // Obtener los ProspectoEnFlujo para este chunk
-        return ProspectoEnFlujo::where('flujo_id', $this->flujoId)
+        // Eager load prospecto.importacion.lote for batch provider pre-resolution
+        return ProspectoEnFlujo::with(['prospecto.importacion.lote'])
+            ->where('flujo_id', $this->flujoId)
             ->whereIn('prospecto_id', $prospectoIds)
             ->where('cancelado', false)
             ->where('completado', false)
             ->get();
     }
 
-    private function createJobForProspecto(ProspectoEnFlujo $prospectoEnFlujo, array $contenidoData, string $tipoMensaje): ?ShouldQueue
+    /**
+     * Pre-resolve email provider at chunk level to avoid N+1 queries.
+     *
+     * @param \Illuminate\Support\Collection $prospectosEnFlujo Collection with prospecto.importacion.lote eager loaded
+     * @return string|null Provider name ('athena'|'certificada') or null if mixed chunk
+     */
+    private function preResolveChunkProvider(\Illuminate\Support\Collection $prospectosEnFlujo): ?string
     {
+        if ($prospectosEnFlujo->isEmpty()) {
+            return null;
+        }
+
+        $resolver = app(\App\Services\Email\EmailProviderResolver::class);
+        $providerName = null;
+        $isHomogeneous = true;
+
+        foreach ($prospectosEnFlujo as $prospectoEnFlujo) {
+            $prospecto = $prospectoEnFlujo->prospecto;
+            if (! $prospecto) {
+                continue;
+            }
+
+            $currentProvider = $resolver->getProviderName($prospecto);
+
+            if ($providerName === null) {
+                $providerName = $currentProvider;
+            } elseif ($providerName !== $currentProvider) {
+                $isHomogeneous = false;
+                Log::info('EnviarEtapaChunkJob: Mixed provider chunk detected, will resolve per-prospecto', [
+                    'chunk_index' => $this->chunkIndex,
+                    'chunk_size' => $prospectosEnFlujo->count(),
+                ]);
+                break;
+            }
+        }
+
+        return $isHomogeneous ? $providerName : null;
+    }
+
+    /**
+     * @param string|null $providerName Pre-resolved provider name for batch optimization
+     */
+    private function createJobForProspecto(
+        ProspectoEnFlujo $prospectoEnFlujo,
+        array $contenidoData,
+        string $tipoMensaje,
+        ?string $providerName = null
+    ): ?ShouldQueue {
         if ($tipoMensaje === 'sms') {
             return new EnviarSmsEtapaProspectoJob(
                 prospectoEnFlujoId: $prospectoEnFlujo->id,
@@ -229,7 +281,8 @@ class EnviarEtapaChunkJob implements ShouldQueue
             asunto: $contenidoData['asunto'] ?? $this->stage['template']['asunto'] ?? 'Mensaje',
             flujoId: $this->flujoId,
             etapaEjecucionId: $this->etapaEjecucionId,
-            esHtml: $contenidoData['es_html']
+            esHtml: $contenidoData['es_html'],
+            providerName: $providerName
         );
     }
 

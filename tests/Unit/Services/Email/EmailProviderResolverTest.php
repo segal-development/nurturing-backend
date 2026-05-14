@@ -323,6 +323,35 @@ class EmailProviderResolverTest extends TestCase
     }
 
     // ============================================
+    // TESTS: getServiceByName() for batch optimization
+    // ============================================
+
+    /** @test */
+    public function test_get_service_by_name_returns_athena_service(): void
+    {
+        $result = $this->resolver->getServiceByName('athena');
+
+        $this->assertSame($this->smtpService, $result);
+    }
+
+    /** @test */
+    public function test_get_service_by_name_returns_certificada_service(): void
+    {
+        $result = $this->resolver->getServiceByName('certificada');
+
+        $this->assertSame($this->certificadaService, $result);
+    }
+
+    /** @test */
+    public function test_get_service_by_name_throws_for_unknown_provider(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Unknown provider: invalid');
+
+        $this->resolver->getServiceByName('invalid');
+    }
+
+    // ============================================
     // TESTS: Invalid config handling
     // ============================================
 

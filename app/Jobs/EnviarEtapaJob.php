@@ -302,13 +302,18 @@ class EnviarEtapaJob implements ShouldQueue
             $contenidoSms = $this->obtenerContenidoSms();
         }
 
+        // Pre-resolve email provider at batch level to avoid N+1 queries
+        // All prospectos in same batch typically use same provider (same lote)
+        $batchProviderName = $this->preResolveBatchProvider($prospectosEnFlujo);
+
         foreach ($prospectosEnFlujo as $prospectoEnFlujo) {
             $createdJobs = $this->createJobsForProspecto(
                 prospectoEnFlujo: $prospectoEnFlujo,
                 contenidoEmail: $contenidoData,
                 contenidoSms: $contenidoSms,
                 tipoMensaje: $tipoMensaje,
-                flujoId: $ejecucion->flujo_id
+                flujoId: $ejecucion->flujo_id,
+                providerName: $batchProviderName
             );
 
             foreach ($createdJobs as $job) {
@@ -319,6 +324,7 @@ class EnviarEtapaJob implements ShouldQueue
         Log::info('EnviarEtapaJob: Jobs creados', [
             'total_jobs' => count($jobs),
             'tipo_mensaje' => $tipoMensaje,
+            'batch_provider' => $batchProviderName,
         ]);
 
         return $jobs;
@@ -327,6 +333,7 @@ class EnviarEtapaJob implements ShouldQueue
     /**
      * Crea los jobs necesarios para un prospecto según el tipo de mensaje.
      *
+     * @param string|null $providerName Pre-resolved provider name for batch optimization
      * @return array<ShouldQueue>
      */
     private function createJobsForProspecto(
@@ -334,7 +341,8 @@ class EnviarEtapaJob implements ShouldQueue
         array $contenidoEmail,
         ?array $contenidoSms,
         string $tipoMensaje,
-        int $flujoId
+        int $flujoId,
+        ?string $providerName = null
     ): array {
         $jobs = [];
 
@@ -357,7 +365,8 @@ class EnviarEtapaJob implements ShouldQueue
             asunto: $contenidoEmail['asunto'] ?? $this->stage['template']['asunto'] ?? 'Mensaje',
             flujoId: $flujoId,
             etapaEjecucionId: $this->etapaEjecucionId,
-            esHtml: $contenidoEmail['es_html']
+            esHtml: $contenidoEmail['es_html'],
+            providerName: $providerName
         );
 
         // SMS adicional para tipo 'ambos'
@@ -371,6 +380,49 @@ class EnviarEtapaJob implements ShouldQueue
         }
 
         return $jobs;
+    }
+
+    /**
+     * Pre-resolve email provider at batch level to avoid N+1 queries.
+     *
+     * For batches where all prospectos belong to the same lote (common case),
+     * we can determine the provider once and pass it to all child jobs.
+     * This eliminates per-prospecto importacion.lote lookups.
+     *
+     * @param \Illuminate\Support\Collection $prospectosEnFlujo Collection with prospecto.importacion.lote eager loaded
+     * @return string|null Provider name ('athena'|'certificada') or null if mixed batch
+     */
+    private function preResolveBatchProvider(\Illuminate\Support\Collection $prospectosEnFlujo): ?string
+    {
+        if ($prospectosEnFlujo->isEmpty()) {
+            return null;
+        }
+
+        $resolver = app(\App\Services\Email\EmailProviderResolver::class);
+        $providerName = null;
+        $isHomogeneous = true;
+
+        foreach ($prospectosEnFlujo as $prospectoEnFlujo) {
+            $prospecto = $prospectoEnFlujo->prospecto;
+            if (! $prospecto) {
+                continue;
+            }
+
+            $currentProvider = $resolver->getProviderName($prospecto);
+
+            if ($providerName === null) {
+                $providerName = $currentProvider;
+            } elseif ($providerName !== $currentProvider) {
+                // Mixed batch - some IC, some not - cannot pre-resolve
+                $isHomogeneous = false;
+                Log::info('EnviarEtapaJob: Mixed provider batch detected, will resolve per-prospecto', [
+                    'batch_size' => $prospectosEnFlujo->count(),
+                ]);
+                break;
+            }
+        }
+
+        return $isHomogeneous ? $providerName : null;
     }
 
     /**
@@ -597,7 +649,10 @@ class EnviarEtapaJob implements ShouldQueue
         }
 
         // Build base query for prospects in this flow
-        $query = ProspectoEnFlujo::where('flujo_id', $flujoId)
+        // Eager load prospecto.importacion.lote for batch provider pre-resolution
+        // This eliminates N+1 queries when determining email provider (IC vs non-IC)
+        $query = ProspectoEnFlujo::with(['prospecto.importacion.lote'])
+            ->where('flujo_id', $flujoId)
             ->whereIn('prospecto_id', $this->prospectoIds)
             ->where('cancelado', false)
             ->where('completado', false);

@@ -60,6 +60,16 @@ class EnviarEmailEtapaProspectoJob implements ShouldBeUnique, ShouldQueue
 
     /**
      * Create a new job instance.
+     *
+     * @param int $prospectoEnFlujoId ID of the ProspectoEnFlujo record
+     * @param string $contenido Email content (already personalized)
+     * @param string $asunto Email subject
+     * @param int|null $flujoId Flow ID for tracking
+     * @param int|null $etapaEjecucionId Stage execution ID for tracking
+     * @param bool $esHtml Whether content is HTML
+     * @param string|null $providerName Pre-resolved provider name ('athena'|'certificada')
+     *                                   When provided, skips per-prospecto provider resolution
+     *                                   eliminating N+1 queries in batch processing
      */
     public function __construct(
         public int $prospectoEnFlujoId,
@@ -67,7 +77,8 @@ class EnviarEmailEtapaProspectoJob implements ShouldBeUnique, ShouldQueue
         public string $asunto,
         public ?int $flujoId = null,
         public ?int $etapaEjecucionId = null,
-        public bool $esHtml = false
+        public bool $esHtml = false,
+        public ?string $providerName = null
     ) {
         // Load timeout from config (tries and maxExceptions are set as properties)
         $this->timeout = config('envios.queue.timeout', 60);
@@ -124,7 +135,8 @@ class EnviarEmailEtapaProspectoJob implements ShouldBeUnique, ShouldQueue
                 asunto: $this->asunto,
                 flujoId: $this->flujoId,
                 etapaEjecucionId: $this->etapaEjecucionId,
-                esHtml: $this->esHtml
+                esHtml: $this->esHtml,
+                providerName: $this->providerName
             );
 
             if (! $result['success']) {
