@@ -84,6 +84,15 @@ class EnviarEmailEtapaProspectoJob implements ShouldBeUnique, ShouldQueue
         $this->timeout = config('envios.queue.timeout', 60);
     }
 
+    // Legacy payloads queued before $providerName existed lack the property
+    // after unserialize — PHP does not apply class defaults on unserialize.
+    public function __wakeup(): void
+    {
+        if (! isset($this->providerName)) {
+            $this->providerName = null;
+        }
+    }
+
     /**
      * Get the middleware the job should pass through.
      *
