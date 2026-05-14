@@ -16,11 +16,12 @@ return new class extends Migration
     public function up(): void
     {
         // Count duplicates before cleanup
+        // PostgreSQL requires COUNT(*) in HAVING, not the alias
         $duplicadosAntes = DB::table('envios')
             ->select('prospecto_id', 'flujo_ejecucion_etapa_id', 'canal', DB::raw('COUNT(*) as total'))
             ->whereNotNull('flujo_ejecucion_etapa_id')
             ->groupBy('prospecto_id', 'flujo_ejecucion_etapa_id', 'canal')
-            ->having('total', '>', 1)
+            ->havingRaw('COUNT(*) > 1')
             ->get();
 
         $gruposConDuplicados = $duplicadosAntes->count();
