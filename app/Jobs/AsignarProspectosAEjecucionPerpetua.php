@@ -18,7 +18,7 @@ use Illuminate\Support\Facades\Log;
  * this job adds them to the existing perpetual execution with:
  * - ultima_etapa_node_id = NULL (so they start from stage 1)
  * - Added to execution's prospectos_ids
- * - Added to first stage's prospectos_ids
+ * - Added to ALL pending stages' prospectos_ids
  *
  * This enables new prospects to catch up through the flow independently
  * while existing prospects continue through later stages.
@@ -114,8 +114,8 @@ class AsignarProspectosAEjecucionPerpetua implements ShouldQueue
         // Update execution's prospectos_ids (ALL nuevos, even if already in prospecto_en_flujo)
         $this->actualizarEjecucion($ejecucionPerpetua, $nuevosProspectoIds);
 
-        // Update first stage's prospectos_ids
-        $this->actualizarPrimeraEtapa($ejecucionPerpetua, $nuevosProspectoIds, $resolver);
+        // Update ALL pending stages' prospectos_ids (not just the first)
+        $this->actualizarEtapasPendientes($ejecucionPerpetua, $nuevosProspectoIds);
 
         Log::info('AsignarProspectosAEjecucionPerpetua: Completado', [
             'flujo_id' => $this->flujoId,
@@ -381,46 +381,46 @@ class AsignarProspectosAEjecucionPerpetua implements ShouldQueue
     }
 
     /**
-     * Update the first stage's prospectos_ids with new prospects.
+     * Update ALL pending stages' prospectos_ids with new prospects.
+     *
+     * New prospects joining a perpetual flow should be added to all
+     * stages that haven't been executed yet, so they will be included
+     * when those stages run.
      */
-    private function actualizarPrimeraEtapa(
+    private function actualizarEtapasPendientes(
         FlujoEjecucion $ejecucion,
-        array $nuevosProspectoIds,
-        StageOrderResolver $resolver
+        array $nuevosProspectoIds
     ): void {
-        $flujo = $ejecucion->flujo;
-        $firstStageId = $resolver->getFirstStage($flujo);
+        $etapasPendientes = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
+            ->where('estado', 'pending')
+            ->get();
 
-        if (! $firstStageId) {
-            return;
-        }
-
-        $primeraEtapa = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
-            ->where('node_id', $firstStageId)
-            ->first();
-
-        if (! $primeraEtapa) {
-            Log::warning('AsignarProspectosAEjecucionPerpetua: Primera etapa no encontrada', [
+        if ($etapasPendientes->isEmpty()) {
+            Log::info('AsignarProspectosAEjecucionPerpetua: No hay etapas pendientes para actualizar', [
                 'ejecucion_id' => $ejecucion->id,
-                'node_id' => $firstStageId,
             ]);
 
             return;
         }
 
-        $existingIds = $primeraEtapa->prospectos_ids ?? [];
-        $mergedIds = array_values(array_unique(array_merge($existingIds, $nuevosProspectoIds)));
+        $etapasActualizadas = 0;
 
-        $primeraEtapa->update([
-            'prospectos_ids' => $mergedIds,
-            'prospectos_count' => count($mergedIds),
-        ]);
+        foreach ($etapasPendientes as $etapa) {
+            $existingIds = $etapa->prospectos_ids ?? [];
+            $mergedIds = array_values(array_unique(array_merge($existingIds, $nuevosProspectoIds)));
 
-        Log::debug('AsignarProspectosAEjecucionPerpetua: Primera etapa actualizada', [
-            'etapa_id' => $primeraEtapa->id,
-            'node_id' => $firstStageId,
+            $etapa->update([
+                'prospectos_ids' => $mergedIds,
+                'prospectos_count' => count($mergedIds),
+            ]);
+
+            $etapasActualizadas++;
+        }
+
+        Log::info('AsignarProspectosAEjecucionPerpetua: Etapas pendientes actualizadas', [
+            'ejecucion_id' => $ejecucion->id,
+            'etapas_actualizadas' => $etapasActualizadas,
             'nuevos_prospectos' => count($nuevosProspectoIds),
-            'total_prospectos' => count($mergedIds),
         ]);
     }
 
