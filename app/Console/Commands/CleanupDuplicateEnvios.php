@@ -7,10 +7,13 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Remove duplicate envios (same etapa_flujo_id + prospecto_id).
+ * Remove duplicate envios (same prospecto_id + flujo_id + fecha_programada + asunto).
  *
  * Keeps the first envio (lowest id) and deletes the rest.
  * Processes in batches to avoid locking the database.
+ *
+ * These duplicates typically occur from the mass-fire bug when resuming
+ * paused flows caused multiple identical emails to be scheduled.
  *
  * Usage:
  *   php artisan nurturing:cleanup-duplicate-envios --dry-run    # Preview
@@ -24,7 +27,7 @@ class CleanupDuplicateEnvios extends Command
                             {--batch=1000 : Number of records to delete per batch}
                             {--limit=0 : Maximum duplicates to process (0 = all)}';
 
-    protected $description = 'Remove duplicate envios keeping the first one per etapa_flujo_id + prospecto_id';
+    protected $description = 'Remove duplicate envios keeping the first one per prospecto_id + flujo_id + fecha_programada + asunto';
 
     public function handle(): int
     {
@@ -39,11 +42,12 @@ class CleanupDuplicateEnvios extends Command
         DB::statement("SET statement_timeout = '10min'");
 
         // Find all duplicate groups
+        // Duplicates = same prospecto + flujo + fecha_programada + asunto
         $this->info('Finding duplicate groups (this may take a few minutes)...');
         
         $duplicateGroups = DB::table('envios')
-            ->select('etapa_flujo_id', 'prospecto_id', DB::raw('COUNT(*) as total'), DB::raw('MIN(id) as keep_id'))
-            ->groupBy('etapa_flujo_id', 'prospecto_id')
+            ->select('prospecto_id', 'flujo_id', 'fecha_programada', 'asunto', DB::raw('COUNT(*) as total'), DB::raw('MIN(id) as keep_id'))
+            ->groupBy('prospecto_id', 'flujo_id', 'fecha_programada', 'asunto')
             ->havingRaw('COUNT(*) > 1')
             ->get();
 
@@ -75,7 +79,7 @@ class CleanupDuplicateEnvios extends Command
             $sample = $duplicateGroups->take(5);
             $this->info('Sample duplicate groups:');
             foreach ($sample as $group) {
-                $this->line("  etapa_flujo_id={$group->etapa_flujo_id}, prospecto_id={$group->prospecto_id}: {$group->total} envios (keeping id={$group->keep_id})");
+                $this->line("  prospecto={$group->prospecto_id}, flujo={$group->flujo_id}, fecha={$group->fecha_programada}: {$group->total} envios (keeping id={$group->keep_id})");
             }
             
             $this->newLine();
@@ -107,8 +111,10 @@ class CleanupDuplicateEnvios extends Command
 
             // Get all IDs for this group except the one to keep
             $duplicateIds = DB::table('envios')
-                ->where('etapa_flujo_id', $group->etapa_flujo_id)
                 ->where('prospecto_id', $group->prospecto_id)
+                ->where('flujo_id', $group->flujo_id)
+                ->where('fecha_programada', $group->fecha_programada)
+                ->where('asunto', $group->asunto)
                 ->where('id', '!=', $group->keep_id)
                 ->pluck('id')
                 ->toArray();
