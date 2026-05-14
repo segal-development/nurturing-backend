@@ -23,6 +23,8 @@ class Flujo extends Model
         'nombre',
         'descripcion',
         'canal_envio',
+        'sender_email',
+        'sender_name',
         'activo',
         'auto_asignar_nuevos',
         'es_perpetuo',
