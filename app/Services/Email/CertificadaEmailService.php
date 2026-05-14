@@ -57,10 +57,21 @@ class CertificadaEmailService implements EmailServiceInterface
      * @param  string  $asunto  Email subject
      * @param  string  $contenido  Email body (HTML or plain text)
      * @param  bool  $esHtml  Whether content is HTML
+     * @param  string|null  $senderEmail  Custom sender email (falls back to config if null)
+     * @param  string|null  $senderName  Custom sender name (falls back to config if null)
      * @return array{success: bool, message_id: ?string, error: ?string}
      */
-    public function send(Prospecto $prospecto, string $asunto, string $contenido, bool $esHtml): array
-    {
+    public function send(
+        Prospecto $prospecto,
+        string $asunto,
+        string $contenido,
+        bool $esHtml,
+        ?string $senderEmail = null,
+        ?string $senderName = null
+    ): array {
+        // Use custom sender if provided, else fall back to config
+        $effectiveSenderEmail = $senderEmail ?? $this->senderEmail;
+        $effectiveSenderName = $senderName ?? $this->senderName;
         if (! $this->enabled) {
             Log::warning('CertificadaEmailService: Service is disabled', [
                 'prospecto_id' => $prospecto->id,
@@ -84,7 +95,7 @@ class CertificadaEmailService implements EmailServiceInterface
         }
 
         try {
-            $payload = $this->buildPayload($prospecto, $asunto, $contenido, $esHtml);
+            $payload = $this->buildPayload($prospecto, $asunto, $contenido, $esHtml, $effectiveSenderEmail, $effectiveSenderName);
 
             $response = Http::timeout($this->timeout)
                 ->post("{$this->baseUrl}/transaccional/enviar_html", $payload);
@@ -160,8 +171,14 @@ class CertificadaEmailService implements EmailServiceInterface
      *
      * @return array<string, mixed>
      */
-    private function buildPayload(Prospecto $prospecto, string $asunto, string $contenido, bool $esHtml): array
-    {
+    private function buildPayload(
+        Prospecto $prospecto,
+        string $asunto,
+        string $contenido,
+        bool $esHtml,
+        string $senderEmail,
+        string $senderName
+    ): array {
         // Certificada requires HTML to be base64 encoded
         $htmlContent = $esHtml ? $contenido : nl2br(e($contenido));
         $textoPlano = $esHtml ? strip_tags($contenido) : $contenido;
@@ -169,8 +186,8 @@ class CertificadaEmailService implements EmailServiceInterface
         return [
             'IdApi' => $this->apiKey,
             'From' => [
-                'Email' => $this->senderEmail,
-                'Nombre' => $this->senderName,
+                'Email' => $senderEmail,
+                'Nombre' => $senderName,
             ],
             'To' => [
                 'Email' => $prospecto->email,

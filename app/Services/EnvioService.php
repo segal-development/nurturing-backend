@@ -244,7 +244,9 @@ class EnvioService
         string $asunto,
         ?int $flujoId = null,
         ?int $etapaEjecucionId = null,
-        bool $esHtml = false
+        bool $esHtml = false,
+        ?string $senderEmail = null,
+        ?string $senderName = null
     ): array {
         $prospecto = $prospectoEnFlujo->prospecto;
 
@@ -376,7 +378,19 @@ class EnvioService
             $emailService = $this->emailProviderResolver->resolve($prospecto);
             $providerName = $this->emailProviderResolver->getProviderName($prospecto);
 
-            $result = $emailService->send($prospecto, $asunto, $contenidoFinal, $esHtml);
+            // Determine sender: use passed params first, then flujo's sender config, then service defaults
+            $effectiveSenderEmail = $senderEmail;
+            $effectiveSenderName = $senderName;
+
+            if (! $effectiveSenderEmail && $flujoId) {
+                $flujo = \App\Models\Flujo::find($flujoId);
+                if ($flujo) {
+                    $effectiveSenderEmail = $flujo->sender_email;
+                    $effectiveSenderName = $flujo->sender_name;
+                }
+            }
+
+            $result = $emailService->send($prospecto, $asunto, $contenidoFinal, $esHtml, $effectiveSenderEmail, $effectiveSenderName);
 
             // Update the envio with provider info
             $envio->email_provider = $providerName;
@@ -404,6 +418,7 @@ class EnvioService
                 'envio_id' => $envio->id,
                 'provider' => $providerName,
                 'message_id' => $result['message_id'] ?? null,
+                'sender_email' => $effectiveSenderEmail ?? 'default',
             ]);
 
             return [

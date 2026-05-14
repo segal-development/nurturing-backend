@@ -22,18 +22,34 @@ class SmtpEmailService implements EmailServiceInterface
      * @param  string  $asunto  Email subject
      * @param  string  $contenido  Email body (HTML or plain text)
      * @param  bool  $esHtml  Whether content is HTML
+     * @param  string|null  $senderEmail  Custom sender email (falls back to config if null)
+     * @param  string|null  $senderName  Custom sender name (falls back to config if null)
      * @return array{success: bool, message_id: ?string, error: ?string}
      */
-    public function send(Prospecto $prospecto, string $asunto, string $contenido, bool $esHtml): array
-    {
+    public function send(
+        Prospecto $prospecto,
+        string $asunto,
+        string $contenido,
+        bool $esHtml,
+        ?string $senderEmail = null,
+        ?string $senderName = null
+    ): array {
         try {
+            // Use custom sender if provided, else fall back to config
+            $effectiveSenderEmail = $senderEmail ?? config('mail.from.address');
+            $effectiveSenderName = $senderName ?? config('mail.from.name');
+
             if ($esHtml) {
-                Mail::html($contenido, function ($message) use ($prospecto, $asunto) {
-                    $message->to($prospecto->email, $prospecto->nombre)->subject($asunto);
+                Mail::html($contenido, function ($message) use ($prospecto, $asunto, $effectiveSenderEmail, $effectiveSenderName) {
+                    $message->from($effectiveSenderEmail, $effectiveSenderName)
+                        ->to($prospecto->email, $prospecto->nombre)
+                        ->subject($asunto);
                 });
             } else {
-                Mail::raw($contenido, function ($message) use ($prospecto, $asunto) {
-                    $message->to($prospecto->email, $prospecto->nombre)->subject($asunto);
+                Mail::raw($contenido, function ($message) use ($prospecto, $asunto, $effectiveSenderEmail, $effectiveSenderName) {
+                    $message->from($effectiveSenderEmail, $effectiveSenderName)
+                        ->to($prospecto->email, $prospecto->nombre)
+                        ->subject($asunto);
                 });
             }
 

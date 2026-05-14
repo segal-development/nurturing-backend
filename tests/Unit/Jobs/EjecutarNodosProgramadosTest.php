@@ -683,6 +683,103 @@ class EjecutarNodosProgramadosTest extends TestCase
     }
 
     // ============================================
+    // Tests de Throttling (Phase 4)
+    // ============================================
+
+    /** @test */
+    public function job_applies_throttle_when_enabled_and_limit_exceeded(): void
+    {
+        Bus::fake([EnviarEtapaJob::class]);
+
+        // Set throttle limit to 2
+        config([
+            'nurturing.throttle.enabled' => true,
+            'nurturing.throttle.max_etapas_per_minute' => 2,
+        ]);
+
+        // Create 5 ejecuciones ready to process
+        for ($i = 0; $i < 4; $i++) {
+            FlujoEjecucion::factory()->create([
+                'flujo_id' => $this->flujo->id,
+                'estado' => 'in_progress',
+                'proximo_nodo' => 'stage-1',
+                'fecha_proximo_nodo' => now()->subMinute(),
+                'prospectos_ids' => [$this->prospecto->id],
+            ]);
+        }
+
+        $envioService = Mockery::mock(EnvioService::class);
+
+        $job = new EjecutarNodosProgramados;
+        $job->handle($envioService);
+
+        // Should only dispatch 2 jobs (throttle limit)
+        Bus::assertDispatchedTimes(EnviarEtapaJob::class, 2);
+    }
+
+    /** @test */
+    public function job_processes_all_when_below_throttle_limit(): void
+    {
+        Bus::fake([EnviarEtapaJob::class]);
+
+        // Set throttle limit to 100 (high)
+        config([
+            'nurturing.throttle.enabled' => true,
+            'nurturing.throttle.max_etapas_per_minute' => 100,
+        ]);
+
+        // Create 3 ejecuciones (below limit)
+        for ($i = 0; $i < 2; $i++) {
+            FlujoEjecucion::factory()->create([
+                'flujo_id' => $this->flujo->id,
+                'estado' => 'in_progress',
+                'proximo_nodo' => 'stage-1',
+                'fecha_proximo_nodo' => now()->subMinute(),
+                'prospectos_ids' => [$this->prospecto->id],
+            ]);
+        }
+
+        $envioService = Mockery::mock(EnvioService::class);
+
+        $job = new EjecutarNodosProgramados;
+        $job->handle($envioService);
+
+        // Should dispatch all 3 jobs (1 from setUp + 2 created)
+        Bus::assertDispatchedTimes(EnviarEtapaJob::class, 3);
+    }
+
+    /** @test */
+    public function job_processes_all_when_throttle_disabled(): void
+    {
+        Bus::fake([EnviarEtapaJob::class]);
+
+        // Disable throttle
+        config([
+            'nurturing.throttle.enabled' => false,
+            'nurturing.throttle.max_etapas_per_minute' => 2, // Would limit if enabled
+        ]);
+
+        // Create 4 ejecuciones
+        for ($i = 0; $i < 4; $i++) {
+            FlujoEjecucion::factory()->create([
+                'flujo_id' => $this->flujo->id,
+                'estado' => 'in_progress',
+                'proximo_nodo' => 'stage-1',
+                'fecha_proximo_nodo' => now()->subMinute(),
+                'prospectos_ids' => [$this->prospecto->id],
+            ]);
+        }
+
+        $envioService = Mockery::mock(EnvioService::class);
+
+        $job = new EjecutarNodosProgramados;
+        $job->handle($envioService);
+
+        // Should dispatch all 5 jobs (1 from setUp + 4 created) because throttle is disabled
+        Bus::assertDispatchedTimes(EnviarEtapaJob::class, 5);
+    }
+
+    // ============================================
     // Helpers
     // ============================================
 

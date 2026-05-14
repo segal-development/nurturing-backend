@@ -310,6 +310,99 @@ class CertificadaEmailServiceTest extends TestCase
     }
 
     // ============================================
+    // TESTS: Custom sender parameters (Phase 3)
+    // ============================================
+
+    /** @test */
+    public function test_send_uses_custom_sender_when_provided(): void
+    {
+        Http::fake([
+            'https://test.certificada.cl/api/transaccional/enviar_html' => Http::response([
+                'Estado' => '1',
+                'IdMensaje' => 'MSG-CUSTOM',
+            ], 200),
+        ]);
+
+        $prospecto = $this->createMockProspecto();
+
+        $result = $this->service->send(
+            $prospecto,
+            'Test Subject',
+            '<p>Test Content</p>',
+            true,
+            'custom@defensoria.cl',
+            'Defensoría Legal'
+        );
+
+        $this->assertTrue($result['success']);
+
+        Http::assertSent(function ($request) {
+            return $request['From']['Email'] === 'custom@defensoria.cl'
+                && $request['From']['Nombre'] === 'Defensoría Legal';
+        });
+    }
+
+    /** @test */
+    public function test_send_uses_config_default_when_custom_sender_is_null(): void
+    {
+        Http::fake([
+            'https://test.certificada.cl/api/transaccional/enviar_html' => Http::response([
+                'Estado' => '1',
+                'IdMensaje' => 'MSG-DEFAULT',
+            ], 200),
+        ]);
+
+        $prospecto = $this->createMockProspecto();
+
+        $result = $this->service->send(
+            $prospecto,
+            'Test Subject',
+            '<p>Test Content</p>',
+            true,
+            null, // No custom sender email
+            null  // No custom sender name
+        );
+
+        $this->assertTrue($result['success']);
+
+        Http::assertSent(function ($request) {
+            // Should fall back to config values set in setUp()
+            return $request['From']['Email'] === 'test@example.com'
+                && $request['From']['Nombre'] === 'Test Sender';
+        });
+    }
+
+    /** @test */
+    public function test_send_uses_partial_custom_sender_with_default_name(): void
+    {
+        Http::fake([
+            'https://test.certificada.cl/api/transaccional/enviar_html' => Http::response([
+                'Estado' => '1',
+                'IdMensaje' => 'MSG-PARTIAL',
+            ], 200),
+        ]);
+
+        $prospecto = $this->createMockProspecto();
+
+        // Only custom email, name should fall back to config
+        $result = $this->service->send(
+            $prospecto,
+            'Test Subject',
+            '<p>Test Content</p>',
+            true,
+            'custom-email-only@test.cl',
+            null // Use default name
+        );
+
+        $this->assertTrue($result['success']);
+
+        Http::assertSent(function ($request) {
+            return $request['From']['Email'] === 'custom-email-only@test.cl'
+                && $request['From']['Nombre'] === 'Test Sender'; // Falls back to config
+        });
+    }
+
+    // ============================================
     // Helper methods
     // ============================================
 

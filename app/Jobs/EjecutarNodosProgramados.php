@@ -57,7 +57,25 @@ class EjecutarNodosProgramados implements ShouldQueue
         $this->verificarEtapasEjecutando();
 
         // PASO 2: Obtener ejecuciones con nodos programados listos para ejecutar
-        $ejecuciones = FlujoEjecucion::conNodosProgramados()->get();
+        $query = FlujoEjecucion::conNodosProgramados();
+
+        // Apply throttling if enabled
+        $throttleEnabled = config('nurturing.throttle.enabled', true);
+        $maxPerCycle = config('nurturing.throttle.max_etapas_per_minute', 100);
+        $totalReady = $query->count();
+
+        if ($throttleEnabled && $totalReady > $maxPerCycle) {
+            $ejecuciones = $query->limit($maxPerCycle)->get();
+
+            Log::warning('EjecutarNodosProgramados: Throttling active', [
+                'total_ready' => $totalReady,
+                'processing' => $ejecuciones->count(),
+                'deferred' => $totalReady - $ejecuciones->count(),
+                'max_per_cycle' => $maxPerCycle,
+            ]);
+        } else {
+            $ejecuciones = $query->get();
+        }
 
         if ($ejecuciones->isEmpty()) {
             Log::info('EjecutarNodosProgramados: No hay nodos programados listos para ejecutar');
@@ -67,6 +85,7 @@ class EjecutarNodosProgramados implements ShouldQueue
 
         Log::info('EjecutarNodosProgramados: Encontradas ejecuciones con nodos programados', [
             'cantidad' => $ejecuciones->count(),
+            'throttled' => $throttleEnabled && $totalReady > $maxPerCycle,
         ]);
 
         foreach ($ejecuciones as $ejecucion) {
