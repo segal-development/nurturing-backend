@@ -351,3 +351,17 @@ Schedule::job(new \App\Jobs\LimpiezaProspectosPerpetuosJob)
     ->onFailure(function () {
         Log::error('Scheduler: Falló la limpieza de prospectos perpetuos');
     });
+
+// ============================================================================
+// HEALTH CHECK DE LA COLA Y ENVÍOS
+// Cada 15 min verifica métricas críticas (cola saturada, failed_jobs spike,
+// cero envíos, circuit breaker abierto) y envía email a HEALTH_CHECK_EMAIL.
+// Cada tipo de alerta se deduplica por 1h para evitar spam.
+// ============================================================================
+Schedule::command('nurturing:health-check')
+    ->everyFifteenMinutes()
+    ->name('nurturing:health-check')
+    ->withoutOverlapping()
+    ->onFailure(function () {
+        Log::error('Scheduler: Falló el health-check');
+    });
