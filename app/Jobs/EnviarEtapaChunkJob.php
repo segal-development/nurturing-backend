@@ -148,6 +148,17 @@ class EnviarEtapaChunkJob implements ShouldQueue
             ->where('cancelado', false)
             ->where('completado', false);
 
+        // Exclude prospectos with invalid/missing email when sending email
+        if (in_array($tipoMensaje, ['email', 'ambos'], true)) {
+            $baseQuery->whereHas('prospecto', function ($q) {
+                $q->whereNotNull('email')
+                    ->where('email', '!=', '')
+                    ->where(function ($q2) {
+                        $q2->where('email_invalido', false)->orWhereNull('email_invalido');
+                    });
+            });
+        }
+
         // Apply stage-based filtering for perpetual executions
         if ($currentNodeId && $ejecucion && $ejecucion->es_perpetuo) {
             $resolver = app(StageOrderResolver::class);
