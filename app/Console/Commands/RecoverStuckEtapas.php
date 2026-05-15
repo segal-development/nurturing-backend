@@ -62,7 +62,6 @@ class RecoverStuckEtapas extends Command
 
             $this->warn("  ⚠ Etapa {$etapa->id} ({$etapa->node_id}): ESTANCADA");
             $this->line("    - Pendientes: {$result['pending_count']}");
-            $this->line("    - Jobs en cola: {$result['jobs_count']}");
             $this->line("    - Última actividad: {$result['last_activity']}");
             $this->line("    - Minutos inactiva: {$result['minutes_inactive']}");
 
@@ -89,6 +88,14 @@ class RecoverStuckEtapas extends Command
 
     /**
      * Analiza si una etapa está estancada.
+     *
+     * Una etapa se considera estancada cuando:
+     * - Tiene envíos pendientes (no se procesaron todos)
+     * - Y no hubo actividad reciente en esos envíos (>= $minutesThreshold)
+     *
+     * No miramos el total de jobs en cola: una etapa puede estar bloqueada
+     * aunque haya millones de jobs de OTRAS etapas/flujos en la cola
+     * global (caso real visto en el incidente del 2026-05-14).
      */
     private function analyzeEtapa(FlujoEjecucionEtapa $etapa, int $minutesThreshold): array
     {
@@ -103,28 +110,12 @@ class RecoverStuckEtapas extends Command
             return [
                 'is_stuck' => false,
                 'pending_count' => 0,
-                'jobs_count' => 0,
                 'last_activity' => null,
                 'minutes_inactive' => 0,
             ];
         }
 
-        // Contar jobs en cola (aproximado - buscamos jobs que contengan el etapa_id)
-        // Nota: Esto es una aproximación ya que los jobs están serializados
-        $jobsCount = DB::table('jobs')->count();
-
-        // Si hay muchos jobs en cola, probablemente está procesando
-        if ($jobsCount > 100) {
-            return [
-                'is_stuck' => false,
-                'pending_count' => $pendingCount,
-                'jobs_count' => $jobsCount,
-                'last_activity' => 'Jobs en cola',
-                'minutes_inactive' => 0,
-            ];
-        }
-
-        // Verificar última actividad (último envío procesado de esta etapa)
+        // Verificar última actividad (último envío procesado de ESTA etapa)
         $lastProcessed = DB::table('envios')
             ->where('flujo_ejecucion_etapa_id', $etapa->id)
             ->whereIn('estado', ['enviado', 'abierto', 'clickeado', 'fallido'])
@@ -134,12 +125,11 @@ class RecoverStuckEtapas extends Command
             ? now()->diffInMinutes($lastProcessed)
             : 999; // Si nunca se procesó nada, considerar muy inactiva
 
-        $isStuck = $minutesInactive >= $minutesThreshold && $jobsCount < 10;
+        $isStuck = $minutesInactive >= $minutesThreshold;
 
         return [
             'is_stuck' => $isStuck,
             'pending_count' => $pendingCount,
-            'jobs_count' => $jobsCount,
             'last_activity' => $lastProcessed ?? 'Nunca',
             'minutes_inactive' => $minutesInactive,
         ];
