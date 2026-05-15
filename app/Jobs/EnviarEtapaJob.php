@@ -105,7 +105,9 @@ class EnviarEtapaJob implements ShouldQueue
     private function handleLargeVolume(FlujoEjecucion $ejecucion, FlujoEjecucionEtapa $etapaEjecucion): void
     {
         $totalProspectos = count($this->prospectoIds);
-        $chunkSize = 1000;
+        // Chunk de 200: cada orchestrator tarda ~3-5s en lugar de 20s+,
+        // permitiendo que los workers procesen otros jobs (hijos) entre orchestrators.
+        $chunkSize = 200;
         $totalChunks = (int) ceil($totalProspectos / $chunkSize);
 
         Log::info('EnviarEtapaJob: Modo volumen grande - despachando sub-jobs', [
