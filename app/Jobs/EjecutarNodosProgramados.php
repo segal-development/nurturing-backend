@@ -709,17 +709,17 @@ class EjecutarNodosProgramados implements ShouldQueue
         // Calcular porcentaje para logging (basado en envíos creados, no prospectos)
         $porcentajeProcesado = $totalEnviosCreados > 0 ? ($procesados / $totalEnviosCreados) * 100 : 0;
 
-        // También verificar jobs en cola para esta etapa
-        $jobsEnCola = DB::table('jobs')
-            ->where('payload', 'like', '%'.$etapa->id.'%')
-            ->count();
+        // NOTA: Previamente había un check `payload LIKE '%etapa_id%'` para contar
+        // jobs en cola, pero con millones de filas en `jobs` PostgreSQL cancelaba
+        // la query por statement_timeout. La señal `$pendientes === 0` ya garantiza
+        // que todos los envíos de la etapa fueron procesados — un guard adicional
+        // de "jobs en cola" no aporta seguridad real.
 
-        if ($todosProcesados && $jobsEnCola < 100) {
+        if ($todosProcesados) {
             Log::info('EjecutarNodosProgramados: Etapa volumen grande completada', [
                 'etapa_id' => $etapa->id,
                 'total_envios_creados' => $totalEnviosCreados,
                 'porcentaje_procesado' => round($porcentajeProcesado, 2),
-                'jobs_restantes_en_cola' => $jobsEnCola,
             ]);
 
             $messageId = rand(10000, 99999);

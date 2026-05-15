@@ -259,7 +259,13 @@ final class ImportacionRecoveryService
     {
         $searchPattern = '"importacionId";i:'.$importacionId.';';
 
+        // Scope to 'default' queue first — ProcesarImportacionJob doesn't set
+        // a custom queue, so it lands in 'default'. Without this filter the
+        // LIKE on payload scans millions of envio/sms jobs and hits PostgreSQL
+        // statement_timeout. With it, scan is limited to the small default
+        // queue (rarely more than a handful of jobs).
         $exists = DB::table('jobs')
+            ->where('queue', 'default')
             ->where('payload', 'like', '%ProcesarImportacionJob%')
             ->where('payload', 'like', '%'.$searchPattern.'%')
             ->exists();
@@ -364,7 +370,9 @@ final class ImportacionRecoveryService
 
     private function getJobsInQueue(): int
     {
+        // Same scope as hasExistingJob() — see note there.
         return DB::table('jobs')
+            ->where('queue', 'default')
             ->where('payload', 'like', '%ProcesarImportacionJob%')
             ->count();
     }
