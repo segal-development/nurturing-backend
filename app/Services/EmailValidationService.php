@@ -70,6 +70,29 @@ class EmailValidationService
     ];
 
     /**
+     * TLDs reconocidos. Los emails cuyo dominio NO termina en uno de estos
+     * se consideran corruptos (caso real: `usuario@gmail.comsi0` pasa
+     * filter_var pero el TLD `comsi0` no existe).
+     */
+    private const TLDS_VALIDOS = [
+        // Genéricos comunes
+        'com', 'org', 'net', 'edu', 'gov', 'info', 'biz', 'name', 'pro', 'me',
+        'app', 'io', 'co', 'tv', 'live', 'tech', 'site', 'online', 'store',
+        'xyz', 'club', 'shop', 'blog', 'cloud', 'email', 'systems', 'agency',
+
+        // Latam
+        'cl', 'ar', 'mx', 'pe', 'ec', 'uy', 'br', 've', 'py', 'bo', 'cr', 'gt',
+        'hn', 'sv', 'ni', 'pa', 'do', 'cu', 'pr',
+
+        // Iberia + UK + EU comunes
+        'es', 'pt', 'uk', 'fr', 'de', 'it', 'nl', 'be', 'ch', 'se', 'no', 'fi',
+        'dk', 'pl', 'ru',
+
+        // Otros relevantes
+        'us', 'ca', 'au', 'nz', 'jp', 'cn', 'in', 'za',
+    ];
+
+    /**
      * Patrones de error SMTP que indican email inválido permanente.
      */
     private const PATRONES_ERROR_PERMANENTE = [
@@ -138,7 +161,17 @@ class EmailValidationService
             ];
         }
 
-        // 4. Email parece válido
+        // 4. Verificar TLD reconocido (detecta corrupciones como gmail.comsi0)
+        $tld = strtolower(substr(strrchr($dominio, '.'), 1));
+        if ($tld === '' || ! in_array($tld, self::TLDS_VALIDOS, true)) {
+            return [
+                'valid' => false,
+                'motivo' => "tld_invalido:{$tld}",
+                'sugerencia' => null,
+            ];
+        }
+
+        // 5. Email parece válido
         return [
             'valid' => true,
             'motivo' => null,
