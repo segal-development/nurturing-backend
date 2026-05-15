@@ -11,7 +11,18 @@ class PurgeEnviosQueueCommand extends Command
                             {--execute : Actually delete (default is dry-run)}
                             {--chunk=5000 : Jobs per chunk}';
 
-    protected $description = 'Purge envios queue: delete jobs whose ProspectoEnFlujo has no valid email';
+    protected $description = 'Purge envios queue: delete jobs whose ProspectoEnFlujo has invalid email (null, empty, marked invalid, or known typo)';
+
+    private const DOMINIOS_TYPOS = [
+        'gmial.com', 'gmai.com', 'gimeil.com', 'guimei.con', 'gmaill.com',
+        'gmeil.com', 'gmail.con', 'gmail.co', 'gamil.com', 'gnail.com',
+        'gmsil.com', 'gmil.com', 'gmail.cl',
+        'hotmal.com', 'hotmial.com', 'hotmai.com', 'hotmail.con', 'hotmil.com',
+        'hotmaill.com', 'hotamil.com', 'homail.com', 'htmail.com',
+        'yaho.com', 'yahooo.com', 'yahoo.con', 'yhaoo.com', 'yaoo.com',
+        'outlok.com', 'outllok.com', 'outlook.con', 'outlool.com',
+        'live.con', 'liv.com',
+    ];
 
     public function handle(): int
     {
@@ -22,14 +33,22 @@ class PurgeEnviosQueueCommand extends Command
         $targetClass = 'App\\Jobs\\EnviarEmailEtapaProspectoJob';
 
         $this->info('MODE: ' . ($execute ? 'REAL DELETE' : 'DRY-RUN'));
-        $this->info('Loading PEF IDs without valid email...');
+        $this->info('Loading PEF IDs without valid email (includes typos and marked invalid)...');
 
         $pefSinEmail = [];
         $loadStart = microtime(true);
+        $typoList = implode("','", self::DOMINIOS_TYPOS);
+
         DB::table('prospecto_en_flujo as pef')
             ->leftJoin('prospectos as p', 'p.id', '=', 'pef.prospecto_id')
-            ->where(function ($q) {
-                $q->whereNull('p.email')->orWhere('p.email', '')->orWhereNull('p.id');
+            ->where(function ($q) use ($typoList) {
+                $q->whereNull('p.email')
+                    ->orWhere('p.email', '')
+                    ->orWhereNull('p.id')
+                    ->orWhere('p.email_invalido', true)
+                    ->orWhereRaw("LOWER(SUBSTRING(p.email FROM POSITION('@' IN p.email) + 1)) IN ('{$typoList}')")
+                    ->orWhereRaw("LOWER(p.email) LIKE '%.con'")
+                    ->orWhereRaw("LOWER(p.email) LIKE '%.cpm'");
             })
             ->select('pef.id')
             ->orderBy('pef.id')
@@ -39,7 +58,7 @@ class PurgeEnviosQueueCommand extends Command
                 }
             });
 
-        $this->info('PEF without email: ' . number_format(count($pefSinEmail)) . ' (' . round(microtime(true) - $loadStart, 2) . 's)');
+        $this->info('PEF without valid email: ' . number_format(count($pefSinEmail)) . ' (' . round(microtime(true) - $loadStart, 2) . 's)');
         $this->info('Scanning envios queue...');
 
         $total = 0;
