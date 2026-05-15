@@ -668,6 +668,13 @@ class EnviarEtapaJob implements ShouldQueue
             });
         }
 
+        // Exclude prospectos with missing phone for SMS-only stages
+        if ($tipoMensaje === 'sms') {
+            $query->whereHas('prospecto', function ($q) {
+                $q->whereNotNull('telefono')->where('telefono', '!=', '');
+            });
+        }
+
         // Apply stage-based filtering for perpetual executions
         if ($currentNodeId && $ejecucion->es_perpetuo) {
             $resolver = app(StageOrderResolver::class);
