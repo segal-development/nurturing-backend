@@ -38,7 +38,7 @@ class RecoverStuckEtapas extends Command
 
         // Buscar etapas en estado 'executing'
         $etapasEjecutando = FlujoEjecucionEtapa::where('estado', 'executing')
-            ->with('flujoEjecucion')
+            ->with('ejecucion')
             ->get();
 
         if ($etapasEjecutando->isEmpty()) {
@@ -215,7 +215,7 @@ class RecoverStuckEtapas extends Command
      */
     private function scheduleNextNode(FlujoEjecucionEtapa $etapa, int $messageId): void
     {
-        $ejecucion = $etapa->flujoEjecucion;
+        $ejecucion = $etapa->ejecucion;
         if (! $ejecucion || ! $ejecucion->flujo) {
             Log::warning('RecoverStuckEtapas: No se pudo cargar flujo para programar siguiente nodo', [
                 'etapa_id' => $etapa->id,
