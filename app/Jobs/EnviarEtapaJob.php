@@ -496,12 +496,18 @@ class EnviarEtapaJob implements ShouldQueue
             'total_jobs' => count($jobs),
         ];
 
+        // Route email-only batches to a dedicated 'emails' queue so they
+        // don't get blocked behind massive SMS queues (FIFO). SMS-only and
+        // mixed batches stay in 'envios' for backward compatibility.
+        $tipoMensaje = $this->stage['tipo_mensaje'] ?? 'email';
+        $queueName = $tipoMensaje === 'email' ? 'emails' : 'envios';
+
         // Usar clases invocables en lugar de closures para evitar
         // problemas de serialización con Laravel 12 + SerializableClosure
         $batch = Bus::batch($jobs)
             ->name($batchName)
             ->onConnection('database')
-            ->onQueue('envios')
+            ->onQueue($queueName)
             ->allowFailures()
             ->then(new BatchCompletedCallback($callbackData))
             ->catch(new BatchFailedCallback($callbackData))

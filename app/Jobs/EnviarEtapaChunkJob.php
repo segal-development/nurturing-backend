@@ -113,10 +113,14 @@ class EnviarEtapaChunkJob implements ShouldQueue
             $this->stage['label'] ?? 'Sin nombre'
         );
 
+        // Route email-only batches to dedicated 'emails' queue. See EnviarEtapaJob.
+        $tipoMensaje = $this->stage['tipo_mensaje'] ?? 'email';
+        $queueName = $tipoMensaje === 'email' ? 'emails' : 'envios';
+
         $batch = Bus::batch($jobs)
             ->name($batchName)
             ->onConnection('database')
-            ->onQueue('envios')
+            ->onQueue($queueName)
             ->allowFailures()
             ->dispatch();
 
