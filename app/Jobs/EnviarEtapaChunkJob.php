@@ -49,7 +49,7 @@ class EnviarEtapaChunkJob implements ShouldQueue
 
     public function handle(): void
     {
-        Log::info('EnviarEtapaChunkJob: Procesando chunk', [
+        Log::debug('EnviarEtapaChunkJob: Procesando chunk', [
             'chunk_index' => $this->chunkIndex,
             'total_chunks' => $this->totalChunks,
             'offset' => $this->offset,
@@ -124,7 +124,7 @@ class EnviarEtapaChunkJob implements ShouldQueue
             ->allowFailures()
             ->dispatch();
 
-        Log::info('EnviarEtapaChunkJob: Batch despachado', [
+        Log::debug('EnviarEtapaChunkJob: Batch despachado', [
             'chunk_index' => $this->chunkIndex,
             'batch_id' => $batch->id,
             'jobs_count' => count($jobs),
@@ -183,7 +183,7 @@ class EnviarEtapaChunkJob implements ShouldQueue
                 $baseQuery->where('ultima_etapa_node_id', $previousStageNodeId);
             }
 
-            Log::info('EnviarEtapaChunkJob: Stage filtering applied (perpetual execution)', [
+            Log::debug('EnviarEtapaChunkJob: Stage filtering', [
                 'chunk_index' => $this->chunkIndex,
                 'current_node_id' => $currentNodeId,
                 'previous_node_id' => $previousStageNodeId,
@@ -243,7 +243,7 @@ class EnviarEtapaChunkJob implements ShouldQueue
     /**
      * Pre-resolve email provider at chunk level to avoid N+1 queries.
      *
-     * @param \Illuminate\Support\Collection $prospectosEnFlujo Collection with prospecto.importacion.lote eager loaded
+     * @param  \Illuminate\Support\Collection  $prospectosEnFlujo  Collection with prospecto.importacion.lote eager loaded
      * @return string|null Provider name ('athena'|'certificada') or null if mixed chunk
      */
     private function preResolveChunkProvider(\Illuminate\Support\Collection $prospectosEnFlujo): ?string
@@ -268,7 +268,7 @@ class EnviarEtapaChunkJob implements ShouldQueue
                 $providerName = $currentProvider;
             } elseif ($providerName !== $currentProvider) {
                 $isHomogeneous = false;
-                Log::info('EnviarEtapaChunkJob: Mixed provider chunk detected, will resolve per-prospecto', [
+                Log::debug('EnviarEtapaChunkJob: Mixed provider chunk', [
                     'chunk_index' => $this->chunkIndex,
                     'chunk_size' => $prospectosEnFlujo->count(),
                 ]);
@@ -280,7 +280,7 @@ class EnviarEtapaChunkJob implements ShouldQueue
     }
 
     /**
-     * @param string|null $providerName Pre-resolved provider name for batch optimization
+     * @param  string|null  $providerName  Pre-resolved provider name for batch optimization
      */
     private function createJobForProspecto(
         ProspectoEnFlujo $prospectoEnFlujo,

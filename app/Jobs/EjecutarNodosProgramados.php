@@ -50,7 +50,7 @@ class EjecutarNodosProgramados implements ShouldQueue
      */
     public function handle(EnvioService $envioService): void
     {
-        Log::info('EjecutarNodosProgramados: Iniciando verificación de nodos programados');
+        Log::debug('EjecutarNodosProgramados: Iniciando verificación');
 
         // ✅ PASO 1: Verificar etapas en 'executing' que pueden haber terminado
         // Esto es CRÍTICO para volúmenes grandes que no tienen callback
@@ -78,7 +78,7 @@ class EjecutarNodosProgramados implements ShouldQueue
         }
 
         if ($ejecuciones->isEmpty()) {
-            Log::info('EjecutarNodosProgramados: No hay nodos programados listos para ejecutar');
+            Log::debug('EjecutarNodosProgramados: No hay nodos programados listos');
 
             return;
         }
@@ -130,7 +130,7 @@ class EjecutarNodosProgramados implements ShouldQueue
             return;
         }
 
-        Log::info('EjecutarNodosProgramados: Verificando etapas en executing', [
+        Log::debug('EjecutarNodosProgramados: Verificando etapas en executing', [
             'cantidad' => $ejecucionesConEtapasEjecutando->count(),
         ]);
 
@@ -199,7 +199,7 @@ class EjecutarNodosProgramados implements ShouldQueue
                 return;
             }
 
-            Log::info('EjecutarNodosProgramados: Esperando que etapa anterior complete', [
+            Log::debug('EjecutarNodosProgramados: Esperando que etapa anterior complete', [
                 'ejecucion_id' => $ejecucion->id,
                 'etapa_en_ejecucion' => $etapasEnEjecucion->node_id,
                 'proximo_nodo' => $ejecucion->proximo_nodo,
@@ -244,7 +244,7 @@ class EjecutarNodosProgramados implements ShouldQueue
             throw new \Exception("No se encontró el nodo {$nodoId} en el flujo");
         }
 
-        Log::info('EjecutarNodosProgramados: Ejecutando nodo', [
+        Log::debug('EjecutarNodosProgramados: Ejecutando nodo', [
             'ejecucion_id' => $ejecucion->id,
             'nodo_id' => $nodoId,
             'tipo' => $stage['type'] ?? 'unknown',
@@ -257,7 +257,7 @@ class EjecutarNodosProgramados implements ShouldQueue
 
         // Si la etapa ya está ejecutada o en proceso, NO volver a ejecutar
         if ($etapaExistente && ($etapaExistente->ejecutado || in_array($etapaExistente->estado, ['executing', 'completed']))) {
-            Log::info('EjecutarNodosProgramados: Nodo ya fue ejecutado o está en proceso, saltando', [
+            Log::debug('EjecutarNodosProgramados: Nodo ya fue ejecutado o está en proceso, saltando', [
                 'ejecucion_id' => $ejecucion->id,
                 'nodo_id' => $nodoId,
                 'estado_etapa' => $etapaExistente->estado,
@@ -267,7 +267,7 @@ class EjecutarNodosProgramados implements ShouldQueue
             // ✅ FIX: Si la etapa está en 'executing', NO avanzar al siguiente nodo todavía
             // Esperar a que termine (el cron de recuperación lo manejará)
             if ($etapaExistente->estado === 'executing') {
-                Log::info('EjecutarNodosProgramados: Etapa en executing, esperando que termine', [
+                Log::debug('EjecutarNodosProgramados: Etapa en executing, esperando', [
                     'ejecucion_id' => $ejecucion->id,
                     'nodo_id' => $nodoId,
                 ]);
@@ -360,7 +360,7 @@ class EjecutarNodosProgramados implements ShouldQueue
         // Si no, usar los prospectos de la ejecución completa
         $prospectoIds = $etapa->prospectos_ids ?? $ejecucion->prospectos_ids;
 
-        Log::info('EjecutarNodosProgramados: Despachando EnviarEtapaJob', [
+        Log::debug('EjecutarNodosProgramados: Despachando EnviarEtapaJob', [
             'ejecucion_id' => $ejecucion->id,
             'etapa_id' => $etapa->id,
             'stage_id' => $stage['id'] ?? 'unknown',
@@ -382,7 +382,7 @@ class EjecutarNodosProgramados implements ShouldQueue
             branches: $branches
         );
 
-        Log::info('EjecutarNodosProgramados: EnviarEtapaJob despachado', [
+        Log::debug('EjecutarNodosProgramados: EnviarEtapaJob despachado', [
             'ejecucion_id' => $ejecucion->id,
             'etapa_id' => $etapa->id,
         ]);
@@ -413,7 +413,7 @@ class EjecutarNodosProgramados implements ShouldQueue
                 ->first();
 
             if ($etapaEmailDirecta && $etapaEmailDirecta->estado === 'executing') {
-                Log::info('EjecutarNodosProgramados: Condición esperando que email anterior complete', [
+                Log::debug('EjecutarNodosProgramados: Condición esperando email anterior', [
                     'ejecucion_id' => $ejecucion->id,
                     'condicion_node_id' => $stage['id'],
                     'email_node_id' => $nodoEmailAnteriorId,
@@ -432,7 +432,7 @@ class EjecutarNodosProgramados implements ShouldQueue
         $messageId = $responseData['source_message_id'] ?? null;
 
         if ($messageId) {
-            Log::info('EjecutarNodosProgramados: Usando source_message_id de etapa', [
+            Log::debug('EjecutarNodosProgramados: Usando source_message_id', [
                 'message_id' => $messageId,
                 'etapa_id' => $etapa->id,
             ]);
@@ -466,7 +466,7 @@ class EjecutarNodosProgramados implements ShouldQueue
 
             $messageId = (int) $etapaEmailAnterior->message_id;
 
-            Log::info('EjecutarNodosProgramados: Usando message_id de etapa email anterior', [
+            Log::debug('EjecutarNodosProgramados: Usando message_id de etapa anterior', [
                 'message_id' => $messageId,
                 'etapa_email_id' => $etapaEmailAnterior->id,
                 'etapa_email_node_id' => $etapaEmailAnterior->node_id,
@@ -486,7 +486,7 @@ class EjecutarNodosProgramados implements ShouldQueue
         // Si no, usar los prospectos de la ejecución completa
         $prospectoIds = $etapa->prospectos_ids ?? $ejecucion->prospectos_ids;
 
-        Log::info('EjecutarNodosProgramados: Preparando evaluación de condición', [
+        Log::debug('EjecutarNodosProgramados: Preparando evaluación de condición', [
             'message_id' => $messageId,
             'prospectos_count' => count($prospectoIds),
         ]);
@@ -533,7 +533,7 @@ class EjecutarNodosProgramados implements ShouldQueue
             $prospectoIds  // Pasar prospectos a evaluar
         );
 
-        Log::info('EjecutarNodosProgramados: Condición despachada para evaluación', [
+        Log::debug('EjecutarNodosProgramados: Condición despachada', [
             'ejecucion_id' => $ejecucion->id,
             'etapa_ejecucion_id' => $etapa->id,
             'nodo_id' => $stage['id'],
@@ -640,7 +640,7 @@ class EjecutarNodosProgramados implements ShouldQueue
                     }
 
                     // Batch aún procesando - esperar más
-                    Log::info('EjecutarNodosProgramados: Batch aún procesando', [
+                    Log::debug('EjecutarNodosProgramados: Batch aún procesando', [
                         'batch_id' => $batchId,
                         'pending' => $batch->pendingJobs,
                     ]);
@@ -690,7 +690,7 @@ class EjecutarNodosProgramados implements ShouldQueue
         $pendientes = (int) ($envioStats->pendientes ?? 0);
         $procesados = $exitosos + $fallidos;
 
-        Log::info('EjecutarNodosProgramados: Verificando etapa volumen grande', [
+        Log::debug('EjecutarNodosProgramados: Verificando etapa volumen grande', [
             'etapa_id' => $etapa->id,
             'total_prospectos' => $totalProspectos,
             'total_envios_creados' => $totalEnviosCreados,
@@ -747,7 +747,7 @@ class EjecutarNodosProgramados implements ShouldQueue
         }
 
         // Aún procesando - loguear progreso
-        Log::info('EjecutarNodosProgramados: Etapa volumen grande aún procesando', [
+        Log::debug('EjecutarNodosProgramados: Etapa volumen grande aún procesando', [
             'etapa_id' => $etapa->id,
             'total_envios_creados' => $totalEnviosCreados,
             'porcentaje' => round($porcentajeProcesado, 2),
@@ -777,7 +777,7 @@ class EjecutarNodosProgramados implements ShouldQueue
         $exitosos = (int) ($envioStats->exitosos ?? 0);
         $fallidos = (int) ($envioStats->fallidos ?? 0);
 
-        Log::info('EjecutarNodosProgramados: Verificando completitud por envíos', [
+        Log::debug('EjecutarNodosProgramados: Verificando completitud por envíos', [
             'etapa_id' => $etapa->id,
             'total_envios' => $total,
             'exitosos' => $exitosos,
@@ -819,7 +819,7 @@ class EjecutarNodosProgramados implements ShouldQueue
         if ($total === 0) {
             $this->marcarEtapaComoFallida($etapa, 'No se encontraron envíos para esta etapa');
         } else {
-            Log::info('EjecutarNodosProgramados: Etapa aún tiene envíos pendientes', [
+            Log::debug('EjecutarNodosProgramados: Etapa aún tiene envíos pendientes', [
                 'etapa_id' => $etapa->id,
                 'pendientes' => $pendientes,
             ]);
@@ -922,7 +922,7 @@ class EjecutarNodosProgramados implements ShouldQueue
         // Solo calcular desde now() si la etapa no existe (caso edge de flujos dinámicos)
         if ($siguienteEtapa && $siguienteEtapa->fecha_programada) {
             $fechaProgramada = $siguienteEtapa->fecha_programada;
-            Log::info('EjecutarNodosProgramados: Usando fecha_programada existente', [
+            Log::debug('EjecutarNodosProgramados: Usando fecha_programada existente', [
                 'node_id' => $siguienteNodoId,
                 'fecha_programada' => $fechaProgramada,
             ]);
@@ -935,7 +935,7 @@ class EjecutarNodosProgramados implements ShouldQueue
                 $tiempoEspera = $siguienteNodo['tiempo_espera'] ?? 0;
                 $fechaProgramada = now()->addDays($tiempoEspera);
             }
-            Log::info('EjecutarNodosProgramados: Calculando nueva fecha_programada', [
+            Log::debug('EjecutarNodosProgramados: Calculando nueva fecha_programada', [
                 'node_id' => $siguienteNodoId,
                 'tipo_nodo' => $tipoNodo,
                 'fecha_programada' => $fechaProgramada,
@@ -948,7 +948,7 @@ class EjecutarNodosProgramados implements ShouldQueue
             $existingProspectos = $siguienteEtapa->prospectos_ids ?? [];
             $mergedProspectos = array_values(array_unique(array_merge($existingProspectos, $prospectoIds)));
 
-            Log::info("EjecutarNodosProgramados: Merging prospects for node {$siguienteNodoId}", [
+            Log::debug("EjecutarNodosProgramados: Merging prospects for node {$siguienteNodoId}", [
                 'existing_count' => count($existingProspectos),
                 'new_count' => count($prospectoIds),
                 'merged_count' => count($mergedProspectos),
@@ -977,7 +977,7 @@ class EjecutarNodosProgramados implements ShouldQueue
         if ($siguienteEtapa) {
             // Solo actualizar prospectos_ids y estado, NO sobreescribir fecha_programada
             $siguienteEtapa->update($etapaData);
-            Log::info('EjecutarNodosProgramados: Etapa siguiente actualizada', [
+            Log::debug('EjecutarNodosProgramados: Etapa siguiente actualizada', [
                 'etapa_id' => $siguienteEtapa->id,
                 'node_id' => $siguienteNodoId,
                 'prospectos_count' => count($prospectoIds),
@@ -995,7 +995,7 @@ class EjecutarNodosProgramados implements ShouldQueue
                     'etapa_id' => null,
                 ])
             );
-            Log::info('EjecutarNodosProgramados: Etapa siguiente creada/encontrada', [
+            Log::debug('EjecutarNodosProgramados: Etapa siguiente creada/encontrada', [
                 'etapa_id' => $siguienteEtapa->id,
                 'node_id' => $siguienteNodoId,
                 'prospectos_count' => count($prospectoIds),
@@ -1010,7 +1010,7 @@ class EjecutarNodosProgramados implements ShouldQueue
             'fecha_proximo_nodo' => $fechaProgramada,
         ]);
 
-        Log::info('EjecutarNodosProgramados: Ejecución actualizada después de recuperación', [
+        Log::debug('EjecutarNodosProgramados: Ejecución actualizada post-recovery', [
             'ejecucion_id' => $ejecucion->id,
             'nodo_recuperado' => $etapa->node_id,
             'proximo_nodo' => $siguienteNodoId,
@@ -1058,7 +1058,7 @@ class EjecutarNodosProgramados implements ShouldQueue
                     'estado' => 'completado',
                 ]);
 
-            Log::info('EjecutarNodosProgramados: Prospectos de cohorte marcados como completados', [
+            Log::debug('EjecutarNodosProgramados: Prospectos de cohorte completados', [
                 'ejecucion_id' => $ejecucion->id,
                 'prospectos_completados' => $prospectosCompletados,
                 'es_perpetuo' => $esPerpetuo,
@@ -1072,7 +1072,7 @@ class EjecutarNodosProgramados implements ShouldQueue
                     'fecha_proximo_nodo' => null,
                 ]);
 
-                Log::info('EjecutarNodosProgramados: Flujo perpetuo en espera de nuevos prospectos', [
+                Log::debug('EjecutarNodosProgramados: Flujo perpetuo en espera', [
                     'ejecucion_id' => $ejecucion->id,
                     'flujo_id' => $flujo->id,
                 ]);

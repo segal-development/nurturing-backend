@@ -7,7 +7,6 @@ use App\Jobs\Callbacks\BatchFailedCallback;
 use App\Jobs\Callbacks\BatchFinishedCallback;
 use App\Models\FlujoEjecucion;
 use App\Models\FlujoEjecucionEtapa;
-use App\Models\FlujoEtapa;
 use App\Models\FlujoJob;
 use App\Models\ProspectoEnFlujo;
 use App\Services\StageOrderResolver;
@@ -52,7 +51,7 @@ class EnviarEtapaJob implements ShouldQueue
     {
         $totalProspectos = count($this->prospectoIds);
 
-        Log::info('EnviarEtapaJob: Iniciando', [
+        Log::debug('EnviarEtapaJob: Iniciando', [
             'flujo_ejecucion_id' => $this->flujoEjecucionId,
             'etapa_ejecucion_id' => $this->etapaEjecucionId,
             'stage_label' => $this->stage['label'] ?? 'Unknown',
@@ -110,7 +109,7 @@ class EnviarEtapaJob implements ShouldQueue
         $chunkSize = 200;
         $totalChunks = (int) ceil($totalProspectos / $chunkSize);
 
-        Log::info('EnviarEtapaJob: Modo volumen grande - despachando sub-jobs', [
+        Log::debug('EnviarEtapaJob: Modo volumen grande', [
             'total_prospectos' => $totalProspectos,
             'chunk_size' => $chunkSize,
             'total_chunks' => $totalChunks,
@@ -163,7 +162,7 @@ class EnviarEtapaJob implements ShouldQueue
             ],
         ]);
 
-        Log::info('EnviarEtapaJob: Sub-jobs despachados', [
+        Log::debug('EnviarEtapaJob: Sub-jobs despachados', [
             'total_chunks' => $totalChunks,
         ]);
     }
@@ -199,18 +198,19 @@ class EnviarEtapaJob implements ShouldQueue
         if ($etapaEjecucion->estado === 'completed') {
             // For perpetual executions with specific prospectoIds, allow processing
             // This handles catch-up scenarios where new prospects need this stage
-            if ($ejecucion->es_perpetuo && !empty($this->prospectoIds)) {
-                Log::info('EnviarEtapaJob: Etapa completada pero perpetua con prospectos específicos - procesando', [
+            if ($ejecucion->es_perpetuo && ! empty($this->prospectoIds)) {
+                Log::debug('EnviarEtapaJob: Perpetua con prospectos específicos', [
                     'etapa_id' => $this->etapaEjecucionId,
                     'prospectos_count' => count($this->prospectoIds),
                 ]);
+
                 return false;
             }
 
             Log::warning('EnviarEtapaJob: Etapa ya completada - saltando', [
                 'etapa_id' => $this->etapaEjecucionId,
                 'es_perpetuo' => $ejecucion->es_perpetuo,
-                'tiene_prospectos' => !empty($this->prospectoIds),
+                'tiene_prospectos' => ! empty($this->prospectoIds),
             ]);
 
             return true;
@@ -323,7 +323,7 @@ class EnviarEtapaJob implements ShouldQueue
             }
         }
 
-        Log::info('EnviarEtapaJob: Jobs creados', [
+        Log::debug('EnviarEtapaJob: Jobs creados', [
             'total_jobs' => count($jobs),
             'tipo_mensaje' => $tipoMensaje,
             'batch_provider' => $batchProviderName,
@@ -335,7 +335,7 @@ class EnviarEtapaJob implements ShouldQueue
     /**
      * Crea los jobs necesarios para un prospecto según el tipo de mensaje.
      *
-     * @param string|null $providerName Pre-resolved provider name for batch optimization
+     * @param  string|null  $providerName  Pre-resolved provider name for batch optimization
      * @return array<ShouldQueue>
      */
     private function createJobsForProspecto(
@@ -391,7 +391,7 @@ class EnviarEtapaJob implements ShouldQueue
      * we can determine the provider once and pass it to all child jobs.
      * This eliminates per-prospecto importacion.lote lookups.
      *
-     * @param \Illuminate\Support\Collection $prospectosEnFlujo Collection with prospecto.importacion.lote eager loaded
+     * @param  \Illuminate\Support\Collection  $prospectosEnFlujo  Collection with prospecto.importacion.lote eager loaded
      * @return string|null Provider name ('athena'|'certificada') or null if mixed batch
      */
     private function preResolveBatchProvider(\Illuminate\Support\Collection $prospectosEnFlujo): ?string
@@ -417,7 +417,7 @@ class EnviarEtapaJob implements ShouldQueue
             } elseif ($providerName !== $currentProvider) {
                 // Mixed batch - some IC, some not - cannot pre-resolve
                 $isHomogeneous = false;
-                Log::info('EnviarEtapaJob: Mixed provider batch detected, will resolve per-prospecto', [
+                Log::debug('EnviarEtapaJob: Mixed provider batch', [
                     'batch_size' => $prospectosEnFlujo->count(),
                 ]);
                 break;
@@ -441,7 +441,7 @@ class EnviarEtapaJob implements ShouldQueue
                 $plantilla = \App\Models\Plantilla::find($plantillaId);
 
                 if ($plantilla && $plantilla->esSMS()) {
-                    Log::info('EnviarEtapaJob: Usando plantilla SMS de referencia', [
+                    Log::debug('EnviarEtapaJob: Usando plantilla SMS de referencia', [
                         'stage_id' => $this->stage['id'] ?? null,
                         'plantilla_id' => $plantillaId,
                         'plantilla_nombre' => $plantilla->nombre,
@@ -516,7 +516,7 @@ class EnviarEtapaJob implements ShouldQueue
             ->finally(new BatchFinishedCallback($callbackData))
             ->dispatch();
 
-        Log::info('EnviarEtapaJob: Batch despachado', [
+        Log::debug('EnviarEtapaJob: Batch despachado', [
             'batch_id' => $batch->id,
             'total_jobs' => count($jobs),
             'etapa_ejecucion_id' => $this->etapaEjecucionId,
@@ -565,7 +565,7 @@ class EnviarEtapaJob implements ShouldQueue
                 $plantilla = \App\Models\Plantilla::find($plantillaId);
 
                 if ($plantilla) {
-                    Log::info('EnviarEtapaJob: Usando plantilla de referencia', [
+                    Log::debug('EnviarEtapaJob: Usando plantilla de referencia', [
                         'stage_id' => $this->stage['id'] ?? null,
                         'plantilla_id' => $plantillaId,
                         'plantilla_nombre' => $plantilla->nombre,
@@ -699,7 +699,7 @@ class EnviarEtapaJob implements ShouldQueue
             $filteredCount = $query->count();
             $totalCount = count($this->prospectoIds);
 
-            Log::info('EnviarEtapaJob: Stage filtering applied (perpetual execution)', [
+            Log::debug('EnviarEtapaJob: Stage filtering applied', [
                 'flujo_ejecucion_id' => $this->flujoEjecucionId,
                 'current_node_id' => $currentNodeId,
                 'previous_node_id' => $previousStageNodeId,
