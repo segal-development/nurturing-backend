@@ -24,15 +24,11 @@ class SyncGrupoDeudaJob implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    /**
-     * Número máximo de intentos.
-     */
     public int $tries = 3;
 
-    /**
-     * Tiempo máximo de ejecución (5 minutos).
-     */
     public int $timeout = 300;
+
+    public int $backoff = 60;
 
     /**
      * ID del usuario que ejecutó la sincronización (null = sistema).
@@ -78,10 +74,19 @@ class SyncGrupoDeudaJob implements ShouldQueue
             ]);
 
         } catch (\Exception $e) {
+            $isClientError = preg_match('/Error HTTP (4\d{2})/', $e->getMessage());
+
             Log::error('SyncGrupoDeudaJob: Error en sincronización', [
                 'source' => $source->name,
                 'error' => $e->getMessage(),
+                'will_retry' => ! $isClientError,
             ]);
+
+            if ($isClientError) {
+                $this->fail($e);
+
+                return;
+            }
 
             throw $e;
         }

@@ -78,10 +78,19 @@ class SyncGrupoDeudaClientesIngresoJob implements ShouldQueue
             ]);
 
         } catch (\Exception $e) {
+            $isClientError = preg_match('/Error HTTP (4\d{2})/', $e->getMessage());
+
             Log::error('SyncGrupoDeudaClientesIngresoJob: Error en sincronización', [
                 'source' => $source->name,
                 'error' => $e->getMessage(),
+                'will_retry' => ! $isClientError,
             ]);
+
+            if ($isClientError) {
+                $this->fail($e);
+
+                return;
+            }
 
             throw $e;
         }
