@@ -13,6 +13,7 @@ use App\Models\TipoProspecto;
 use App\Services\CanalEnvioResolver;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
 class FlujoController extends Controller
@@ -146,30 +147,30 @@ class FlujoController extends Controller
             },
         ]);
 
-        // Calcular estadísticas del flujo con UNA SOLA query (optimizado)
-        // Antes: 5 queries separadas. Ahora: 1 query con conditional aggregation
-        $stats = DB::table('prospecto_en_flujo')
-            ->where('flujo_id', $flujo->id)
-            ->selectRaw("
-                COUNT(*) as total,
-                COUNT(CASE WHEN estado = 'pendiente' THEN 1 END) as pendientes,
-                COUNT(CASE WHEN estado = 'en_proceso' THEN 1 END) as en_proceso,
-                COUNT(CASE WHEN completado = true THEN 1 END) as completados,
-                COUNT(CASE WHEN cancelado = true THEN 1 END) as cancelados
-            ")
-            ->first();
+        $estadisticas = Cache::remember("flujo:{$flujo->id}:stats", 60, function () use ($flujo) {
+            $stats = DB::table('prospecto_en_flujo')
+                ->where('flujo_id', $flujo->id)
+                ->selectRaw("
+                    COUNT(*) as total,
+                    COUNT(CASE WHEN estado = 'pendiente' THEN 1 END) as pendientes,
+                    COUNT(CASE WHEN estado = 'en_proceso' THEN 1 END) as en_proceso,
+                    COUNT(CASE WHEN completado = true THEN 1 END) as completados,
+                    COUNT(CASE WHEN cancelado = true THEN 1 END) as cancelados
+                ")
+                ->first();
 
-        $estadisticas = [
-            'total_prospectos' => $stats->total ?? 0,
-            'prospectos_pendientes' => $stats->pendientes ?? 0,
-            'prospectos_en_proceso' => $stats->en_proceso ?? 0,
-            'prospectos_completados' => $stats->completados ?? 0,
-            'prospectos_cancelados' => $stats->cancelados ?? 0,
-            'total_etapas' => $flujo->flujoEtapas->count(),
-            'total_condiciones' => $flujo->flujoCondiciones->count(),
-            'total_ramificaciones' => $flujo->flujoRamificaciones->count(),
-            'total_nodos_finales' => $flujo->flujoNodosFinales->count(),
-        ];
+            return [
+                'total_prospectos' => $stats->total ?? 0,
+                'prospectos_pendientes' => $stats->pendientes ?? 0,
+                'prospectos_en_proceso' => $stats->en_proceso ?? 0,
+                'prospectos_completados' => $stats->completados ?? 0,
+                'prospectos_cancelados' => $stats->cancelados ?? 0,
+                'total_etapas' => $flujo->flujoEtapas->count(),
+                'total_condiciones' => $flujo->flujoCondiciones->count(),
+                'total_ramificaciones' => $flujo->flujoRamificaciones->count(),
+                'total_nodos_finales' => $flujo->flujoNodosFinales->count(),
+            ];
+        });
 
         return response()->json([
             'data' => $flujo,
@@ -233,6 +234,10 @@ class FlujoController extends Controller
             }
 
             DB::commit();
+
+            Cache::forget("flujo:{$flujo->id}:stats");
+            Cache::forget("flujo:{$flujo->id}:node_stats");
+            Cache::forget("flujo:{$flujo->id}:full_stats");
 
             $flujo->load(['tipoProspecto', 'user']);
 
@@ -771,7 +776,7 @@ class FlujoController extends Controller
 
         // Combinar ambos: orígenes con prospectos O con flujos
         $todosOrigenes = collect();
-        
+
         // Agregar orígenes con prospectos
         foreach ($origenesConProspectos as $origen => $data) {
             $flujosDesdeProspectos = (int) $data->total_flujos;
@@ -779,10 +784,10 @@ class FlujoController extends Controller
             // Usar el máximo entre ambos conteos (evitar duplicados)
             $todosOrigenes[$origen] = max($flujosDesdeProspectos, $flujosDirectos);
         }
-        
+
         // Agregar orígenes con flujos que no tienen prospectos
         foreach ($origenesConFlujos as $origen => $data) {
-            if (!isset($todosOrigenes[$origen])) {
+            if (! isset($todosOrigenes[$origen])) {
                 $todosOrigenes[$origen] = (int) $data->total_flujos;
             }
         }
@@ -889,7 +894,6 @@ class FlujoController extends Controller
      */
     public function estadisticasNodos(Flujo $flujo): JsonResponse
     {
-        // Get all node_ids from config_visual
         $configVisual = $flujo->config_visual;
         if (! $configVisual || empty($configVisual['nodes'])) {
             return response()->json([
@@ -897,6 +901,19 @@ class FlujoController extends Controller
                 'data' => [],
             ]);
         }
+
+        $data = Cache::remember("flujo:{$flujo->id}:node_stats", 120, function () use ($flujo, $configVisual) {
+            return $this->computeEstadisticasNodos($flujo, $configVisual);
+        });
+
+        return response()->json([
+            'error' => false,
+            'data' => $data,
+        ]);
+    }
+
+    private function computeEstadisticasNodos(Flujo $flujo, array $configVisual): array
+    {
 
         // Extract node info (id, type, tipo_mensaje) from config
         $nodesInfo = collect($configVisual['nodes'])->mapWithKeys(function ($node) {
@@ -918,10 +935,8 @@ class FlujoController extends Controller
             ->groupBy('node_id');
 
         if ($etapasPorNodeId->isEmpty()) {
-            // No executions yet, return empty stats for each node
-            $emptyStats = $nodesInfo->map(function ($info, $nodeId) {
+            return $nodesInfo->map(function ($info, $nodeId) {
                 $isEmail = in_array($info['tipo_mensaje'], ['email', 'ambos']);
-                $isSms = in_array($info['tipo_mensaje'], ['sms', 'ambos']);
 
                 return [
                     'node_id' => $nodeId,
@@ -932,12 +947,7 @@ class FlujoController extends Controller
                     'total_abierto' => $isEmail ? 0 : null,
                     'total_clickeado' => $isEmail ? 0 : null,
                 ];
-            })->values();
-
-            return response()->json([
-                'error' => false,
-                'data' => $emptyStats,
-            ]);
+            })->values()->toArray();
         }
 
         // Get all etapa IDs
@@ -1002,10 +1012,7 @@ class FlujoController extends Controller
             }
         }
 
-        return response()->json([
-            'error' => false,
-            'data' => array_values($statsByNodeId),
-        ]);
+        return array_values($statsByNodeId);
     }
 
     /**
@@ -1021,7 +1028,18 @@ class FlujoController extends Controller
      */
     public function estadisticasCompletas(Flujo $flujo): JsonResponse
     {
-        // Get aggregated send stats for this flujo
+        $data = Cache::remember("flujo:{$flujo->id}:full_stats", 120, function () use ($flujo) {
+            return $this->computeEstadisticasCompletas($flujo);
+        });
+
+        return response()->json([
+            'error' => false,
+            'data' => $data,
+        ]);
+    }
+
+    private function computeEstadisticasCompletas(Flujo $flujo): array
+    {
         $enviosStats = DB::table('envios')
             ->where('flujo_id', $flujo->id)
             ->select(
@@ -1148,57 +1166,49 @@ class FlujoController extends Controller
             ? round($costoTotal / $prospectosCompletados, 2)
             : 0;
 
-        return response()->json([
-            'error' => false,
-            'data' => [
-                // Summary metrics (cards)
-                'resumen' => [
-                    'tasa_apertura' => $tasaApertura,
-                    'tasa_click' => $tasaClick,
-                    'tasa_fallo' => $tasaFallo,
-                    'costo_total' => round($costoTotal, 2),
-                    'costo_por_conversion' => $costoPorConversion,
-                    'emails_enviados' => $enviosStats->emails_enviados ?? 0,
-                    'sms_enviados' => $enviosStats->sms_enviados ?? 0,
-                ],
-                // Funnel data
-                'funnel' => [
-                    'prospectos' => $totalProspectos,
+        return [
+            'resumen' => [
+                'tasa_apertura' => $tasaApertura,
+                'tasa_click' => $tasaClick,
+                'tasa_fallo' => $tasaFallo,
+                'costo_total' => round($costoTotal, 2),
+                'costo_por_conversion' => $costoPorConversion,
+                'emails_enviados' => $enviosStats->emails_enviados ?? 0,
+                'sms_enviados' => $enviosStats->sms_enviados ?? 0,
+            ],
+            'funnel' => [
+                'prospectos' => $totalProspectos,
+                'enviados' => $totalEnviados,
+                'abiertos' => $totalAbiertos,
+                'clickeados' => $totalClickeados,
+                'conversiones' => $prospectosCompletados,
+                'tasa_apertura' => $tasaApertura,
+                'tasa_click_sobre_abiertos' => $totalAbiertos > 0
+                    ? round(($totalClickeados / $totalAbiertos) * 100, 1)
+                    : 0,
+                'tasa_conversion' => $totalProspectos > 0
+                    ? round(($prospectosCompletados / $totalProspectos) * 100, 1)
+                    : 0,
+            ],
+            'etapas' => $stageStats,
+            'totales' => [
+                'envios' => [
+                    'total' => $enviosStats->total ?? 0,
                     'enviados' => $totalEnviados,
+                    'fallidos' => $totalFallidos,
+                    'pendientes' => $enviosStats->pendientes ?? 0,
                     'abiertos' => $totalAbiertos,
                     'clickeados' => $totalClickeados,
-                    'conversiones' => $prospectosCompletados,
-                    // Rates between steps (tasa_envio removed: can exceed 100% since 1 prospect = N messages)
-                    'tasa_apertura' => $tasaApertura,
-                    'tasa_click_sobre_abiertos' => $totalAbiertos > 0
-                        ? round(($totalClickeados / $totalAbiertos) * 100, 1)
-                        : 0,
-                    'tasa_conversion' => $totalProspectos > 0
-                        ? round(($prospectosCompletados / $totalProspectos) * 100, 1)
-                        : 0,
                 ],
-                // Per-stage breakdown
-                'etapas' => $stageStats,
-                // Totals
-                'totales' => [
-                    'envios' => [
-                        'total' => $enviosStats->total ?? 0,
-                        'enviados' => $totalEnviados,
-                        'fallidos' => $totalFallidos,
-                        'pendientes' => $enviosStats->pendientes ?? 0,
-                        'abiertos' => $totalAbiertos,
-                        'clickeados' => $totalClickeados,
-                    ],
-                    'prospectos' => [
-                        'total' => $totalProspectos,
-                        'completados' => $prospectosCompletados,
-                        'en_proceso' => $prospectosStats->en_proceso ?? 0,
-                        'pendientes' => $prospectosStats->pendientes ?? 0,
-                        'cancelados' => $prospectosStats->cancelados ?? 0,
-                    ],
+                'prospectos' => [
+                    'total' => $totalProspectos,
+                    'completados' => $prospectosCompletados,
+                    'en_proceso' => $prospectosStats->en_proceso ?? 0,
+                    'pendientes' => $prospectosStats->pendientes ?? 0,
+                    'cancelados' => $prospectosStats->cancelados ?? 0,
                 ],
             ],
-        ]);
+        ];
     }
 
     /**

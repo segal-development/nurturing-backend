@@ -54,6 +54,11 @@ class MetricasService
      */
     public function getResumenGeneral(int $dias = 30): array
     {
+        return Cache::remember("metricas:resumen:{$dias}", self::CACHE_TTL, fn () => $this->computeResumenGeneral($dias));
+    }
+
+    private function computeResumenGeneral(int $dias): array
+    {
         $desde = now()->subDays($dias);
 
         // Query 1: Envíos - totales y exitosos en 1 sola query
@@ -126,6 +131,11 @@ class MetricasService
      * Métricas de aperturas de email
      */
     public function getMetricasAperturas(int $dias = 30): array
+    {
+        return Cache::remember("metricas:aperturas:{$dias}", self::CACHE_TTL, fn () => $this->computeMetricasAperturas($dias));
+    }
+
+    private function computeMetricasAperturas(int $dias): array
     {
         $desde = now()->subDays($dias);
 
@@ -212,6 +222,11 @@ class MetricasService
      */
     public function getMetricasClicks(int $dias = 30): array
     {
+        return Cache::remember("metricas:clicks:{$dias}", self::CACHE_TTL, fn () => $this->computeMetricasClicks($dias));
+    }
+
+    private function computeMetricasClicks(int $dias): array
+    {
         $desde = now()->subDays($dias);
 
         // Por día
@@ -277,6 +292,11 @@ class MetricasService
      * Métricas de envíos
      */
     public function getMetricasEnvios(int $dias = 30): array
+    {
+        return Cache::remember("metricas:envios:{$dias}", self::CACHE_TTL, fn () => $this->computeMetricasEnvios($dias));
+    }
+
+    private function computeMetricasEnvios(int $dias): array
     {
         $desde = now()->subDays($dias);
 
@@ -355,11 +375,15 @@ class MetricasService
      */
     public function getMetricasDesuscripciones(int $dias = 30): array
     {
-        // Si la tabla no existe todavía, retornar datos vacíos
         if (! Schema::hasTable('desuscripciones')) {
             return $this->getDesuscripcionesVacias($dias);
         }
 
+        return Cache::remember("metricas:desuscripciones:{$dias}", self::CACHE_TTL, fn () => $this->computeMetricasDesuscripciones($dias));
+    }
+
+    private function computeMetricasDesuscripciones(int $dias): array
+    {
         $desde = now()->subDays($dias);
 
         $total = Desuscripcion::where('created_at', '>=', $desde)->count();
@@ -456,6 +480,11 @@ class MetricasService
      */
     public function getMetricasConversiones(int $dias = 30): array
     {
+        return Cache::remember("metricas:conversiones:{$dias}", self::CACHE_TTL, fn () => $this->computeMetricasConversiones($dias));
+    }
+
+    private function computeMetricasConversiones(int $dias): array
+    {
         $desde = now()->subDays($dias);
 
         $total = Prospecto::where('estado', 'convertido')
@@ -517,6 +546,11 @@ class MetricasService
      */
     public function getTendencias(int $dias = 30): array
     {
+        return Cache::remember("metricas:tendencias:{$dias}", self::CACHE_TTL, fn () => $this->computeTendencias($dias));
+    }
+
+    private function computeTendencias(int $dias): array
+    {
         $desdeActual = now()->subDays($dias);
         $desdeAnterior = now()->subDays($dias * 2);
         $hastaAnterior = now()->subDays($dias);
@@ -576,6 +610,11 @@ class MetricasService
      */
     public function getTopFlujos(int $dias = 30, int $limit = 5): array
     {
+        return Cache::remember("metricas:top_flujos:{$dias}:{$limit}", self::CACHE_TTL, fn () => $this->computeTopFlujos($dias, $limit));
+    }
+
+    private function computeTopFlujos(int $dias, int $limit): array
+    {
         $desde = now()->subDays($dias);
 
         return DB::table('flujos as f')
@@ -629,8 +668,16 @@ class MetricasService
      */
     public function invalidarCache(): void
     {
-        Cache::forget('metricas_dashboard_7');
-        Cache::forget('metricas_dashboard_30');
-        Cache::forget('metricas_dashboard_90');
+        $periodos = [7, 30, 90];
+        $tipos = ['resumen', 'aperturas', 'clicks', 'envios', 'desuscripciones', 'conversiones', 'tendencias'];
+
+        foreach ($periodos as $dias) {
+            Cache::forget("metricas_dashboard_{$dias}");
+            foreach ($tipos as $tipo) {
+                Cache::forget("metricas:{$tipo}:{$dias}");
+            }
+            Cache::forget("metricas:top_flujos:{$dias}:5");
+            Cache::forget("metricas:top_flujos:{$dias}:10");
+        }
     }
 }
