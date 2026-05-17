@@ -752,7 +752,6 @@ class EjecutarNodosProgramados implements ShouldQueue
             'total_envios_creados' => $totalEnviosCreados,
             'porcentaje' => round($porcentajeProcesado, 2),
             'pendientes' => $pendientes,
-            'jobs_en_cola' => $jobsEnCola,
         ]);
     }
 
