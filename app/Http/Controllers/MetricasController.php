@@ -34,7 +34,10 @@ class MetricasController extends Controller
         $dias = (int) $request->input('dias', 30);
         $dias = min(max($dias, 7), 365); // Entre 7 y 365 días
 
-        $metricas = $this->metricasService->getDashboardCompleto($dias);
+        $flujoId = $request->input('flujo_id');
+        $flujoId = $flujoId !== null && $flujoId !== '' ? (int) $flujoId : null;
+
+        $metricas = $this->metricasService->getDashboardCompleto($dias, $flujoId);
 
         return response()->json([
             'success' => true,

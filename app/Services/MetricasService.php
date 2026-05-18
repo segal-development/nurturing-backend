@@ -18,6 +18,11 @@ use Illuminate\Support\Facades\Schema;
  * - Envíos (enviados, fallidos, pendientes)
  * - Desuscripciones (tasa, motivos, tendencia)
  * - Conversiones (prospectos convertidos)
+ * - Nuevos prospectos por día (entrada al flujo)
+ *
+ * Todos los métodos públicos aceptan un $flujoId opcional para filtrar
+ * las métricas a un único flujo. Cuando se pasa, las cache keys incluyen
+ * el flujoId para no mezclar resultados.
  */
 class MetricasService
 {
@@ -27,24 +32,41 @@ class MetricasService
     private const CACHE_TTL = 300;
 
     /**
+     * Genera un sufijo para cache key basado en flujoId.
+     */
+    private function cacheSuffix(?int $flujoId): string
+    {
+        return $flujoId !== null ? ":f{$flujoId}" : '';
+    }
+
+    /**
      * Obtiene todas las métricas del dashboard en un solo método.
      */
-    public function getDashboardCompleto(int $dias = 30): array
+    public function getDashboardCompleto(int $dias = 30, ?int $flujoId = null): array
     {
-        $cacheKey = "metricas_dashboard_{$dias}";
+        $cacheKey = "metricas_dashboard_{$dias}".$this->cacheSuffix($flujoId);
 
-        return Cache::remember($cacheKey, self::CACHE_TTL, function () use ($dias) {
-            return [
-                'resumen' => $this->getResumenGeneral($dias),
-                'aperturas' => $this->getMetricasAperturas($dias),
-                'clicks' => $this->getMetricasClicks($dias),
-                'envios' => $this->getMetricasEnvios($dias),
-                'desuscripciones' => $this->getMetricasDesuscripciones($dias),
-                'conversiones' => $this->getMetricasConversiones($dias),
-                'tendencias' => $this->getTendencias($dias),
-                'top_flujos' => $this->getTopFlujos($dias),
+        return Cache::remember($cacheKey, self::CACHE_TTL, function () use ($dias, $flujoId) {
+            $data = [
+                'resumen' => $this->getResumenGeneral($dias, $flujoId),
+                'aperturas' => $this->getMetricasAperturas($dias, $flujoId),
+                'clicks' => $this->getMetricasClicks($dias, $flujoId),
+                'envios' => $this->getMetricasEnvios($dias, $flujoId),
+                'desuscripciones' => $this->getMetricasDesuscripciones($dias, $flujoId),
+                'conversiones' => $this->getMetricasConversiones($dias, $flujoId),
+                'tendencias' => $this->getTendencias($dias, $flujoId),
+                'nuevos_prospectos' => $this->getNuevosProspectosPorDia($dias, $flujoId),
                 'generado_at' => now()->toIso8601String(),
             ];
+
+            // Top flujos solo tiene sentido cuando NO hay filtro de flujo
+            if ($flujoId === null) {
+                $data['top_flujos'] = $this->getTopFlujos($dias);
+            } else {
+                $data['top_flujos'] = [];
+            }
+
+            return $data;
         });
     }
 
@@ -52,18 +74,21 @@ class MetricasService
      * Resumen general de métricas clave (KPIs)
      * Optimizado: 4 queries consolidadas en vez de 7 separadas
      */
-    public function getResumenGeneral(int $dias = 30): array
+    public function getResumenGeneral(int $dias = 30, ?int $flujoId = null): array
     {
-        return Cache::remember("metricas:resumen:{$dias}", self::CACHE_TTL, fn () => $this->computeResumenGeneral($dias));
+        $cacheKey = "metricas:resumen:{$dias}".$this->cacheSuffix($flujoId);
+
+        return Cache::remember($cacheKey, self::CACHE_TTL, fn () => $this->computeResumenGeneral($dias, $flujoId));
     }
 
-    private function computeResumenGeneral(int $dias): array
+    private function computeResumenGeneral(int $dias, ?int $flujoId): array
     {
         $desde = now()->subDays($dias);
 
-        // Query 1: Envíos - totales y exitosos en 1 sola query
+        // Query 1: Envíos
         $envioStats = DB::table('envios')
             ->where('created_at', '>=', $desde)
+            ->when($flujoId, fn ($q, $id) => $q->where('flujo_id', $id))
             ->selectRaw("
                 COUNT(*) as total,
                 COUNT(CASE WHEN estado IN ('enviado', 'entregado', 'abierto', 'clickeado') THEN 1 END) as exitosos
@@ -73,35 +98,51 @@ class MetricasService
         $totalEnvios = (int) ($envioStats->total ?? 0);
         $enviosExitosos = (int) ($envioStats->exitosos ?? 0);
 
-        // Query 2: Aperturas - total y únicas en 1 sola query
-        $aperturaStats = DB::table('email_aperturas')
-            ->where('created_at', '>=', $desde)
-            ->selectRaw('COUNT(*) as total, COUNT(DISTINCT envio_id) as unicos')
+        // Query 2: Aperturas (JOIN si filtra por flujo)
+        $aperturaQuery = DB::table('email_aperturas as ea')->where('ea.created_at', '>=', $desde);
+        if ($flujoId !== null) {
+            $aperturaQuery->join('envios as e', 'e.id', '=', 'ea.envio_id')->where('e.flujo_id', $flujoId);
+        }
+        $aperturaStats = $aperturaQuery
+            ->selectRaw('COUNT(*) as total, COUNT(DISTINCT ea.envio_id) as unicos')
             ->first();
 
         $totalAperturas = (int) ($aperturaStats->total ?? 0);
         $enviosConApertura = (int) ($aperturaStats->unicos ?? 0);
 
-        // Query 3: Clicks - total y únicos en 1 sola query
-        $clickStats = DB::table('email_clicks')
-            ->where('created_at', '>=', $desde)
-            ->selectRaw('COUNT(*) as total, COUNT(DISTINCT envio_id) as unicos')
+        // Query 3: Clicks (JOIN si filtra por flujo)
+        $clickQuery = DB::table('email_clicks as ec')->where('ec.created_at', '>=', $desde);
+        if ($flujoId !== null) {
+            $clickQuery->join('envios as e', 'e.id', '=', 'ec.envio_id')->where('e.flujo_id', $flujoId);
+        }
+        $clickStats = $clickQuery
+            ->selectRaw('COUNT(*) as total, COUNT(DISTINCT ec.envio_id) as unicos')
             ->first();
 
         $totalClicks = (int) ($clickStats->total ?? 0);
         $enviosConClick = (int) ($clickStats->unicos ?? 0);
 
-        // Query 4: Desuscripciones + conversiones
-        $totalDesuscripciones = Schema::hasTable('desuscripciones')
-            ? DB::table('desuscripciones')->where('created_at', '>=', $desde)->count()
-            : 0;
+        // Query 4: Desuscripciones
+        $totalDesuscripciones = 0;
+        if (Schema::hasTable('desuscripciones')) {
+            $totalDesuscripciones = DB::table('desuscripciones')
+                ->where('created_at', '>=', $desde)
+                ->when($flujoId, fn ($q, $id) => $q->where('flujo_id', $id))
+                ->count();
+        }
 
-        $prospectosConvertidos = DB::table('prospectos')
-            ->where('estado', 'convertido')
-            ->where('updated_at', '>=', $desde)
-            ->count();
+        // Conversiones: prospectos en estado 'convertido' actualizados en el período.
+        // Filtrado por flujo via JOIN con prospecto_en_flujo cuando aplica.
+        $conversionesQuery = DB::table('prospectos as p')
+            ->where('p.estado', 'convertido')
+            ->where('p.updated_at', '>=', $desde);
+        if ($flujoId !== null) {
+            $conversionesQuery->join('prospecto_en_flujo as pf', 'pf.prospecto_id', '=', 'p.id')
+                ->where('pf.flujo_id', $flujoId);
+        }
+        $prospectosConvertidos = $conversionesQuery->distinct()->count('p.id');
 
-        // Calcular tasas
+        // Tasas
         $tasaEntrega = $totalEnvios > 0 ? round(($enviosExitosos / $totalEnvios) * 100, 2) : 0;
         $tasaApertura = $enviosExitosos > 0 ? round(($enviosConApertura / $enviosExitosos) * 100, 2) : 0;
         $tasaClick = $enviosConApertura > 0 ? round(($enviosConClick / $enviosConApertura) * 100, 2) : 0;
@@ -109,6 +150,7 @@ class MetricasService
 
         return [
             'periodo_dias' => $dias,
+            'flujo_id' => $flujoId,
             'total_envios' => $totalEnvios,
             'envios_exitosos' => $enviosExitosos,
             'total_aperturas' => $totalAperturas,
@@ -130,23 +172,28 @@ class MetricasService
     /**
      * Métricas de aperturas de email
      */
-    public function getMetricasAperturas(int $dias = 30): array
+    public function getMetricasAperturas(int $dias = 30, ?int $flujoId = null): array
     {
-        return Cache::remember("metricas:aperturas:{$dias}", self::CACHE_TTL, fn () => $this->computeMetricasAperturas($dias));
+        $cacheKey = "metricas:aperturas:{$dias}".$this->cacheSuffix($flujoId);
+
+        return Cache::remember($cacheKey, self::CACHE_TTL, fn () => $this->computeMetricasAperturas($dias, $flujoId));
     }
 
-    private function computeMetricasAperturas(int $dias): array
+    private function computeMetricasAperturas(int $dias, ?int $flujoId): array
     {
         $desde = now()->subDays($dias);
 
         // Por día
-        $porDia = DB::table('email_aperturas')
+        $porDiaQuery = DB::table('email_aperturas as ea')->where('ea.fecha_apertura', '>=', $desde);
+        if ($flujoId !== null) {
+            $porDiaQuery->join('envios as e', 'e.id', '=', 'ea.envio_id')->where('e.flujo_id', $flujoId);
+        }
+        $porDia = $porDiaQuery
             ->select(
-                DB::raw('DATE(fecha_apertura) as fecha'),
+                DB::raw('DATE(ea.fecha_apertura) as fecha'),
                 DB::raw('COUNT(*) as total'),
-                DB::raw('COUNT(DISTINCT envio_id) as unicos')
+                DB::raw('COUNT(DISTINCT ea.envio_id) as unicos')
             )
-            ->where('fecha_apertura', '>=', $desde)
             ->groupBy('fecha')
             ->orderBy('fecha')
             ->get()
@@ -165,45 +212,58 @@ class MetricasService
             ];
         }
 
-        // Por flujo
-        $porFlujo = DB::table('email_aperturas as ea')
+        // Por flujo (cuando hay filtro, esta vista es de un solo flujo)
+        $porFlujoQuery = DB::table('email_aperturas as ea')
             ->join('envios as e', 'e.id', '=', 'ea.envio_id')
             ->join('flujos as f', 'f.id', '=', 'e.flujo_id')
+            ->where('ea.fecha_apertura', '>=', $desde);
+        if ($flujoId !== null) {
+            $porFlujoQuery->where('e.flujo_id', $flujoId);
+        }
+        $porFlujo = $porFlujoQuery
             ->select(
                 'f.id as flujo_id',
                 'f.nombre as flujo_nombre',
                 DB::raw('COUNT(*) as total_aperturas'),
                 DB::raw('COUNT(DISTINCT ea.envio_id) as aperturas_unicas')
             )
-            ->where('ea.fecha_apertura', '>=', $desde)
             ->groupBy('f.id', 'f.nombre')
             ->orderByDesc('total_aperturas')
             ->limit(10)
             ->get();
 
         // Por dispositivo
-        $porDispositivo = DB::table('email_aperturas')
-            ->select('dispositivo', DB::raw('COUNT(*) as total'))
-            ->where('fecha_apertura', '>=', $desde)
-            ->groupBy('dispositivo')
+        $porDispositivoQuery = DB::table('email_aperturas as ea')->where('ea.fecha_apertura', '>=', $desde);
+        if ($flujoId !== null) {
+            $porDispositivoQuery->join('envios as e', 'e.id', '=', 'ea.envio_id')->where('e.flujo_id', $flujoId);
+        }
+        $porDispositivo = $porDispositivoQuery
+            ->select('ea.dispositivo', DB::raw('COUNT(*) as total'))
+            ->groupBy('ea.dispositivo')
             ->orderByDesc('total')
             ->get();
 
         // Por cliente de email
-        $porCliente = DB::table('email_aperturas')
-            ->select('cliente_email', DB::raw('COUNT(*) as total'))
-            ->where('fecha_apertura', '>=', $desde)
-            ->groupBy('cliente_email')
+        $porClienteQuery = DB::table('email_aperturas as ea')->where('ea.fecha_apertura', '>=', $desde);
+        if ($flujoId !== null) {
+            $porClienteQuery->join('envios as e', 'e.id', '=', 'ea.envio_id')->where('e.flujo_id', $flujoId);
+        }
+        $porCliente = $porClienteQuery
+            ->select('ea.cliente_email', DB::raw('COUNT(*) as total'))
+            ->groupBy('ea.cliente_email')
             ->orderByDesc('total')
             ->get();
 
         // Por hora del día
-        $porHora = DB::table('email_aperturas')
+        $porHoraQuery = DB::table('email_aperturas as ea')->where('ea.fecha_apertura', '>=', $desde);
+        if ($flujoId !== null) {
+            $porHoraQuery->join('envios as e', 'e.id', '=', 'ea.envio_id')->where('e.flujo_id', $flujoId);
+        }
+        $porHora = $porHoraQuery
             ->select(
-                DB::raw('EXTRACT(HOUR FROM fecha_apertura) as hora'),
+                DB::raw('EXTRACT(HOUR FROM ea.fecha_apertura) as hora'),
                 DB::raw('COUNT(*) as total')
             )
-            ->where('fecha_apertura', '>=', $desde)
             ->groupBy('hora')
             ->orderBy('hora')
             ->get();
@@ -220,23 +280,28 @@ class MetricasService
     /**
      * Métricas de clicks
      */
-    public function getMetricasClicks(int $dias = 30): array
+    public function getMetricasClicks(int $dias = 30, ?int $flujoId = null): array
     {
-        return Cache::remember("metricas:clicks:{$dias}", self::CACHE_TTL, fn () => $this->computeMetricasClicks($dias));
+        $cacheKey = "metricas:clicks:{$dias}".$this->cacheSuffix($flujoId);
+
+        return Cache::remember($cacheKey, self::CACHE_TTL, fn () => $this->computeMetricasClicks($dias, $flujoId));
     }
 
-    private function computeMetricasClicks(int $dias): array
+    private function computeMetricasClicks(int $dias, ?int $flujoId): array
     {
         $desde = now()->subDays($dias);
 
         // Por día
-        $porDia = DB::table('email_clicks')
+        $porDiaQuery = DB::table('email_clicks as ec')->where('ec.fecha_click', '>=', $desde);
+        if ($flujoId !== null) {
+            $porDiaQuery->join('envios as e', 'e.id', '=', 'ec.envio_id')->where('e.flujo_id', $flujoId);
+        }
+        $porDia = $porDiaQuery
             ->select(
-                DB::raw('DATE(fecha_click) as fecha'),
+                DB::raw('DATE(ec.fecha_click) as fecha'),
                 DB::raw('COUNT(*) as total'),
-                DB::raw('COUNT(DISTINCT envio_id) as unicos')
+                DB::raw('COUNT(DISTINCT ec.envio_id) as unicos')
             )
-            ->where('fecha_click', '>=', $desde)
             ->groupBy('fecha')
             ->orderBy('fecha')
             ->get()
@@ -256,27 +321,35 @@ class MetricasService
         }
 
         // Por flujo
-        $porFlujo = DB::table('email_clicks as ec')
+        $porFlujoQuery = DB::table('email_clicks as ec')
             ->join('envios as e', 'e.id', '=', 'ec.envio_id')
             ->join('flujos as f', 'f.id', '=', 'e.flujo_id')
+            ->where('ec.fecha_click', '>=', $desde);
+        if ($flujoId !== null) {
+            $porFlujoQuery->where('e.flujo_id', $flujoId);
+        }
+        $porFlujo = $porFlujoQuery
             ->select(
                 'f.id as flujo_id',
                 'f.nombre as flujo_nombre',
                 DB::raw('COUNT(*) as total_clicks'),
                 DB::raw('COUNT(DISTINCT ec.envio_id) as clicks_unicos')
             )
-            ->where('ec.fecha_click', '>=', $desde)
             ->groupBy('f.id', 'f.nombre')
             ->orderByDesc('total_clicks')
             ->limit(10)
             ->get();
 
         // Top URLs clickeadas
-        $topUrls = DB::table('email_clicks')
-            ->select('url_original as url_destino', DB::raw('COUNT(*) as total'))
-            ->where('fecha_click', '>=', $desde)
-            ->whereNotNull('url_original')
-            ->groupBy('url_original')
+        $topUrlsQuery = DB::table('email_clicks as ec')
+            ->where('ec.fecha_click', '>=', $desde)
+            ->whereNotNull('ec.url_original');
+        if ($flujoId !== null) {
+            $topUrlsQuery->join('envios as e', 'e.id', '=', 'ec.envio_id')->where('e.flujo_id', $flujoId);
+        }
+        $topUrls = $topUrlsQuery
+            ->select('ec.url_original as url_destino', DB::raw('COUNT(*) as total'))
+            ->groupBy('ec.url_original')
             ->orderByDesc('total')
             ->limit(10)
             ->get();
@@ -291,12 +364,14 @@ class MetricasService
     /**
      * Métricas de envíos
      */
-    public function getMetricasEnvios(int $dias = 30): array
+    public function getMetricasEnvios(int $dias = 30, ?int $flujoId = null): array
     {
-        return Cache::remember("metricas:envios:{$dias}", self::CACHE_TTL, fn () => $this->computeMetricasEnvios($dias));
+        $cacheKey = "metricas:envios:{$dias}".$this->cacheSuffix($flujoId);
+
+        return Cache::remember($cacheKey, self::CACHE_TTL, fn () => $this->computeMetricasEnvios($dias, $flujoId));
     }
 
-    private function computeMetricasEnvios(int $dias): array
+    private function computeMetricasEnvios(int $dias, ?int $flujoId): array
     {
         $desde = now()->subDays($dias);
 
@@ -304,6 +379,7 @@ class MetricasService
         $porEstado = DB::table('envios')
             ->select('estado', DB::raw('COUNT(*) as total'))
             ->where('created_at', '>=', $desde)
+            ->when($flujoId, fn ($q, $id) => $q->where('flujo_id', $id))
             ->groupBy('estado')
             ->pluck('total', 'estado')
             ->toArray();
@@ -312,12 +388,12 @@ class MetricasService
         $porCanal = DB::table('envios')
             ->select('canal', DB::raw('COUNT(*) as total'))
             ->where('created_at', '>=', $desde)
+            ->when($flujoId, fn ($q, $id) => $q->where('flujo_id', $id))
             ->groupBy('canal')
             ->pluck('total', 'canal')
             ->toArray();
 
         // Por día y estado
-        // Incluir 'abierto' y 'clickeado' como exitosos (son estados posteriores a 'enviado')
         $porDia = DB::table('envios')
             ->select(
                 DB::raw('DATE(created_at) as fecha'),
@@ -326,6 +402,7 @@ class MetricasService
                 DB::raw("COUNT(CASE WHEN estado = 'pendiente' THEN 1 END) as pendientes")
             )
             ->where('created_at', '>=', $desde)
+            ->when($flujoId, fn ($q, $id) => $q->where('flujo_id', $id))
             ->groupBy('fecha')
             ->orderBy('fecha')
             ->get()
@@ -346,9 +423,13 @@ class MetricasService
         }
 
         // Por flujo
-        // Incluir 'abierto' y 'clickeado' como exitosos (son estados posteriores a 'enviado')
-        $porFlujo = DB::table('envios as e')
+        $porFlujoQuery = DB::table('envios as e')
             ->join('flujos as f', 'f.id', '=', 'e.flujo_id')
+            ->where('e.created_at', '>=', $desde);
+        if ($flujoId !== null) {
+            $porFlujoQuery->where('e.flujo_id', $flujoId);
+        }
+        $porFlujo = $porFlujoQuery
             ->select(
                 'f.id as flujo_id',
                 'f.nombre as flujo_nombre',
@@ -356,7 +437,6 @@ class MetricasService
                 DB::raw("COUNT(CASE WHEN e.estado IN ('enviado', 'entregado', 'abierto', 'clickeado') THEN 1 END) as exitosos"),
                 DB::raw("COUNT(CASE WHEN e.estado = 'fallido' THEN 1 END) as fallidos")
             )
-            ->where('e.created_at', '>=', $desde)
             ->groupBy('f.id', 'f.nombre')
             ->orderByDesc('total')
             ->limit(10)
@@ -373,25 +453,32 @@ class MetricasService
     /**
      * Métricas de desuscripciones
      */
-    public function getMetricasDesuscripciones(int $dias = 30): array
+    public function getMetricasDesuscripciones(int $dias = 30, ?int $flujoId = null): array
     {
         if (! Schema::hasTable('desuscripciones')) {
             return $this->getDesuscripcionesVacias($dias);
         }
 
-        return Cache::remember("metricas:desuscripciones:{$dias}", self::CACHE_TTL, fn () => $this->computeMetricasDesuscripciones($dias));
+        $cacheKey = "metricas:desuscripciones:{$dias}".$this->cacheSuffix($flujoId);
+
+        return Cache::remember($cacheKey, self::CACHE_TTL, fn () => $this->computeMetricasDesuscripciones($dias, $flujoId));
     }
 
-    private function computeMetricasDesuscripciones(int $dias): array
+    private function computeMetricasDesuscripciones(int $dias, ?int $flujoId): array
     {
         $desde = now()->subDays($dias);
 
-        $total = Desuscripcion::where('created_at', '>=', $desde)->count();
+        $totalQuery = Desuscripcion::where('created_at', '>=', $desde);
+        if ($flujoId !== null) {
+            $totalQuery->where('flujo_id', $flujoId);
+        }
+        $total = $totalQuery->count();
 
         // Por canal
         $porCanal = DB::table('desuscripciones')
             ->select('canal', DB::raw('COUNT(*) as total'))
             ->where('created_at', '>=', $desde)
+            ->when($flujoId, fn ($q, $id) => $q->where('flujo_id', $id))
             ->groupBy('canal')
             ->pluck('total', 'canal')
             ->toArray();
@@ -400,25 +487,26 @@ class MetricasService
         $porMotivo = DB::table('desuscripciones')
             ->select('motivo', DB::raw('COUNT(*) as total'))
             ->where('created_at', '>=', $desde)
+            ->when($flujoId, fn ($q, $id) => $q->where('flujo_id', $id))
             ->whereNotNull('motivo')
             ->groupBy('motivo')
             ->orderByDesc('total')
             ->get();
 
-        // Por día (tendencia)
+        // Por día
         $porDia = DB::table('desuscripciones')
             ->select(
                 DB::raw('DATE(created_at) as fecha'),
                 DB::raw('COUNT(*) as total')
             )
             ->where('created_at', '>=', $desde)
+            ->when($flujoId, fn ($q, $id) => $q->where('flujo_id', $id))
             ->groupBy('fecha')
             ->orderBy('fecha')
             ->get()
             ->keyBy('fecha')
             ->toArray();
 
-        // Rellenar días sin datos
         $porDiaCompleto = [];
         for ($i = $dias - 1; $i >= 0; $i--) {
             $fecha = now()->subDays($i)->format('Y-m-d');
@@ -429,16 +517,20 @@ class MetricasService
             ];
         }
 
-        // Por flujo (si aplica)
-        $porFlujo = DB::table('desuscripciones as d')
+        // Por flujo
+        $porFlujoQuery = DB::table('desuscripciones as d')
             ->leftJoin('flujos as f', 'f.id', '=', 'd.flujo_id')
+            ->where('d.created_at', '>=', $desde)
+            ->whereNotNull('d.flujo_id');
+        if ($flujoId !== null) {
+            $porFlujoQuery->where('d.flujo_id', $flujoId);
+        }
+        $porFlujo = $porFlujoQuery
             ->select(
                 'f.id as flujo_id',
                 'f.nombre as flujo_nombre',
                 DB::raw('COUNT(*) as total')
             )
-            ->where('d.created_at', '>=', $desde)
-            ->whereNotNull('d.flujo_id')
             ->groupBy('f.id', 'f.nombre')
             ->orderByDesc('total')
             ->limit(10)
@@ -454,7 +546,7 @@ class MetricasService
     }
 
     /**
-     * Retorna estructura vacía para desuscripciones cuando la tabla no existe
+     * Estructura vacía para desuscripciones cuando la tabla no existe
      */
     private function getDesuscripcionesVacias(int $dias): array
     {
@@ -478,50 +570,73 @@ class MetricasService
     /**
      * Métricas de conversiones (prospectos que pasaron a convertido)
      */
-    public function getMetricasConversiones(int $dias = 30): array
+    public function getMetricasConversiones(int $dias = 30, ?int $flujoId = null): array
     {
-        return Cache::remember("metricas:conversiones:{$dias}", self::CACHE_TTL, fn () => $this->computeMetricasConversiones($dias));
+        $cacheKey = "metricas:conversiones:{$dias}".$this->cacheSuffix($flujoId);
+
+        return Cache::remember($cacheKey, self::CACHE_TTL, fn () => $this->computeMetricasConversiones($dias, $flujoId));
     }
 
-    private function computeMetricasConversiones(int $dias): array
+    private function computeMetricasConversiones(int $dias, ?int $flujoId): array
     {
         $desde = now()->subDays($dias);
 
-        $total = Prospecto::where('estado', 'convertido')
-            ->where('updated_at', '>=', $desde)
-            ->count();
+        // Total convertidos en el período (filtrado por flujo si aplica)
+        $convertidosQuery = DB::table('prospectos as p')
+            ->where('p.estado', 'convertido')
+            ->where('p.updated_at', '>=', $desde);
+        if ($flujoId !== null) {
+            $convertidosQuery->join('prospecto_en_flujo as pf', 'pf.prospecto_id', '=', 'p.id')
+                ->where('pf.flujo_id', $flujoId);
+        }
+        $total = $convertidosQuery->distinct()->count('p.id');
 
-        $totalProspectos = Prospecto::where('created_at', '>=', $desde)->count();
+        // Total prospectos para tasa
+        $totalProspectosQuery = DB::table('prospectos as p')->where('p.created_at', '>=', $desde);
+        if ($flujoId !== null) {
+            $totalProspectosQuery->join('prospecto_en_flujo as pf', 'pf.prospecto_id', '=', 'p.id')
+                ->where('pf.flujo_id', $flujoId);
+        }
+        $totalProspectos = $totalProspectosQuery->distinct()->count('p.id');
         $tasaConversion = $totalProspectos > 0 ? round(($total / $totalProspectos) * 100, 2) : 0;
 
         // Por tipo de prospecto
-        $porTipo = DB::table('prospectos as p')
+        $porTipoQuery = DB::table('prospectos as p')
             ->join('tipo_prospecto as tp', 'tp.id', '=', 'p.tipo_prospecto_id')
+            ->where('p.estado', 'convertido')
+            ->where('p.updated_at', '>=', $desde);
+        if ($flujoId !== null) {
+            $porTipoQuery->join('prospecto_en_flujo as pf', 'pf.prospecto_id', '=', 'p.id')
+                ->where('pf.flujo_id', $flujoId);
+        }
+        $porTipo = $porTipoQuery
             ->select(
                 'tp.nombre as tipo',
-                DB::raw('COUNT(*) as total')
+                DB::raw('COUNT(DISTINCT p.id) as total')
             )
-            ->where('p.estado', 'convertido')
-            ->where('p.updated_at', '>=', $desde)
             ->groupBy('tp.id', 'tp.nombre')
             ->orderByDesc('total')
             ->get();
 
         // Por día
-        $porDia = DB::table('prospectos')
+        $porDiaQuery = DB::table('prospectos as p')
+            ->where('p.estado', 'convertido')
+            ->where('p.updated_at', '>=', $desde);
+        if ($flujoId !== null) {
+            $porDiaQuery->join('prospecto_en_flujo as pf', 'pf.prospecto_id', '=', 'p.id')
+                ->where('pf.flujo_id', $flujoId);
+        }
+        $porDia = $porDiaQuery
             ->select(
-                DB::raw('DATE(updated_at) as fecha'),
-                DB::raw('COUNT(*) as total')
+                DB::raw('DATE(p.updated_at) as fecha'),
+                DB::raw('COUNT(DISTINCT p.id) as total')
             )
-            ->where('estado', 'convertido')
-            ->where('updated_at', '>=', $desde)
             ->groupBy('fecha')
             ->orderBy('fecha')
             ->get()
             ->keyBy('fecha')
             ->toArray();
 
-        // Rellenar días sin datos
         $porDiaCompleto = [];
         for ($i = $dias - 1; $i >= 0; $i--) {
             $fecha = now()->subDays($i)->format('Y-m-d');
@@ -542,52 +657,61 @@ class MetricasService
 
     /**
      * Tendencias comparativas (este período vs anterior)
-     * Optimizado: 4 queries con conditional aggregation en vez de 8 separadas
      */
-    public function getTendencias(int $dias = 30): array
+    public function getTendencias(int $dias = 30, ?int $flujoId = null): array
     {
-        return Cache::remember("metricas:tendencias:{$dias}", self::CACHE_TTL, fn () => $this->computeTendencias($dias));
+        $cacheKey = "metricas:tendencias:{$dias}".$this->cacheSuffix($flujoId);
+
+        return Cache::remember($cacheKey, self::CACHE_TTL, fn () => $this->computeTendencias($dias, $flujoId));
     }
 
-    private function computeTendencias(int $dias): array
+    private function computeTendencias(int $dias, ?int $flujoId): array
     {
         $desdeActual = now()->subDays($dias);
         $desdeAnterior = now()->subDays($dias * 2);
         $hastaAnterior = now()->subDays($dias);
 
-        // 1 query para envíos (actual + anterior)
+        // Envíos (actual + anterior)
         $envios = DB::table('envios')
             ->where('created_at', '>=', $desdeAnterior)
+            ->when($flujoId, fn ($q, $id) => $q->where('flujo_id', $id))
             ->selectRaw('
                 COUNT(CASE WHEN created_at >= ? THEN 1 END) as actual,
                 COUNT(CASE WHEN created_at >= ? AND created_at < ? THEN 1 END) as anterior
             ', [$desdeActual, $desdeAnterior, $hastaAnterior])
             ->first();
 
-        // 1 query para aperturas (actual + anterior)
-        $aperturas = DB::table('email_aperturas')
-            ->where('created_at', '>=', $desdeAnterior)
+        // Aperturas (actual + anterior)
+        $aperturasQuery = DB::table('email_aperturas as ea')->where('ea.created_at', '>=', $desdeAnterior);
+        if ($flujoId !== null) {
+            $aperturasQuery->join('envios as e', 'e.id', '=', 'ea.envio_id')->where('e.flujo_id', $flujoId);
+        }
+        $aperturas = $aperturasQuery
             ->selectRaw('
-                COUNT(CASE WHEN created_at >= ? THEN 1 END) as actual,
-                COUNT(CASE WHEN created_at >= ? AND created_at < ? THEN 1 END) as anterior
+                COUNT(CASE WHEN ea.created_at >= ? THEN 1 END) as actual,
+                COUNT(CASE WHEN ea.created_at >= ? AND ea.created_at < ? THEN 1 END) as anterior
             ', [$desdeActual, $desdeAnterior, $hastaAnterior])
             ->first();
 
-        // 1 query para clicks (actual + anterior)
-        $clicks = DB::table('email_clicks')
-            ->where('created_at', '>=', $desdeAnterior)
+        // Clicks (actual + anterior)
+        $clicksQuery = DB::table('email_clicks as ec')->where('ec.created_at', '>=', $desdeAnterior);
+        if ($flujoId !== null) {
+            $clicksQuery->join('envios as e', 'e.id', '=', 'ec.envio_id')->where('e.flujo_id', $flujoId);
+        }
+        $clicks = $clicksQuery
             ->selectRaw('
-                COUNT(CASE WHEN created_at >= ? THEN 1 END) as actual,
-                COUNT(CASE WHEN created_at >= ? AND created_at < ? THEN 1 END) as anterior
+                COUNT(CASE WHEN ec.created_at >= ? THEN 1 END) as actual,
+                COUNT(CASE WHEN ec.created_at >= ? AND ec.created_at < ? THEN 1 END) as anterior
             ', [$desdeActual, $desdeAnterior, $hastaAnterior])
             ->first();
 
-        // 1 query para desuscripciones (actual + anterior)
+        // Desuscripciones (actual + anterior)
         $desuscripcionesActual = 0;
         $desuscripcionesAnterior = 0;
         if (Schema::hasTable('desuscripciones')) {
             $desus = DB::table('desuscripciones')
                 ->where('created_at', '>=', $desdeAnterior)
+                ->when($flujoId, fn ($q, $id) => $q->where('flujo_id', $id))
                 ->selectRaw('
                     COUNT(CASE WHEN created_at >= ? THEN 1 END) as actual,
                     COUNT(CASE WHEN created_at >= ? AND created_at < ? THEN 1 END) as anterior
@@ -606,7 +730,58 @@ class MetricasService
     }
 
     /**
-     * Top flujos por rendimiento
+     * Nuevos prospectos por día que entraron a un flujo (o a cualquier flujo).
+     * Útil para entender la tasa de incorporación a campañas.
+     */
+    public function getNuevosProspectosPorDia(int $dias = 30, ?int $flujoId = null): array
+    {
+        $cacheKey = "metricas:nuevos_prospectos:{$dias}".$this->cacheSuffix($flujoId);
+
+        return Cache::remember($cacheKey, self::CACHE_TTL, fn () => $this->computeNuevosProspectosPorDia($dias, $flujoId));
+    }
+
+    private function computeNuevosProspectosPorDia(int $dias, ?int $flujoId): array
+    {
+        $desde = now()->subDays($dias);
+
+        $porDia = DB::table('prospecto_en_flujo')
+            ->select(
+                DB::raw('DATE(fecha_inicio) as fecha'),
+                DB::raw('COUNT(*) as total')
+            )
+            ->where('fecha_inicio', '>=', $desde)
+            ->where('cancelado', false)
+            ->when($flujoId, fn ($q, $id) => $q->where('flujo_id', $id))
+            ->groupBy('fecha')
+            ->orderBy('fecha')
+            ->get()
+            ->keyBy('fecha')
+            ->toArray();
+
+        $porDiaCompleto = [];
+        $total = 0;
+        for ($i = $dias - 1; $i >= 0; $i--) {
+            $fecha = now()->subDays($i)->format('Y-m-d');
+            $data = $porDia[$fecha] ?? null;
+            $count = $data ? (int) $data->total : 0;
+            $total += $count;
+            $porDiaCompleto[] = [
+                'fecha' => $fecha,
+                'total' => $count,
+            ];
+        }
+
+        $promedioDiario = $dias > 0 ? round($total / $dias, 1) : 0;
+
+        return [
+            'total' => $total,
+            'promedio_diario' => $promedioDiario,
+            'por_dia' => $porDiaCompleto,
+        ];
+    }
+
+    /**
+     * Top flujos por rendimiento (no se filtra por flujoId — siempre global)
      */
     public function getTopFlujos(int $dias = 30, int $limit = 5): array
     {
@@ -630,11 +805,11 @@ class MetricasService
                 DB::raw('COUNT(DISTINCT e.id) as total_envios'),
                 DB::raw('COUNT(DISTINCT ea.id) as total_aperturas'),
                 DB::raw('COUNT(DISTINCT ec.id) as total_clicks'),
-                DB::raw('CASE WHEN COUNT(DISTINCT e.id) > 0 
-                    THEN ROUND((COUNT(DISTINCT ea.envio_id)::numeric / COUNT(DISTINCT e.id)::numeric) * 100, 2) 
+                DB::raw('CASE WHEN COUNT(DISTINCT e.id) > 0
+                    THEN ROUND((COUNT(DISTINCT ea.envio_id)::numeric / COUNT(DISTINCT e.id)::numeric) * 100, 2)
                     ELSE 0 END as tasa_apertura'),
-                DB::raw('CASE WHEN COUNT(DISTINCT ea.envio_id) > 0 
-                    THEN ROUND((COUNT(DISTINCT ec.envio_id)::numeric / COUNT(DISTINCT ea.envio_id)::numeric) * 100, 2) 
+                DB::raw('CASE WHEN COUNT(DISTINCT ea.envio_id) > 0
+                    THEN ROUND((COUNT(DISTINCT ec.envio_id)::numeric / COUNT(DISTINCT ea.envio_id)::numeric) * 100, 2)
                     ELSE 0 END as ctr')
             )
             ->groupBy('f.id', 'f.nombre')
@@ -664,12 +839,12 @@ class MetricasService
     }
 
     /**
-     * Invalida el cache de métricas
+     * Invalida el cache de métricas. Limpia variantes con y sin flujoId.
      */
     public function invalidarCache(): void
     {
         $periodos = [7, 30, 90];
-        $tipos = ['resumen', 'aperturas', 'clicks', 'envios', 'desuscripciones', 'conversiones', 'tendencias'];
+        $tipos = ['resumen', 'aperturas', 'clicks', 'envios', 'desuscripciones', 'conversiones', 'tendencias', 'nuevos_prospectos'];
 
         foreach ($periodos as $dias) {
             Cache::forget("metricas_dashboard_{$dias}");
@@ -678,6 +853,26 @@ class MetricasService
             }
             Cache::forget("metricas:top_flujos:{$dias}:5");
             Cache::forget("metricas:top_flujos:{$dias}:10");
+        }
+
+        // Nota: para variantes con flujoId la invalidación es selectiva por flujo;
+        // se delega al endpoint /metricas/refresh que conoce el flujoId actual.
+    }
+
+    /**
+     * Invalida el cache de métricas para un flujo específico.
+     */
+    public function invalidarCacheFlujo(int $flujoId): void
+    {
+        $periodos = [7, 30, 90];
+        $tipos = ['resumen', 'aperturas', 'clicks', 'envios', 'desuscripciones', 'conversiones', 'tendencias', 'nuevos_prospectos'];
+        $suffix = ":f{$flujoId}";
+
+        foreach ($periodos as $dias) {
+            Cache::forget("metricas_dashboard_{$dias}{$suffix}");
+            foreach ($tipos as $tipo) {
+                Cache::forget("metricas:{$tipo}:{$dias}{$suffix}");
+            }
         }
     }
 }
