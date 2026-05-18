@@ -58,7 +58,7 @@ class MigrateProspectosIdsToPivot extends Command
     ): void {
         $totalRows = DB::table($sourceTable)
             ->whereNotNull('prospectos_ids')
-            ->where('prospectos_ids', '!=', '[]')
+            ->whereRaw("prospectos_ids::text != '[]'")
             ->count();
 
         if ($totalRows === 0) {
