@@ -56,6 +56,7 @@ class MetricasService
                 'conversiones' => $this->getMetricasConversiones($dias, $flujoId),
                 'tendencias' => $this->getTendencias($dias, $flujoId),
                 'nuevos_prospectos' => $this->getNuevosProspectosPorDia($dias, $flujoId),
+                'envios_hoy' => $this->getEnviosHoyConFallback($flujoId),
                 'generado_at' => now()->toIso8601String(),
             ];
 
@@ -777,6 +778,90 @@ class MetricasService
             'total' => $total,
             'promedio_diario' => $promedioDiario,
             'por_dia' => $porDiaCompleto,
+        ];
+    }
+
+    /**
+     * Envíos del día actual desglosados por etapa, con fallback histórico
+     * al último envío de cada etapa si hoy no hubo actividad.
+     *
+     * Solo tiene sentido cuando se filtra por un flujo: devuelve estructura
+     * vacía si $flujoId es null.
+     */
+    public function getEnviosHoyConFallback(?int $flujoId): array
+    {
+        if ($flujoId === null) {
+            return [
+                'total_hoy' => 0,
+                'por_etapa_hoy' => [],
+                'ultimo_por_etapa' => [],
+            ];
+        }
+
+        $cacheKey = "metricas:envios_hoy:f{$flujoId}";
+
+        return Cache::remember($cacheKey, 60, fn () => $this->computeEnviosHoyConFallback($flujoId));
+    }
+
+    private function computeEnviosHoyConFallback(int $flujoId): array
+    {
+        // Lookup stage labels from flujo config_structure once
+        $flujo = Flujo::find($flujoId);
+        $stageLabels = [];
+        foreach (($flujo?->config_structure['stages'] ?? []) as $s) {
+            $stageLabels[$s['id'] ?? ''] = $s['label'] ?? ($s['nombre'] ?? '(sin nombre)');
+        }
+
+        // Envíos de HOY agrupados por etapa
+        $porEtapaHoy = DB::table('envios as e')
+            ->leftJoin('flujo_ejecucion_etapas as fee', 'fee.id', '=', 'e.flujo_ejecucion_etapa_id')
+            ->where('e.flujo_id', $flujoId)
+            ->whereDate('e.created_at', now()->toDateString())
+            ->select(
+                'fee.node_id',
+                DB::raw('COUNT(*) as total'),
+                DB::raw('MAX(e.created_at) as ultimo')
+            )
+            ->groupBy('fee.node_id')
+            ->orderByDesc('total')
+            ->get()
+            ->map(fn ($r) => [
+                'node_id' => $r->node_id,
+                'etapa_nombre' => $stageLabels[$r->node_id] ?? '(etapa desconocida)',
+                'total' => (int) $r->total,
+                'ultimo' => $r->ultimo,
+            ])
+            ->toArray();
+
+        $totalHoy = array_sum(array_column($porEtapaHoy, 'total'));
+
+        // Fallback: si hoy=0, traer el último envío histórico por etapa
+        $ultimoPorEtapa = [];
+        if ($totalHoy === 0) {
+            $ultimos = DB::table('envios as e')
+                ->leftJoin('flujo_ejecucion_etapas as fee', 'fee.id', '=', 'e.flujo_ejecucion_etapa_id')
+                ->where('e.flujo_id', $flujoId)
+                ->select(
+                    'fee.node_id',
+                    DB::raw('MAX(e.created_at) as ultimo'),
+                    DB::raw('COUNT(*) as total')
+                )
+                ->groupBy('fee.node_id')
+                ->orderByDesc('ultimo')
+                ->get();
+
+            $ultimoPorEtapa = $ultimos->map(fn ($r) => [
+                'node_id' => $r->node_id,
+                'etapa_nombre' => $stageLabels[$r->node_id] ?? '(etapa desconocida)',
+                'ultimo' => $r->ultimo,
+                'total' => (int) $r->total,
+            ])->toArray();
+        }
+
+        return [
+            'total_hoy' => $totalHoy,
+            'por_etapa_hoy' => $porEtapaHoy,
+            'ultimo_por_etapa' => $ultimoPorEtapa,
         ];
     }
 
