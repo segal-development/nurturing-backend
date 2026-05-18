@@ -2,7 +2,6 @@
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
@@ -29,27 +28,9 @@ return new class extends Migration
             $table->index('prospecto_id');
         });
 
-        // Migrate existing JSON data to ejecucion_prospecto
-        DB::statement("
-            INSERT INTO ejecucion_prospecto (flujo_ejecucion_id, prospecto_id)
-            SELECT fe.id, p.prospecto_id::bigint
-            FROM flujo_ejecuciones fe,
-                 LATERAL jsonb_array_elements_text(fe.prospectos_ids::jsonb) AS p(prospecto_id)
-            WHERE fe.prospectos_ids IS NOT NULL
-              AND fe.prospectos_ids::text != '[]'
-            ON CONFLICT DO NOTHING
-        ");
-
-        // Migrate existing JSON data to etapa_prospecto
-        DB::statement("
-            INSERT INTO etapa_prospecto (flujo_ejecucion_etapa_id, prospecto_id)
-            SELECT fee.id, p.prospecto_id::bigint
-            FROM flujo_ejecucion_etapas fee,
-                 LATERAL jsonb_array_elements_text(fee.prospectos_ids::jsonb) AS p(prospecto_id)
-            WHERE fee.prospectos_ids IS NOT NULL
-              AND fee.prospectos_ids::text != '[]'
-            ON CONFLICT DO NOTHING
-        ");
+        // Data backfill from prospectos_ids JSON is intentionally NOT done here.
+        // Run `php artisan nurturing:migrate-prospectos-ids-to-pivot` manually.
+        // Reason: backfilling at boot would exceed Cloud Run's startup timeout.
     }
 
     public function down(): void
