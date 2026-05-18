@@ -145,7 +145,7 @@ class FlujoEjecucionEtapaObserver
         if ($etapasActivas === 0) {
             // Si la ejecución no está ya completada, actualizarla
             if ($ejecucion->estado !== 'completed') {
-                FlujoEjecucion::withoutEvents(function () use ($ejecucion, $nodoFinal) {
+                FlujoEjecucion::withoutEvents(function () use ($ejecucion) {
                     $ejecucion->update([
                         'estado' => 'completed',
                         'fecha_fin' => now(),
@@ -225,6 +225,7 @@ class FlujoEjecucionEtapaObserver
                 }
 
                 $siguienteEtapa->update($updateData);
+                $siguienteEtapa->prospectos()->sync($mergedProspectos);
             });
 
             Log::info('FlujoEjecucionEtapaObserver: Etapa siguiente actualizada', [

@@ -14,6 +14,18 @@ class FlujoEjecucion extends Model
 
     protected $table = 'flujo_ejecuciones';
 
+    protected static function booted(): void
+    {
+        static::saved(function (FlujoEjecucion $model) {
+            if ($model->wasChanged('prospectos_ids') || $model->wasRecentlyCreated) {
+                $ids = $model->prospectos_ids ?? [];
+                if (! empty($ids)) {
+                    $model->prospectos()->sync($ids);
+                }
+            }
+        });
+    }
+
     protected $fillable = [
         'flujo_id',
         'origen_id',

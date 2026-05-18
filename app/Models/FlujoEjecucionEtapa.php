@@ -22,9 +22,17 @@ class FlujoEjecucionEtapa extends Model
     protected static function booted(): void
     {
         static::saving(function (FlujoEjecucionEtapa $etapa) {
-            // node_id is required for all etapas
             if (empty($etapa->nodo_id) && empty($etapa->node_id)) {
                 throw new \InvalidArgumentException('FlujoEjecucionEtapa requires nodo_id or node_id');
+            }
+        });
+
+        static::saved(function (FlujoEjecucionEtapa $model) {
+            if ($model->wasChanged('prospectos_ids') || $model->wasRecentlyCreated) {
+                $ids = $model->prospectos_ids ?? [];
+                if (! empty($ids)) {
+                    $model->prospectos()->sync($ids);
+                }
             }
         });
     }

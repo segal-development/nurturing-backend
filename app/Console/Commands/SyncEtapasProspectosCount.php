@@ -46,6 +46,7 @@ class SyncEtapasProspectosCount extends Command
 
         if ($ejecuciones->isEmpty()) {
             $this->info('No perpetual executions found.');
+
             return Command::SUCCESS;
         }
 
@@ -71,8 +72,7 @@ class SyncEtapasProspectosCount extends Command
                     $missing = $totalProspectos - $etapaCount;
                     $this->line("  - {$etapa->node_id}: {$etapaCount} prospectos (faltan {$missing})");
 
-                    if (!$dryRun) {
-                        // Merge missing prospectos
+                    if (! $dryRun) {
                         $mergedIds = array_values(array_unique(array_merge($etapaProspectos, $prospectoIds)));
 
                         DB::table('flujo_ejecucion_etapas')
@@ -81,6 +81,9 @@ class SyncEtapasProspectosCount extends Command
                                 'prospectos_ids' => json_encode($mergedIds),
                                 'prospectos_count' => count($mergedIds),
                             ]);
+
+                        \App\Models\FlujoEjecucionEtapa::find($etapa->id)
+                            ?->prospectos()->sync($mergedIds);
 
                         $this->info("    ✓ Actualizado a {$totalProspectos} prospectos");
                     }
