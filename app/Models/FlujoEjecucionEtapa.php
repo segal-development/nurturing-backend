@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
 class FlujoEjecucionEtapa extends Model
 {
@@ -65,6 +66,11 @@ class FlujoEjecucionEtapa extends Model
     public function ejecucion(): BelongsTo
     {
         return $this->belongsTo(FlujoEjecucion::class, 'flujo_ejecucion_id');
+    }
+
+    public function prospectos(): BelongsToMany
+    {
+        return $this->belongsToMany(Prospecto::class, 'etapa_prospecto');
     }
 
     /**
