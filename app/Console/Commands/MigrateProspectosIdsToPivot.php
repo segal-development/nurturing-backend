@@ -79,7 +79,7 @@ class MigrateProspectosIdsToPivot extends Command
             $rows = DB::table($sourceTable)
                 ->select('id')
                 ->whereNotNull('prospectos_ids')
-                ->where('prospectos_ids', '!=', '[]')
+                ->whereRaw("prospectos_ids::text != '[]'")
                 ->where('id', '>', $lastId)
                 ->orderBy('id')
                 ->limit($chunk)
