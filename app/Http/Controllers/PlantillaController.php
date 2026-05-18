@@ -129,7 +129,9 @@ class PlantillaController extends Controller
                 'nombre' => ['sometimes', 'string', 'max:100'],
                 'descripcion' => ['nullable', 'string', 'max:500'],
                 'asunto' => ['sometimes', 'string', 'max:200'],
-                'componentes' => ['sometimes', 'array', 'min:1'],
+                'modo' => ['sometimes', 'in:componentes,html_personalizado'],
+                'contenido' => ['nullable', 'string', 'required_if:modo,html_personalizado'],
+                'componentes' => ['sometimes', 'array', 'exclude_if:modo,html_personalizado'],
                 'componentes.*.tipo' => ['sometimes', 'in:logo,texto,boton,separador,imagen,footer'],
                 'componentes.*.id' => ['sometimes', 'string'],
                 'componentes.*.orden' => ['sometimes', 'integer'],
@@ -161,6 +163,7 @@ class PlantillaController extends Controller
             'descripcion',
             'contenido',
             'asunto',
+            'modo',
             'componentes',
             'activo',
         ]));

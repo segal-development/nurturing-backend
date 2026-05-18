@@ -17,7 +17,9 @@ class CrearPlantillaEmailRequest extends FormRequest
             'nombre' => ['required', 'string', 'max:100'],
             'descripcion' => ['nullable', 'string', 'max:500'],
             'asunto' => ['required', 'string', 'max:200'],
-            'componentes' => ['required', 'array', 'min:1'],
+            'modo' => ['sometimes', 'in:componentes,html_personalizado'],
+            'contenido' => ['nullable', 'string', 'required_if:modo,html_personalizado'],
+            'componentes' => ['array', 'required_if:modo,componentes', 'exclude_if:modo,html_personalizado', 'min:1'],
             'componentes.*.tipo' => ['required', 'in:logo,texto,boton,separador,imagen,footer'],
             'componentes.*.id' => ['required', 'string'],
             'componentes.*.orden' => ['required', 'integer'],
@@ -52,7 +54,9 @@ class CrearPlantillaEmailRequest extends FormRequest
             'asunto.required' => 'El asunto del email es obligatorio',
             'asunto.max' => 'El asunto no puede exceder 200 caracteres',
             'componentes.required' => 'Debe incluir al menos un componente',
+            'componentes.required_if' => 'Debe incluir al menos un componente',
             'componentes.min' => 'Debe incluir al menos un componente',
+            'contenido.required_if' => 'El HTML personalizado es obligatorio en modo HTML',
             'componentes.*.tipo.required' => 'Cada componente debe tener un tipo',
             'componentes.*.tipo.in' => 'Tipo de componente no válido',
         ];
@@ -64,8 +68,10 @@ class CrearPlantillaEmailRequest extends FormRequest
     protected function prepareForValidation(): void
     {
         // Forzar tipo Email sin importar lo que venga del frontend
+        // Default 'componentes' si no viene modo (backward compat)
         $this->replace(array_merge($this->all(), [
             'tipo' => 'email',
+            'modo' => $this->input('modo', 'componentes'),
         ]));
     }
 }

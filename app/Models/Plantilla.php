@@ -17,6 +17,7 @@ class Plantilla extends Model
         'tipo',
         'contenido',
         'asunto',
+        'modo',
         'componentes',
         'activo',
     ];
@@ -150,10 +151,47 @@ class Plantilla extends Model
         }
 
         if ($this->esEmail()) {
+            if (($this->modo ?? 'componentes') === 'html_personalizado') {
+                return $this->renderHtmlPersonalizado($this->contenido ?? '');
+            }
             return $this->generarHTMLEmail();
         }
 
         return null;
+    }
+
+    /**
+     * Renderiza HTML personalizado pegado por el usuario.
+     *
+     * Si el HTML ya viene como documento completo (DOCTYPE/<html>), se manda tal cual.
+     * Si es un fragmento (empieza con <table>, <div>, etc.), se envuelve con un shell
+     * mínimo compatible con clientes de email.
+     */
+    private function renderHtmlPersonalizado(string $html): string
+    {
+        $html = trim($html);
+        if ($html === '') {
+            return '';
+        }
+
+        $tieneShell = (bool) preg_match('/^\s*(<!DOCTYPE|<html)/i', $html);
+        if ($tieneShell) {
+            return $html;
+        }
+
+        $asunto = htmlspecialchars($this->asunto ?? 'Email', ENT_QUOTES, 'UTF-8');
+
+        return '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">'
+            .'<html xmlns="http://www.w3.org/1999/xhtml">'
+            .'<head>'
+            .'<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />'
+            .'<meta name="viewport" content="width=device-width, initial-scale=1.0" />'
+            .'<title>'.$asunto.'</title>'
+            .'</head>'
+            .'<body style="margin:0; padding:0;">'
+            .$html
+            .'</body>'
+            .'</html>';
     }
 
     /**
