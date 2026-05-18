@@ -97,10 +97,13 @@ class VerificarCondicionJob implements ShouldQueue
 
             // 3. Obtener prospectos a evaluar
             // Prioridad: parámetro del job > etapa > ejecución
-            $prospectoIds = $this->prospectoIds
-                ?? $etapaEjecucion->prospectos_ids
-                ?? $ejecucion->prospectos_ids
-                ?? [];
+            $prospectoIds = $this->prospectoIds;
+            if (empty($prospectoIds)) {
+                $prospectoIds = $etapaEjecucion->prospectos()->pluck('prospectos.id')->toArray();
+            }
+            if (empty($prospectoIds)) {
+                $prospectoIds = $ejecucion->prospectos()->pluck('prospectos.id')->toArray();
+            }
 
             if (empty($prospectoIds)) {
                 Log::warning('VerificarCondicionJob: No hay prospectos para evaluar', [
@@ -359,25 +362,25 @@ class VerificarCondicionJob implements ShouldQueue
         // Crear o actualizar etapa con prospectos filtrados
         // ✅ FIX: MERGE prospectos en lugar de sobrescribir (soporta múltiples inputs al mismo nodo)
         if ($etapaExistente) {
-            $existingProspectos = $etapaExistente->prospectos_ids ?? [];
-            $mergedProspectos = array_values(array_unique(array_merge($existingProspectos, $prospectoIds)));
+            $etapaExistente->prospectos()->syncWithoutDetaching($prospectoIds);
+            $mergedCount = $etapaExistente->prospectos()->count();
+            $mergedProspectos = $etapaExistente->prospectos()->pluck('prospectos.id')->toArray();
 
             Log::info("VerificarCondicionJob: Merging prospects for node {$siguienteNodeId}", [
-                'existing_count' => count($existingProspectos),
                 'new_count' => count($prospectoIds),
-                'merged_count' => count($mergedProspectos),
+                'merged_count' => $mergedCount,
             ]);
 
             $etapaExistente->update([
                 'prospectos_ids' => $mergedProspectos,
-                'prospectos_count' => count($mergedProspectos),
+                'prospectos_count' => $mergedCount,
                 'estado' => 'pending',
             ]);
             $nuevaEtapa = $etapaExistente;
             Log::info("VerificarCondicionJob: Etapa existente actualizada para rama {$rama}", [
                 'etapa_id' => $nuevaEtapa->id,
                 'node_id' => $siguienteNodeId,
-                'prospectos_count' => count($mergedProspectos),
+                'prospectos_count' => $mergedCount,
                 'fecha_programada_preservada' => $fechaProgramada,
             ]);
         } else {

@@ -211,11 +211,11 @@ class CatchUpProspectosJob implements ShouldQueue
                 &$dispatched
             ) {
                 $prospectoIds = $prospects->pluck('prospecto_id')->toArray();
-                
+
                 // Calculate fecha_programada based on earliest fecha_inicio in this batch + tiempo_espera
                 $earliestFechaInicio = $prospects->min('fecha_inicio');
                 $fechaProgramada = \Carbon\Carbon::parse($earliestFechaInicio)->addDays($tiempoEspera);
-                
+
                 $this->scheduleStageForProspects($ejecucion, $firstStageId, $prospectoIds, $fechaProgramada, $resolver);
                 $dispatched++;
             }, 'id');
@@ -292,12 +292,12 @@ class CatchUpProspectosJob implements ShouldQueue
                     &$dispatchedForStage
                 ) {
                     $prospectoIds = $prospects->pluck('prospecto_id')->toArray();
-                    
+
                     // Calculate fecha_programada based on when they completed the previous stage
                     // updated_at is set when ultima_etapa_node_id is updated after successful send
                     $latestCompletion = $prospects->max('updated_at');
                     $fechaProgramada = \Carbon\Carbon::parse($latestCompletion)->addDays($tiempoEspera);
-                    
+
                     $this->scheduleStageForProspects($ejecucion, $nextStageId, $prospectoIds, $fechaProgramada, $resolver);
                     $dispatchedForStage++;
                 }, 'id');
@@ -359,7 +359,7 @@ class CatchUpProspectosJob implements ShouldQueue
 
         // Find or create FlujoEjecucionEtapa for this stage with proper fecha_programada
         $result = $this->findOrCreateEtapaEjecucion($ejecucion, $stageNodeId, $prospectoIds, $fechaProgramada);
-        
+
         if (! $result || ! $result['etapa']) {
             Log::error('CatchUpProspectosJob: No se pudo crear etapa de ejecucion', [
                 'ejecucion_id' => $ejecucion->id,
@@ -371,7 +371,7 @@ class CatchUpProspectosJob implements ShouldQueue
 
         $etapaEjecucion = $result['etapa'];
         $forceDispatch = $result['force_dispatch'] ?? false;
-        
+
         $shouldDispatchNow = $forceDispatch || $fechaProgramada->isPast() || $fechaProgramada->isToday();
 
         Log::info('CatchUpProspectosJob: Etapa programada', [
@@ -444,9 +444,8 @@ class CatchUpProspectosJob implements ShouldQueue
                     'etapa_estado' => $existingEtapa->estado,
                 ]);
 
-                // Merge new prospectoIds into existing etapa's prospectos_ids
-                $existingIds = $existingEtapa->prospectos_ids ?? [];
-                $mergedIds = array_values(array_unique(array_merge($existingIds, $prospectoIds)));
+                $existingEtapa->prospectos()->syncWithoutDetaching($prospectoIds);
+                $mergedIds = $existingEtapa->prospectos()->pluck('prospectos.id')->toArray();
 
                 $existingEtapa->update([
                     'prospectos_ids' => $mergedIds,
@@ -459,10 +458,9 @@ class CatchUpProspectosJob implements ShouldQueue
 
             // For PENDING stages, merge prospectoIds (no force dispatch - scheduler will pick up)
             if ($existingEtapa->estado === 'pending') {
-                $existingIds = $existingEtapa->prospectos_ids ?? [];
-                $mergedIds = array_values(array_unique(array_merge($existingIds, $prospectoIds)));
+                $existingEtapa->prospectos()->syncWithoutDetaching($prospectoIds);
+                $mergedIds = $existingEtapa->prospectos()->pluck('prospectos.id')->toArray();
 
-                // Use the earlier fecha_programada if prospects have different schedules
                 $newFechaProgramada = $fechaProgramada->lt($existingEtapa->fecha_programada)
                     ? $fechaProgramada
                     : $existingEtapa->fecha_programada;
@@ -515,23 +513,24 @@ class CatchUpProspectosJob implements ShouldQueue
             );
 
             // If etapa already existed, merge prospectos
-            if (!$etapa->wasRecentlyCreated) {
-                $existingIds = $etapa->prospectos_ids ?? [];
-                $mergedIds = array_values(array_unique(array_merge($existingIds, $prospectoIds)));
+            if (! $etapa->wasRecentlyCreated) {
+                $etapa->prospectos()->syncWithoutDetaching($prospectoIds);
+                $mergedIds = $etapa->prospectos()->pluck('prospectos.id')->toArray();
                 $etapa->update([
                     'prospectos_ids' => $mergedIds,
                     'prospectos_count' => count($mergedIds),
                 ]);
-                
+
                 Log::debug('CatchUpProspectosJob: Etapa existente actualizada con nuevos prospectos', [
                     'etapa_id' => $etapa->id,
                     'node_id' => $stageNodeId,
                     'estado' => $etapa->estado,
                     'prospectos_count' => count($mergedIds),
                 ]);
-                
+
                 // Force dispatch if etapa is completed (perpetual flow catch-up)
                 $forceDispatch = $etapa->estado === 'completed';
+
                 return ['etapa' => $etapa, 'force_dispatch' => $forceDispatch];
             }
 

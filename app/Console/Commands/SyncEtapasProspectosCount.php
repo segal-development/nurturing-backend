@@ -53,7 +53,8 @@ class SyncEtapasProspectosCount extends Command
         $totalFixed = 0;
 
         foreach ($ejecuciones as $ejecucion) {
-            $prospectoIds = json_decode($ejecucion->prospectos_ids ?? '[]', true);
+            $ejecucionModel = \App\Models\FlujoEjecucion::find($ejecucion->id);
+            $prospectoIds = $ejecucionModel?->prospectos()->pluck('prospectos.id')->toArray() ?? [];
             $totalProspectos = count($prospectoIds);
 
             $this->info("Ejecución #{$ejecucion->id}: {$totalProspectos} prospectos totales");
@@ -65,7 +66,8 @@ class SyncEtapasProspectosCount extends Command
                 ->get();
 
             foreach ($etapasPendientes as $etapa) {
-                $etapaProspectos = json_decode($etapa->prospectos_ids ?? '[]', true);
+                $etapaModel = \App\Models\FlujoEjecucionEtapa::find($etapa->id);
+                $etapaProspectos = $etapaModel?->prospectos()->pluck('prospectos.id')->toArray() ?? [];
                 $etapaCount = count($etapaProspectos);
 
                 if ($etapaCount < $totalProspectos) {

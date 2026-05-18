@@ -182,7 +182,10 @@ class FlujoEjecucionEtapaObserver
         $tipoNodo = $siguienteNodo['type'] ?? (str_starts_with($siguienteNodoId, 'condition') ? 'condition' : 'stage');
 
         // Obtener prospectos de la etapa completada
-        $prospectoIds = $etapaCompletada->prospectos_ids ?? $ejecucion->prospectos_ids ?? [];
+        $prospectoIds = $etapaCompletada->prospectos()->pluck('prospectos.id')->toArray();
+        if (empty($prospectoIds)) {
+            $prospectoIds = $ejecucion->prospectos()->pluck('prospectos.id')->toArray();
+        }
 
         // Buscar si ya existe la etapa siguiente
         $siguienteEtapa = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
@@ -205,8 +208,8 @@ class FlujoEjecucionEtapaObserver
         // Crear o actualizar la etapa siguiente
         if ($siguienteEtapa) {
             // MERGE prospectos en lugar de sobrescribir
-            $existingProspectos = $siguienteEtapa->prospectos_ids ?? [];
-            $mergedProspectos = array_values(array_unique(array_merge($existingProspectos, $prospectoIds)));
+            $siguienteEtapa->prospectos()->syncWithoutDetaching($prospectoIds);
+            $mergedProspectos = $siguienteEtapa->prospectos()->pluck('prospectos.id')->toArray();
 
             FlujoEjecucionEtapa::withoutEvents(function () use ($siguienteEtapa, $mergedProspectos, $tipoNodo, $etapaCompletada) {
                 $updateData = [
@@ -225,7 +228,6 @@ class FlujoEjecucionEtapaObserver
                 }
 
                 $siguienteEtapa->update($updateData);
-                $siguienteEtapa->prospectos()->sync($mergedProspectos);
             });
 
             Log::info('FlujoEjecucionEtapaObserver: Etapa siguiente actualizada', [

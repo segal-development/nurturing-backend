@@ -76,7 +76,7 @@ class DashboardController extends Controller
             ->join('flujo_ejecuciones as fe', 'fe.id', '=', 'fee.flujo_ejecucion_id')
             ->where('fee.estado', 'pending')
             ->whereIn('fe.estado', ['in_progress', 'paused'])
-            ->selectRaw('SUM(jsonb_array_length(fe.prospectos_ids::jsonb)) as total')
+            ->selectRaw('SUM(fe.prospectos_count) as total')
             ->value('total') ?? 0;
 
         // Método 2: Envíos legacy con estado pendiente/programado

@@ -177,23 +177,20 @@ class BatchCompletedCallback
                     ],
                 ]
             );
-            
-            // If it already existed, we need to merge prospectos
-            if (!$condicionEtapa->wasRecentlyCreated) {
-                $existingProspectos = $condicionEtapa->prospectos_ids ?? [];
-                $mergedProspectos = array_values(array_unique(array_merge($existingProspectos, $prospectoIds)));
+
+            if (! $condicionEtapa->wasRecentlyCreated) {
+                $condicionEtapa->prospectos()->syncWithoutDetaching($prospectoIds);
+                $mergedCount = $condicionEtapa->prospectos()->count();
                 $condicionEtapa->update([
-                    'prospectos_ids' => $mergedProspectos,
-                    'prospectos_count' => count($mergedProspectos),
+                    'prospectos_ids' => $condicionEtapa->prospectos()->pluck('prospectos.id')->toArray(),
+                    'prospectos_count' => $mergedCount,
                 ]);
             }
         } else {
-            // ✅ FIX: MERGE prospectos en lugar de sobrescribir (soporta múltiples inputs al mismo nodo)
-            $existingProspectos = $condicionEtapa->prospectos_ids ?? [];
-            $mergedProspectos = array_values(array_unique(array_merge($existingProspectos, $prospectoIds)));
+            $condicionEtapa->prospectos()->syncWithoutDetaching($prospectoIds);
+            $mergedProspectos = $condicionEtapa->prospectos()->pluck('prospectos.id')->toArray();
 
             Log::info("BatchCompletedCallback: Merging prospects for condition node {$targetNodeId}", [
-                'existing_count' => count($existingProspectos),
                 'new_count' => count($prospectoIds),
                 'merged_count' => count($mergedProspectos),
             ]);
@@ -257,28 +254,24 @@ class BatchCompletedCallback
                     'estado' => 'pending',
                 ]
             );
-            
-            // If it already existed, we need to merge prospectos
-            if (!$siguienteEtapaEjecucion->wasRecentlyCreated) {
-                $existingProspectos = $siguienteEtapaEjecucion->prospectos_ids ?? [];
-                $mergedProspectos = array_values(array_unique(array_merge($existingProspectos, $prospectoIds)));
+
+            if (! $siguienteEtapaEjecucion->wasRecentlyCreated) {
+                $siguienteEtapaEjecucion->prospectos()->syncWithoutDetaching($prospectoIds);
+                $mergedCount = $siguienteEtapaEjecucion->prospectos()->count();
                 $siguienteEtapaEjecucion->update([
-                    'prospectos_ids' => $mergedProspectos,
-                    'prospectos_count' => count($mergedProspectos),
+                    'prospectos_ids' => $siguienteEtapaEjecucion->prospectos()->pluck('prospectos.id')->toArray(),
+                    'prospectos_count' => $mergedCount,
                 ]);
             }
         } else {
-            // ✅ FIX: MERGE prospectos en lugar de sobrescribir (soporta múltiples inputs al mismo nodo)
-            $existingProspectos = $siguienteEtapaEjecucion->prospectos_ids ?? [];
-            $mergedProspectos = array_values(array_unique(array_merge($existingProspectos, $prospectoIds)));
+            $siguienteEtapaEjecucion->prospectos()->syncWithoutDetaching($prospectoIds);
+            $mergedProspectos = $siguienteEtapaEjecucion->prospectos()->pluck('prospectos.id')->toArray();
 
             Log::info("BatchCompletedCallback: Merging prospects for stage node {$targetNodeId}", [
-                'existing_count' => count($existingProspectos),
                 'new_count' => count($prospectoIds),
                 'merged_count' => count($mergedProspectos),
             ]);
 
-            // Solo actualizar prospectos_ids y count, NO sobreescribir fecha_programada
             $siguienteEtapaEjecucion->update([
                 'prospectos_ids' => $mergedProspectos,
                 'prospectos_count' => count($mergedProspectos),

@@ -356,15 +356,17 @@ class EjecutarNodosProgramados implements ShouldQueue
             'fecha_ejecucion' => now(),
         ]);
 
-        // ✅ PRIORIDAD: usar prospectos de la etapa si están disponibles (filtrado por condición)
-        // Si no, usar los prospectos de la ejecución completa
-        $prospectoIds = $etapa->prospectos_ids ?? $ejecucion->prospectos_ids;
+        $prospectoIds = $etapa->prospectos()->pluck('prospectos.id')->toArray();
+        $usaProspectosEtapa = ! empty($prospectoIds);
+        if (empty($prospectoIds)) {
+            $prospectoIds = $ejecucion->prospectos()->pluck('prospectos.id')->toArray();
+        }
 
         Log::debug('EjecutarNodosProgramados: Despachando EnviarEtapaJob', [
             'ejecucion_id' => $ejecucion->id,
             'etapa_id' => $etapa->id,
             'stage_id' => $stage['id'] ?? 'unknown',
-            'usa_prospectos_etapa' => $etapa->prospectos_ids !== null,
+            'usa_prospectos_etapa' => $usaProspectosEtapa,
             'total_prospectos' => count($prospectoIds),
         ]);
 
@@ -482,9 +484,10 @@ class EjecutarNodosProgramados implements ShouldQueue
             $responseData = $etapa->fresh()->response_athenacampaign;
         }
 
-        // ✅ PRIORIDAD: usar prospectos de la etapa si están disponibles (filtrado previo)
-        // Si no, usar los prospectos de la ejecución completa
-        $prospectoIds = $etapa->prospectos_ids ?? $ejecucion->prospectos_ids;
+        $prospectoIds = $etapa->prospectos()->pluck('prospectos.id')->toArray();
+        if (empty($prospectoIds)) {
+            $prospectoIds = $ejecucion->prospectos()->pluck('prospectos.id')->toArray();
+        }
 
         Log::debug('EjecutarNodosProgramados: Preparando evaluación de condición', [
             'message_id' => $messageId,
@@ -910,8 +913,10 @@ class EjecutarNodosProgramados implements ShouldQueue
 
         $tipoNodo = $siguienteNodo['type'] ?? (str_starts_with($siguienteNodoId, 'condition') ? 'condition' : 'stage');
 
-        // Obtener prospectos_ids de la etapa actual
-        $prospectoIds = $etapa->prospectos_ids ?? $ejecucion->prospectos_ids ?? [];
+        $prospectoIds = $etapa->prospectos()->pluck('prospectos.id')->toArray();
+        if (empty($prospectoIds)) {
+            $prospectoIds = $ejecucion->prospectos()->pluck('prospectos.id')->toArray();
+        }
 
         // Buscar la etapa siguiente (puede ya existir desde la creación del flujo)
         $siguienteEtapa = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
@@ -945,11 +950,10 @@ class EjecutarNodosProgramados implements ShouldQueue
         // ✅ FIX: Si la etapa ya existe, MERGE prospectos en lugar de sobrescribir
         // Esto soporta múltiples inputs al mismo nodo (ej: múltiples condiciones YES → mismo retarget)
         if ($siguienteEtapa) {
-            $existingProspectos = $siguienteEtapa->prospectos_ids ?? [];
-            $mergedProspectos = array_values(array_unique(array_merge($existingProspectos, $prospectoIds)));
+            $siguienteEtapa->prospectos()->syncWithoutDetaching($prospectoIds);
+            $mergedProspectos = $siguienteEtapa->prospectos()->pluck('prospectos.id')->toArray();
 
             Log::debug("EjecutarNodosProgramados: Merging prospects for node {$siguienteNodoId}", [
-                'existing_count' => count($existingProspectos),
                 'new_count' => count($prospectoIds),
                 'merged_count' => count($mergedProspectos),
             ]);
@@ -1051,7 +1055,7 @@ class EjecutarNodosProgramados implements ShouldQueue
 
             // Marcar los prospectos de ESTA ejecución como completados
             $prospectosCompletados = \App\Models\ProspectoEnFlujo::where('flujo_id', $ejecucion->flujo_id)
-                ->whereIn('prospecto_id', $ejecucion->prospectos_ids ?? [])
+                ->whereIn('prospecto_id', $ejecucion->prospectos()->pluck('prospectos.id'))
                 ->where('completado', false)
                 ->update([
                     'completado' => true,

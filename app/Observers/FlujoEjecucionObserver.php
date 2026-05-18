@@ -21,7 +21,7 @@ class FlujoEjecucionObserver
         try {
             // Calculate estimated cost based on flow structure and number of prospects
             $flujo = $flujoEjecucion->flujo;
-            $cantidadProspectos = count($flujoEjecucion->prospectos_ids ?? []);
+            $cantidadProspectos = $flujoEjecucion->prospectos_count;
 
             if ($flujo && $cantidadProspectos > 0) {
                 $costoEstimado = $this->costoService->calcularCostoEstimado($flujo, $cantidadProspectos);

@@ -110,15 +110,9 @@ class RecoverOrphanProspects extends Command
      */
     private function getProspectsAlreadyInExecution(): \Illuminate\Support\Collection
     {
-        // PostgreSQL: cast json to jsonb first, then use jsonb_array_elements_text
-        $result = DB::select("
-            SELECT DISTINCT jsonb_array_elements_text(prospectos_ids::jsonb)::bigint as prospecto_id
-            FROM flujo_ejecuciones
-            WHERE prospectos_ids IS NOT NULL
-              AND prospectos_ids::text != '[]'
-        ");
-
-        return collect($result)->pluck('prospecto_id');
+        return DB::table('ejecucion_prospecto')
+            ->distinct()
+            ->pluck('prospecto_id');
     }
 
     /**
@@ -174,9 +168,9 @@ class RecoverOrphanProspects extends Command
                 ->where('estado', '!=', 'failed')
                 ->get()
                 ->filter(function ($ejecucion) use ($chunk) {
-                    $ejecucionProspectos = $ejecucion->prospectos_ids ?? [];
-
-                    return count(array_intersect($ejecucionProspectos, $chunk)) > 0;
+                    return $ejecucion->prospectos()
+                        ->whereIn('prospectos.id', $chunk)
+                        ->exists();
                 })
                 ->first();
 

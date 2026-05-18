@@ -772,7 +772,7 @@ class TestingController extends Controller
                 'message_id' => $etapa->message_id,
                 'fecha_programada' => $etapa->fecha_programada,
                 'fecha_ejecucion' => $etapa->fecha_ejecucion,
-                'prospectos_ids_count' => is_array($etapa->prospectos_ids) ? count($etapa->prospectos_ids) : 0,
+                'prospectos_ids_count' => $etapa->prospectos_count,
                 'response_athenacampaign' => $etapa->response_athenacampaign,
             ],
             'batches_recientes' => $batches,
@@ -811,10 +811,9 @@ class TestingController extends Controller
         }
 
         // Obtener prospectos del flujo
-        $prospectoIds = $ejecucion->prospectos_ids;
+        $prospectoIds = $ejecucion->prospectos()->pluck('prospectos.id')->toArray();
 
         if (empty($prospectoIds)) {
-            // Si no hay prospectos_ids en la ejecución, obtenerlos del flujo
             $prospectoIds = \App\Models\ProspectoEnFlujo::where('flujo_id', $ejecucion->flujo_id)
                 ->pluck('prospecto_id')
                 ->toArray();

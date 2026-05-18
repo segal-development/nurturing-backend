@@ -431,10 +431,8 @@ class FlujoEjecucionController extends Controller
             ->orderBy('created_at', 'desc')
             ->get();
 
-        // Transform to exclude prospectos_ids from ejecucion (can be 300k+ items)
         $data = $ejecuciones->map(function ($ejecucion) {
             $arr = $ejecucion->toArray();
-            $arr['prospectos_count'] = count($ejecucion->prospectos_ids ?? []);
             unset($arr['prospectos_ids']);
 
             return $arr;
@@ -560,8 +558,7 @@ class FlujoEjecucionController extends Controller
         $etapasFallidas = $ejecucion->etapas->where('estado', 'failed')->count();
         $etapasEnEjecucion = $ejecucion->etapas->where('estado', 'executing')->count();
 
-        // Calcular progreso de envíos (más detallado)
-        $totalProspectos = count($ejecucion->prospectos_ids ?? []);
+        $totalProspectos = $ejecucion->prospectos_count;
         $envioStats = \DB::table('envios')
             ->whereIn('flujo_ejecucion_etapa_id', $ejecucion->etapas->pluck('id'))
             ->selectRaw("
@@ -679,7 +676,7 @@ class FlujoEjecucionController extends Controller
                 'fecha_inicio_real' => $ejecucion->fecha_inicio_real,
                 'fecha_fin' => $ejecucion->fecha_fin,
                 'error_message' => $ejecucion->error_message,
-                'prospectos_count' => count($ejecucion->prospectos_ids ?? []),
+                'prospectos_count' => $ejecucion->prospectos_count,
                 'progreso' => [
                     'total_etapas' => $totalEtapas,
                     'completadas' => $etapasCompletadas,
@@ -782,8 +779,7 @@ class FlujoEjecucionController extends Controller
                 'fallidas' => $etapasFallidas,
             ];
 
-            // Calcular progreso de envíos basado en la etapa en ejecución
-            $totalProspectos = count($ejecucion->prospectos_ids ?? []);
+            $totalProspectos = $ejecucion->prospectos_count;
 
             // Buscar la etapa actualmente en ejecución
             $etapaEnEjecucion = $ejecucion->etapas->firstWhere('estado', 'executing');
@@ -884,7 +880,7 @@ class FlujoEjecucionController extends Controller
                 'fecha_inicio_programada' => $ejecucion->fecha_inicio_programada,
                 'fecha_inicio_real' => $ejecucion->fecha_inicio_real,
                 'fecha_fin' => $ejecucion->fecha_fin,
-                'prospectos_count' => count($ejecucion->prospectos_ids ?? []),
+                'prospectos_count' => $ejecucion->prospectos_count,
                 'error_message' => $ejecucion->error_message,
                 'progreso' => $progreso,
                 'progreso_envios' => $progresoEnvios,
@@ -1157,7 +1153,7 @@ class FlujoEjecucionController extends Controller
                         'fecha_inicio_programada' => $ejecucion->fecha_inicio_programada,
                         'fecha_inicio_real' => $ejecucion->fecha_inicio_real,
                         'fecha_fin' => $ejecucion->fecha_fin,
-                        'prospectos_count' => count($ejecucion->prospectos_ids ?? []),
+                        'prospectos_count' => $ejecucion->prospectos_count,
                         'progreso' => $progreso,
                         'costo_estimado' => $ejecucion->costo_estimado,
                         'costo_real' => $ejecucion->costo_real,
@@ -1220,10 +1216,9 @@ class FlujoEjecucionController extends Controller
             $search = $request->validated('search');
 
             // Get prospect IDs from this ejecucion
-            $prospectosIds = $ejecucion->prospectos_ids;
+            $prospectosIds = $ejecucion->prospectos()->pluck('prospectos.id')->toArray();
 
-            // Handle empty or null prospectos_ids
-            if (empty($prospectosIds) || ! is_array($prospectosIds)) {
+            if (empty($prospectosIds)) {
                 return response()->json([
                     'error' => false,
                     'data' => [],
@@ -1595,6 +1590,7 @@ class FlujoEjecucionController extends Controller
 
     /**
      * Obtiene la fecha del último sync según la configuración del flujo.
+     *
      * @deprecated No se usa más, mantenido por compatibilidad
      */
     private function obtenerFechaUltimoSync(Flujo $flujo): ?\Carbon\Carbon

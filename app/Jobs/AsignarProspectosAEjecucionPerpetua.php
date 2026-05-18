@@ -83,7 +83,7 @@ class AsignarProspectosAEjecucionPerpetua implements ShouldQueue
 
         // Filter out prospects already in the EXECUTION (not the flow)
         // Prospectos pueden estar en prospecto_en_flujo pero no en la ejecución activa
-        $existentesEnEjecucion = $ejecucionPerpetua->prospectos_ids ?? [];
+        $existentesEnEjecucion = $ejecucionPerpetua->prospectos()->pluck('prospectos.id')->toArray();
         $nuevosProspectoIds = array_values(array_diff($this->prospectoIds, $existentesEnEjecucion));
 
         if (empty($nuevosProspectoIds)) {
@@ -102,9 +102,9 @@ class AsignarProspectosAEjecucionPerpetua implements ShouldQueue
             ->whereIn('prospecto_id', $nuevosProspectoIds)
             ->pluck('prospecto_id')
             ->toArray();
-        
+
         $necesitanInsertar = array_values(array_diff($nuevosProspectoIds, $yaEnFlujo));
-        
+
         // Assign only prospects NOT already in prospecto_en_flujo
         $asignados = 0;
         if (! empty($necesitanInsertar)) {
@@ -371,8 +371,8 @@ class AsignarProspectosAEjecucionPerpetua implements ShouldQueue
      */
     private function actualizarEjecucion(FlujoEjecucion $ejecucion, array $nuevosProspectoIds): void
     {
-        $existingIds = $ejecucion->prospectos_ids ?? [];
-        $mergedIds = array_values(array_unique(array_merge($existingIds, $nuevosProspectoIds)));
+        $ejecucion->prospectos()->syncWithoutDetaching($nuevosProspectoIds);
+        $mergedIds = $ejecucion->prospectos()->pluck('prospectos.id')->toArray();
 
         $ejecucion->update([
             'prospectos_ids' => $mergedIds,
@@ -406,8 +406,8 @@ class AsignarProspectosAEjecucionPerpetua implements ShouldQueue
         $etapasActualizadas = 0;
 
         foreach ($etapasPendientes as $etapa) {
-            $existingIds = $etapa->prospectos_ids ?? [];
-            $mergedIds = array_values(array_unique(array_merge($existingIds, $nuevosProspectoIds)));
+            $etapa->prospectos()->syncWithoutDetaching($nuevosProspectoIds);
+            $mergedIds = $etapa->prospectos()->pluck('prospectos.id')->toArray();
 
             $etapa->update([
                 'prospectos_ids' => $mergedIds,
