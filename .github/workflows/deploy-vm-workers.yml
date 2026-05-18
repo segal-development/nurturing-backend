@@ -41,7 +41,7 @@ on:
 env:
   VM_NAME: nurturing-worker
   VM_ZONE: us-central1-a
-  VM_USER: mtoro6
+  VM_USER: deploy
   DEPLOY_PATH: /home/mtoro6/nurturing-backend
 
 jobs:
