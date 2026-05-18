@@ -962,10 +962,14 @@ class EjecutarNodosProgramados implements ShouldQueue
         }
 
         // Preparar datos para la etapa
+        // En flujos perpetuos la etapa pudo haber sido ejecutada en un ciclo anterior
+        // (ejecutado=true). Si solo reseteamos estado, queda inconsistente y el
+        // scheduler la salta. Reseteamos ambos campos para que vuelva a ser elegible.
         $etapaData = [
             'prospectos_ids' => $prospectoIds,
             'prospectos_count' => count($prospectoIds),
             'estado' => 'pending',
+            'ejecutado' => false,
         ];
 
         // Si es condición, agregar source info
