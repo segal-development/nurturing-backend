@@ -56,9 +56,15 @@ class CatchUpProspectosJob implements ShouldQueue
     {
         Log::info('CatchUpProspectosJob: Iniciando procesamiento de prospectos rezagados');
 
-        // Get all perpetual executions that are in progress
-        $ejecuciones = FlujoEjecucion::where('es_perpetuo', true)
-            ->where('estado', 'in_progress')
+        // Get all executions of perpetual flujos that are in progress OR waiting.
+        // We filter by flujo.es_perpetuo (source of truth) rather than the
+        // ejecucion's own flag, which can get out of sync when an execution
+        // was created before the flujo was marked perpetuo.
+        // 'waiting' state is normal for perpetual flujos that finished one
+        // cycle and are awaiting new prospects.
+        $ejecuciones = FlujoEjecucion::query()
+            ->whereIn('estado', ['in_progress', 'waiting'])
+            ->whereHas('flujo', fn ($q) => $q->where('es_perpetuo', true)->where('activo', true))
             ->get();
 
         if ($ejecuciones->isEmpty()) {
