@@ -8,28 +8,30 @@ use Illuminate\Support\Facades\DB;
 class MigrateProspectosIdsToPivot extends Command
 {
     protected $signature = 'nurturing:migrate-prospectos-ids-to-pivot
-                            {--chunk=50 : Number of source rows to process per batch}
+                            {--insert-chunk=2000 : Prospect IDs per INSERT statement}
                             {--dry-run : Show counts without inserting}';
 
     protected $description = 'Backfill ejecucion_prospecto and etapa_prospecto pivot tables from prospectos_ids JSON columns';
 
     public function handle(): int
     {
-        $chunk = (int) $this->option('chunk');
+        $insertChunk = (int) $this->option('insert-chunk');
         $dryRun = (bool) $this->option('dry-run');
 
-        if ($chunk < 1) {
-            $this->error('Chunk size must be >= 1');
+        if ($insertChunk < 1) {
+            $this->error('insert-chunk must be >= 1');
 
             return self::FAILURE;
         }
+
+        DB::statement('SET statement_timeout = 0');
 
         $this->info('=== Migrating flujo_ejecuciones.prospectos_ids -> ejecucion_prospecto ===');
         $this->migrateTable(
             sourceTable: 'flujo_ejecuciones',
             pivotTable: 'ejecucion_prospecto',
             foreignKey: 'flujo_ejecucion_id',
-            chunk: $chunk,
+            insertChunk: $insertChunk,
             dryRun: $dryRun,
         );
 
@@ -39,7 +41,7 @@ class MigrateProspectosIdsToPivot extends Command
             sourceTable: 'flujo_ejecucion_etapas',
             pivotTable: 'etapa_prospecto',
             foreignKey: 'flujo_ejecucion_etapa_id',
-            chunk: $chunk,
+            insertChunk: $insertChunk,
             dryRun: $dryRun,
         );
 
@@ -53,7 +55,7 @@ class MigrateProspectosIdsToPivot extends Command
         string $sourceTable,
         string $pivotTable,
         string $foreignKey,
-        int $chunk,
+        int $insertChunk,
         bool $dryRun,
     ): void {
         $totalRows = DB::table($sourceTable)
@@ -67,54 +69,63 @@ class MigrateProspectosIdsToPivot extends Command
             return;
         }
 
-        $this->line("Rows to process: {$totalRows}");
+        $this->line("Source rows to process: {$totalRows}");
 
         $bar = $this->output->createProgressBar($totalRows);
         $bar->start();
 
-        $totalInserted = 0;
+        $totalProspectsInserted = 0;
         $lastId = 0;
 
         do {
-            $rows = DB::table($sourceTable)
-                ->select('id')
+            $row = DB::table($sourceTable)
+                ->select('id', 'prospectos_ids')
                 ->whereNotNull('prospectos_ids')
                 ->whereRaw("prospectos_ids::text != '[]'")
                 ->where('id', '>', $lastId)
                 ->orderBy('id')
-                ->limit($chunk)
-                ->get();
+                ->first();
 
-            if ($rows->isEmpty()) {
+            if (! $row) {
                 break;
             }
 
-            $ids = $rows->pluck('id')->all();
-            $lastId = end($ids);
+            $lastId = $row->id;
+
+            $prospectoIds = json_decode($row->prospectos_ids, true) ?? [];
+            $prospectoIds = array_values(array_unique(array_filter($prospectoIds, 'is_numeric')));
+
+            if (empty($prospectoIds)) {
+                $bar->advance();
+
+                continue;
+            }
 
             if (! $dryRun) {
-                $inserted = DB::statement(
-                    "INSERT INTO {$pivotTable} ({$foreignKey}, prospecto_id)
-                     SELECT s.id, p.prospecto_id::bigint
-                     FROM {$sourceTable} s,
-                          LATERAL jsonb_array_elements_text(s.prospectos_ids::jsonb) AS p(prospecto_id)
-                     WHERE s.id = ANY(?)
-                       AND s.prospectos_ids IS NOT NULL
-                       AND s.prospectos_ids::text != '[]'
-                     ON CONFLICT DO NOTHING",
-                    ['{'.implode(',', $ids).'}'],
-                );
+                foreach (array_chunk($prospectoIds, $insertChunk) as $chunk) {
+                    $placeholders = implode(',', array_fill(0, count($chunk), '(?, ?)'));
+                    $bindings = [];
+                    foreach ($chunk as $prospectoId) {
+                        $bindings[] = $row->id;
+                        $bindings[] = (int) $prospectoId;
+                    }
 
-                if ($inserted) {
-                    $totalInserted += count($ids);
+                    DB::statement(
+                        "INSERT INTO {$pivotTable} ({$foreignKey}, prospecto_id) VALUES {$placeholders} ON CONFLICT DO NOTHING",
+                        $bindings,
+                    );
+
+                    $totalProspectsInserted += count($chunk);
                 }
             }
 
-            $bar->advance(count($ids));
-        } while ($rows->count() === $chunk);
+            $bar->advance();
+        } while (true);
 
         $bar->finish();
         $this->newLine();
-        $this->line($dryRun ? 'Dry-run: no inserts performed.' : "Processed source rows: {$totalInserted}");
+        $this->line($dryRun
+            ? 'Dry-run: no inserts performed.'
+            : "Total prospect rows attempted: {$totalProspectsInserted} (ON CONFLICT skipped if already present)");
     }
 }
