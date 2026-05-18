@@ -98,7 +98,29 @@ class BatchCompletedCallback
 
     private function finalizarFlujo(FlujoEjecucion $ejecucion): void
     {
-        Log::info('BatchCompletedCallback: Finalizando flujo');
+        // En flujos perpetuos, "terminar" un ciclo NO completa la ejecución:
+        // queda en estado 'waiting' esperando nuevos prospectos que CatchUp
+        // detecta y procesa. Marcar como 'completed' deja la ejecución muerta
+        // y a los nuevos prospectos sin email.
+        $esPerpetuo = $ejecucion->flujo?->es_perpetuo ?? false;
+
+        if ($esPerpetuo) {
+            Log::info('BatchCompletedCallback: Ciclo perpetuo terminado, ejecucion en waiting', [
+                'ejecucion_id' => $ejecucion->id,
+                'flujo_id' => $ejecucion->flujo_id,
+            ]);
+            $ejecucion->update([
+                'estado' => 'waiting',
+                'proximo_nodo' => null,
+                'fecha_proximo_nodo' => null,
+            ]);
+
+            return;
+        }
+
+        Log::info('BatchCompletedCallback: Finalizando flujo no perpetuo', [
+            'ejecucion_id' => $ejecucion->id,
+        ]);
         $ejecucion->update([
             'estado' => 'completed',
             'fecha_fin' => now(),
