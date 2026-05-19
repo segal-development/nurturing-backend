@@ -62,28 +62,36 @@ class PauseEtapasOnCircuitBreaker
     }
 
     /**
-     * Busca etapas en ejecución que usan el canal afectado.
+     * Busca etapas afectadas por el canal del breaker.
+     *
+     * Incluye etapas en estados:
+     * - 'executing': actualmente procesando (las pausamos para detener mid-batch)
+     * - 'pending': próximas a ejecutarse y van a fallar también
+     *
+     * Acepta ejecuciones en 'in_progress' Y 'waiting' (flujos perpetuos).
+     *
+     * Antes solo buscaba 'executing' + 'in_progress', que es una ventana muy chica;
+     * en la práctica el breaker se abre cuando los workers están rate-limited y las
+     * etapas están en 'pending', no 'executing' → nunca pausaba nada.
      */
     private function buscarEtapasAfectadas(string $channel)
     {
-        // Buscar etapas en 'executing' estado
-        return FlujoEjecucionEtapa::where('estado', 'executing')
+        return FlujoEjecucionEtapa::whereIn('estado', ['executing', 'pending'])
             ->whereHas('ejecucion', function ($query) {
-                $query->where('estado', 'in_progress');
+                $query->whereIn('estado', ['in_progress', 'waiting']);
             })
             ->get()
             ->filter(function ($etapa) use ($channel) {
-                // Verificar si esta etapa específica usa el canal afectado
                 return $this->etapaUsaCanal($etapa, $channel);
             });
     }
 
     /**
      * Verifica si una etapa usa un canal específico (email/sms).
+     * `tipo_mensaje='ambos'` (email + SMS) matchea cualquier canal.
      */
     private function etapaUsaCanal(FlujoEjecucionEtapa $etapa, string $channel): bool
     {
-        // Obtener el flujo y sus stages
         $ejecucion = $etapa->ejecucion;
         if (! $ejecucion || ! $ejecucion->flujo) {
             return false;
@@ -92,7 +100,6 @@ class PauseEtapasOnCircuitBreaker
         $configStructure = $ejecucion->flujo->config_structure;
         $stages = $configStructure['stages'] ?? [];
 
-        // Buscar este stage por node_id
         $stageData = collect($stages)->firstWhere('id', $etapa->node_id);
 
         if (! $stageData) {
@@ -101,7 +108,8 @@ class PauseEtapasOnCircuitBreaker
 
         $tipoMensaje = $stageData['tipo_mensaje'] ?? 'email';
 
-        return $tipoMensaje === $channel;
+        // 'ambos' = email + SMS, matchea contra cualquier breaker
+        return $tipoMensaje === $channel || $tipoMensaje === 'ambos';
     }
 
     /**

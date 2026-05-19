@@ -2,6 +2,7 @@
 
 namespace App\Jobs\Middleware;
 
+use App\Events\CircuitBreakerClosed;
 use App\Events\CircuitBreakerOpened;
 use Closure;
 use Illuminate\Support\Facades\Cache;
@@ -496,6 +497,8 @@ class RateLimitedMiddleware
 
     /**
      * Cierra el circuit breaker desde OPEN o HALF-OPEN.
+     * Dispatcha CircuitBreakerClosed para que listeners (e.g., ResumeEtapasOnCircuitClose)
+     * reanuden las etapas pausadas previamente por PauseEtapasOnCircuitBreaker.
      */
     private function closeCircuit(): void
     {
@@ -514,6 +517,10 @@ class RateLimitedMiddleware
                     'from_state' => $current,
                 ]);
             }
+
+            // Dispatchar evento para que listeners reanuden etapas pausadas
+            $closedReason = $current === 'half-open' ? 'half_open_probes_succeeded' : 'success_threshold_reached';
+            CircuitBreakerClosed::dispatch($this->channel, $closedReason);
         }
     }
 }
