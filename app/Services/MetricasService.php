@@ -792,10 +792,34 @@ class MetricasService
 
         $promedioDiario = $dias > 0 ? round($total / $dias, 1) : 0;
 
+        // Breakdown por flujo — solo cuando no hay filtro, para dar contexto al total.
+        $porFlujo = [];
+        if ($flujoId === null) {
+            $porFlujo = DB::table('prospecto_en_flujo as pf')
+                ->join('flujos as f', 'f.id', '=', 'pf.flujo_id')
+                ->where('pf.fecha_inicio', '>=', $desde)
+                ->where('pf.cancelado', false)
+                ->select(
+                    'f.id as flujo_id',
+                    'f.nombre as flujo_nombre',
+                    DB::raw('COUNT(*) as total')
+                )
+                ->groupBy('f.id', 'f.nombre')
+                ->orderByDesc('total')
+                ->get()
+                ->map(fn ($r) => [
+                    'flujo_id' => (int) $r->flujo_id,
+                    'flujo_nombre' => $r->flujo_nombre,
+                    'total' => (int) $r->total,
+                ])
+                ->toArray();
+        }
+
         return [
             'total' => $total,
             'promedio_diario' => $promedioDiario,
             'por_dia' => $porDiaCompleto,
+            'por_flujo' => $porFlujo,
         ];
     }
 
@@ -896,7 +920,7 @@ class MetricasService
         $desde = $this->fechaDesdePeriodo($dias);
 
         return DB::table('flujos as f')
-            ->leftJoin('envios as e', function ($join) use ($desde) {
+            ->join('envios as e', function ($join) use ($desde) {
                 $join->on('e.flujo_id', '=', 'f.id')
                     ->where('e.created_at', '>=', $desde);
             })
@@ -916,6 +940,7 @@ class MetricasService
                     ELSE 0 END as ctr')
             )
             ->groupBy('f.id', 'f.nombre')
+            ->havingRaw('COUNT(DISTINCT e.id) > 0')
             ->orderByDesc('total_envios')
             ->limit($limit)
             ->get()
