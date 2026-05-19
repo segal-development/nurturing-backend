@@ -73,12 +73,24 @@ return [
         // Only counts REAL failures (provider errors), not validation errors
         'failure_threshold' => (int) env('ENVIO_CIRCUIT_FAILURE_THRESHOLD', 50),
 
-        // Seconds to keep circuit open before trying again
+        // Seconds to keep circuit OPEN before transitioning to HALF-OPEN
         'recovery_time' => (int) env('ENVIO_CIRCUIT_RECOVERY_TIME', 60),
 
         // Time window to count failures (in seconds)
         // Increased to 2 minutes for better averaging
         'failure_window' => (int) env('ENVIO_CIRCUIT_FAILURE_WINDOW', 120),
+
+        // Half-open state config (Nygard, "Release It!")
+        // After recovery_time, circuit transitions from OPEN to HALF-OPEN.
+        // In HALF-OPEN, only `half_open_max_probes` job(s) are allowed through
+        // as probes to test if the provider has recovered.
+        //   - If probes succeed `half_open_success_threshold` times consecutively → CLOSED
+        //   - If a probe fails → back to OPEN (another recovery cycle)
+        // This prevents the "thundering herd" effect when all workers slam the
+        // provider simultaneously after a recovery_time timeout.
+        'half_open_max_probes' => (int) env('ENVIO_CIRCUIT_HALF_OPEN_MAX_PROBES', 1),
+        'half_open_success_threshold' => (int) env('ENVIO_CIRCUIT_HALF_OPEN_SUCCESS_THRESHOLD', 3),
+        'half_open_window' => (int) env('ENVIO_CIRCUIT_HALF_OPEN_WINDOW', 300),
     ],
 
     /*

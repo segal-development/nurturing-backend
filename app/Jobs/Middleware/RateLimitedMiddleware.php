@@ -48,13 +48,24 @@ class RateLimitedMiddleware
     }
 
     /**
-     * Procesa el job con rate limiting.
+     * Procesa el job con rate limiting + circuit breaker (CLOSED / OPEN / HALF-OPEN).
      */
     public function handle(object $job, Closure $next): void
     {
-        // Check circuit breaker first
-        if ($this->isCircuitOpen()) {
+        $state = $this->getCircuitState();
+
+        if ($state === 'open') {
             $this->handleCircuitOpen($job);
+
+            return;
+        }
+
+        // HALF-OPEN: solo dejamos pasar un número limitado de "probes" para
+        // testear si el proveedor se recuperó. Si la slot está tomada por otro
+        // probe en vuelo, este job se reposta con un delay corto.
+        $isProbe = ($state === 'half-open');
+        if ($isProbe && ! $this->reserveProbeSlot()) {
+            $job->release(5);
 
             return;
         }
@@ -66,16 +77,28 @@ class RateLimitedMiddleware
         $executed = RateLimiter::attempt(
             $rateLimitKey,
             $perMinute,
-            function () use ($job, $next) {
+            function () use ($job, $next, $isProbe) {
                 // Process the job
                 try {
                     $next($job);
-                    $this->recordSuccess();
+                    if ($isProbe) {
+                        $this->releaseProbeSlot();
+                        $this->recordProbeSuccess();
+                    } else {
+                        $this->recordSuccess();
+                    }
                 } catch (\Throwable $e) {
+                    if ($isProbe) {
+                        $this->releaseProbeSlot();
+                    }
                     // Only count as circuit breaker failure if it's a REAL provider error
                     // Not validation errors like "prospecto sin email"
                     if ($this->isProviderError($e)) {
-                        $this->recordFailure();
+                        if ($isProbe) {
+                            $this->recordProbeFailure();
+                        } else {
+                            $this->recordFailure();
+                        }
                     }
                     throw $e;
                 }
@@ -84,6 +107,10 @@ class RateLimitedMiddleware
         );
 
         if (! $executed) {
+            // Rate limited during half-open: liberamos la probe slot
+            if ($isProbe) {
+                $this->releaseProbeSlot();
+            }
             $this->handleRateLimited($job);
         }
     }
@@ -204,13 +231,157 @@ class RateLimitedMiddleware
     }
 
     /**
-     * Verifica si el circuit breaker está abierto.
+     * Resuelve el estado actual del circuit breaker.
+     * Estados: 'closed' | 'open' | 'half-open'
+     *
+     * Transición automática OPEN → HALF-OPEN cuando `recovery_time` venció.
+     * El resto de transiciones (CLOSED → OPEN, HALF-OPEN → CLOSED, HALF-OPEN → OPEN)
+     * son disparadas por eventos en recordSuccess/recordFailure y los métodos de probe.
      */
-    private function isCircuitOpen(): bool
+    private function getCircuitState(): string
     {
         $circuitKey = "envio-circuit:{$this->channel}";
+        $state = Cache::get($circuitKey);
 
-        return Cache::get($circuitKey) === 'open';
+        if (! $state) {
+            return 'closed';
+        }
+
+        if ($state === 'half-open') {
+            return 'half-open';
+        }
+
+        // state === 'open' — verificar si ya pasó el recovery_time
+        $openedAtRaw = Cache::get("circuit_breaker:{$this->channel}:opened_at");
+        if ($openedAtRaw) {
+            try {
+                $openedAt = \Carbon\Carbon::parse($openedAtRaw);
+                $recoveryTime = (int) config('envios.circuit_breaker.recovery_time', 60);
+                if ($openedAt->copy()->addSeconds($recoveryTime)->isPast()) {
+                    $this->transitionToHalfOpen();
+
+                    return 'half-open';
+                }
+            } catch (\Throwable $e) {
+                // Si el timestamp es inválido, asumimos open y dejamos que el TTL natural lo expire
+            }
+        }
+
+        return 'open';
+    }
+
+    /**
+     * Transición OPEN → HALF-OPEN. Permite un número limitado de probes
+     * para testear si el proveedor se recuperó.
+     */
+    private function transitionToHalfOpen(): void
+    {
+        $circuitKey = "envio-circuit:{$this->channel}";
+        $halfOpenWindow = (int) config('envios.circuit_breaker.half_open_window', 300);
+
+        Cache::put($circuitKey, 'half-open', $halfOpenWindow);
+        // Reset probe counters (defensive: por si quedaron de un ciclo previo)
+        Cache::forget("circuit_breaker:{$this->channel}:probes-in-flight");
+        Cache::put("circuit_breaker:{$this->channel}:probe-successes", 0, $halfOpenWindow);
+
+        if (config('envios.monitoring.log_circuit_breaker', true)) {
+            Log::info('RateLimitedMiddleware: Circuit breaker HALF-OPEN (testing recovery)', [
+                'channel' => $this->channel,
+                'half_open_window' => $halfOpenWindow,
+                'max_probes' => (int) config('envios.circuit_breaker.half_open_max_probes', 1),
+                'success_threshold' => (int) config('envios.circuit_breaker.half_open_success_threshold', 3),
+            ]);
+        }
+    }
+
+    /**
+     * Intenta reservar una slot de probe en estado HALF-OPEN.
+     * Retorna true si lo logra, false si el cupo ya está tomado.
+     *
+     * NOTA: usamos increment + check para atomicidad multi-worker. Si dos workers
+     * compiten, ambos incrementan; el que excede el max libera y se reposta.
+     */
+    private function reserveProbeSlot(): bool
+    {
+        $probesKey = "circuit_breaker:{$this->channel}:probes-in-flight";
+        $maxProbes = (int) config('envios.circuit_breaker.half_open_max_probes', 1);
+        $halfOpenWindow = (int) config('envios.circuit_breaker.half_open_window', 300);
+
+        // Asegurar que la key existe con TTL para evitar leaks
+        Cache::add($probesKey, 0, $halfOpenWindow);
+        $newCount = Cache::increment($probesKey);
+
+        if ($newCount > $maxProbes) {
+            // Demasiados probes en vuelo — revertir y rechazar
+            Cache::decrement($probesKey);
+
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Libera una slot de probe.
+     */
+    private function releaseProbeSlot(): void
+    {
+        $probesKey = "circuit_breaker:{$this->channel}:probes-in-flight";
+        $current = (int) Cache::get($probesKey, 0);
+        if ($current > 0) {
+            Cache::decrement($probesKey);
+        }
+    }
+
+    /**
+     * Registra un probe exitoso. Si se acumulan suficientes consecutivos,
+     * el circuito vuelve a CLOSED.
+     */
+    private function recordProbeSuccess(): void
+    {
+        $successKey = "circuit_breaker:{$this->channel}:probe-successes";
+        $halfOpenWindow = (int) config('envios.circuit_breaker.half_open_window', 300);
+        $threshold = (int) config('envios.circuit_breaker.half_open_success_threshold', 3);
+
+        Cache::add($successKey, 0, $halfOpenWindow);
+        $successes = Cache::increment($successKey);
+
+        if (config('envios.monitoring.log_circuit_breaker', true)) {
+            Log::info('RateLimitedMiddleware: Probe SUCCESS in HALF-OPEN', [
+                'channel' => $this->channel,
+                'successes' => $successes,
+                'threshold' => $threshold,
+            ]);
+        }
+
+        if ($successes >= $threshold) {
+            // Suficientes éxitos consecutivos — cerrar el breaker
+            $this->closeCircuit();
+            // Cleanup probe state
+            Cache::forget($successKey);
+            Cache::forget("circuit_breaker:{$this->channel}:probes-in-flight");
+            // Reset el contador de fallas también
+            Cache::forget("envio-failures:{$this->channel}");
+        }
+    }
+
+    /**
+     * Registra un probe fallido. Cualquier fallo en HALF-OPEN reabre el breaker.
+     */
+    private function recordProbeFailure(): void
+    {
+        if (config('envios.monitoring.log_circuit_breaker', true)) {
+            Log::warning('RateLimitedMiddleware: Probe FAILED in HALF-OPEN, reopening', [
+                'channel' => $this->channel,
+            ]);
+        }
+
+        // Limpiar probe state antes de reabrir
+        Cache::forget("circuit_breaker:{$this->channel}:probe-successes");
+        Cache::forget("circuit_breaker:{$this->channel}:probes-in-flight");
+
+        // Reabrir el breaker (otro ciclo de recovery)
+        $this->openCircuit();
     }
 
     /**
@@ -276,19 +447,33 @@ class RateLimitedMiddleware
 
     /**
      * Abre el circuit breaker.
+     *
+     * Importante: el TTL del cache key debe ser MAYOR que `recovery_time` para que
+     * `getCircuitState()` pueda detectar el momento de transición a HALF-OPEN.
+     * Si el TTL fuese == recovery_time, la key expiraría exactamente cuando
+     * deberíamos transicionar, y el estado pasaría directo a CLOSED sin probes.
      */
     private function openCircuit(): void
     {
         $circuitKey = "envio-circuit:{$this->channel}";
-        $recoveryTime = config('envios.circuit_breaker.recovery_time', 60);
-        $threshold = config('envios.circuit_breaker.failure_threshold', 10);
+        $recoveryTime = (int) config('envios.circuit_breaker.recovery_time', 60);
+        $halfOpenWindow = (int) config('envios.circuit_breaker.half_open_window', 300);
+        $threshold = (int) config('envios.circuit_breaker.failure_threshold', 10);
         $failureKey = "envio-failures:{$this->channel}";
         $failures = (int) Cache::get($failureKey, 0);
 
-        // Store opened_at for monitoring
-        Cache::put("circuit_breaker:{$this->channel}:opened_at", now()->toIso8601String(), $recoveryTime);
-        Cache::put("circuit_breaker:{$this->channel}:failures", $failures, $recoveryTime);
-        Cache::put($circuitKey, 'open', $recoveryTime);
+        // TTL total = open + half-open + buffer. Si nadie dispara la transición,
+        // eventualmente expira y vuelve a CLOSED naturalmente (fallback seguro).
+        $totalTtl = $recoveryTime + $halfOpenWindow + 60;
+
+        // Store opened_at for monitoring AND for the OPEN→HALF-OPEN transition check
+        Cache::put("circuit_breaker:{$this->channel}:opened_at", now()->toIso8601String(), $totalTtl);
+        Cache::put("circuit_breaker:{$this->channel}:failures", $failures, $totalTtl);
+        Cache::put($circuitKey, 'open', $totalTtl);
+
+        // Reset probe counters de cualquier ciclo previo
+        Cache::forget("circuit_breaker:{$this->channel}:probes-in-flight");
+        Cache::forget("circuit_breaker:{$this->channel}:probe-successes");
 
         if (config('envios.monitoring.log_circuit_breaker', true)) {
             Log::error('RateLimitedMiddleware: Circuit breaker OPENED', [
@@ -296,6 +481,7 @@ class RateLimitedMiddleware
                 'failures' => $failures,
                 'threshold' => $threshold,
                 'recovery_time' => $recoveryTime,
+                'half_open_window' => $halfOpenWindow,
             ]);
         }
 
@@ -309,18 +495,23 @@ class RateLimitedMiddleware
     }
 
     /**
-     * Cierra el circuit breaker.
+     * Cierra el circuit breaker desde OPEN o HALF-OPEN.
      */
     private function closeCircuit(): void
     {
         $circuitKey = "envio-circuit:{$this->channel}";
+        $current = Cache::get($circuitKey);
 
-        if (Cache::get($circuitKey) === 'open') {
+        if ($current === 'open' || $current === 'half-open') {
             Cache::forget($circuitKey);
+            // Limpiar markers de open
+            Cache::forget("circuit_breaker:{$this->channel}:opened_at");
+            Cache::forget("circuit_breaker:{$this->channel}:failures");
 
             if (config('envios.monitoring.log_circuit_breaker', true)) {
                 Log::info('RateLimitedMiddleware: Circuit breaker CLOSED', [
                     'channel' => $this->channel,
+                    'from_state' => $current,
                 ]);
             }
         }
