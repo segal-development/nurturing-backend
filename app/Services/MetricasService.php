@@ -40,6 +40,15 @@ class MetricasService
     }
 
     /**
+     * Inicio del periodo como calendario.
+     * dias=1 → hoy 00:00, dias=7 → hace 6 días 00:00 (incluye hoy = 7 días).
+     */
+    private function fechaDesdePeriodo(int $dias)
+    {
+        return now()->subDays(max(0, $dias - 1))->startOfDay();
+    }
+
+    /**
      * Obtiene todas las métricas del dashboard en un solo método.
      */
     public function getDashboardCompleto(int $dias = 30, ?int $flujoId = null): array
@@ -84,7 +93,7 @@ class MetricasService
 
     private function computeResumenGeneral(int $dias, ?int $flujoId): array
     {
-        $desde = now()->subDays($dias);
+        $desde = $this->fechaDesdePeriodo($dias);
 
         // Query 1: Envíos
         $envioStats = DB::table('envios')
@@ -182,7 +191,7 @@ class MetricasService
 
     private function computeMetricasAperturas(int $dias, ?int $flujoId): array
     {
-        $desde = now()->subDays($dias);
+        $desde = $this->fechaDesdePeriodo($dias);
 
         // Por día
         $porDiaQuery = DB::table('email_aperturas as ea')->where('ea.fecha_apertura', '>=', $desde);
@@ -290,7 +299,7 @@ class MetricasService
 
     private function computeMetricasClicks(int $dias, ?int $flujoId): array
     {
-        $desde = now()->subDays($dias);
+        $desde = $this->fechaDesdePeriodo($dias);
 
         // Por día
         $porDiaQuery = DB::table('email_clicks as ec')->where('ec.fecha_click', '>=', $desde);
@@ -374,7 +383,7 @@ class MetricasService
 
     private function computeMetricasEnvios(int $dias, ?int $flujoId): array
     {
-        $desde = now()->subDays($dias);
+        $desde = $this->fechaDesdePeriodo($dias);
 
         // Totales por estado
         $porEstado = DB::table('envios')
@@ -467,7 +476,7 @@ class MetricasService
 
     private function computeMetricasDesuscripciones(int $dias, ?int $flujoId): array
     {
-        $desde = now()->subDays($dias);
+        $desde = $this->fechaDesdePeriodo($dias);
 
         $totalQuery = Desuscripcion::where('created_at', '>=', $desde);
         if ($flujoId !== null) {
@@ -580,7 +589,7 @@ class MetricasService
 
     private function computeMetricasConversiones(int $dias, ?int $flujoId): array
     {
-        $desde = now()->subDays($dias);
+        $desde = $this->fechaDesdePeriodo($dias);
 
         // Total convertidos en el período (filtrado por flujo si aplica)
         $convertidosQuery = DB::table('prospectos as p')
@@ -668,9 +677,9 @@ class MetricasService
 
     private function computeTendencias(int $dias, ?int $flujoId): array
     {
-        $desdeActual = now()->subDays($dias);
-        $desdeAnterior = now()->subDays($dias * 2);
-        $hastaAnterior = now()->subDays($dias);
+        $desdeActual = $this->fechaDesdePeriodo($dias);
+        $desdeAnterior = $desdeActual->copy()->subDays($dias);
+        $hastaAnterior = $desdeActual;
 
         // Envíos (actual + anterior)
         $envios = DB::table('envios')
@@ -743,7 +752,7 @@ class MetricasService
 
     private function computeNuevosProspectosPorDia(int $dias, ?int $flujoId): array
     {
-        $desde = now()->subDays($dias);
+        $desde = $this->fechaDesdePeriodo($dias);
 
         $porDia = DB::table('prospecto_en_flujo')
             ->select(
@@ -875,7 +884,7 @@ class MetricasService
 
     private function computeTopFlujos(int $dias, int $limit): array
     {
-        $desde = now()->subDays($dias);
+        $desde = $this->fechaDesdePeriodo($dias);
 
         return DB::table('flujos as f')
             ->leftJoin('envios as e', function ($join) use ($desde) {
@@ -928,7 +937,7 @@ class MetricasService
      */
     public function invalidarCache(): void
     {
-        $periodos = [7, 30, 90];
+        $periodos = [1, 7, 30, 90, 365];
         $tipos = ['resumen', 'aperturas', 'clicks', 'envios', 'desuscripciones', 'conversiones', 'tendencias', 'nuevos_prospectos'];
 
         foreach ($periodos as $dias) {
@@ -949,7 +958,7 @@ class MetricasService
      */
     public function invalidarCacheFlujo(int $flujoId): void
     {
-        $periodos = [7, 30, 90];
+        $periodos = [1, 7, 30, 90, 365];
         $tipos = ['resumen', 'aperturas', 'clicks', 'envios', 'desuscripciones', 'conversiones', 'tendencias', 'nuevos_prospectos'];
         $suffix = ":f{$flujoId}";
 
@@ -959,5 +968,6 @@ class MetricasService
                 Cache::forget("metricas:{$tipo}:{$dias}{$suffix}");
             }
         }
+        Cache::forget("metricas:envios_hoy:f{$flujoId}");
     }
 }
