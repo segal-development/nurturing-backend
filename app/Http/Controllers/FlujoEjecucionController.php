@@ -674,6 +674,7 @@ class FlujoEjecucionController extends Controller
                 'id' => $ejecucion->id,
                 'flujo_id' => $ejecucion->flujo_id,
                 'estado' => $ejecucion->estado,
+                'es_perpetuo' => (bool) ($ejecucion->es_perpetuo ?? $ejecucion->flujo?->es_perpetuo ?? false),
                 'fecha_inicio_programada' => $ejecucion->fecha_inicio_programada,
                 'fecha_inicio_real' => $ejecucion->fecha_inicio_real,
                 'fecha_fin' => $ejecucion->fecha_fin,
