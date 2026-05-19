@@ -127,18 +127,40 @@ class AsignarProspectosAEjecucionPerpetua implements ShouldQueue
 
     /**
      * Get existing perpetual execution or create one if none exists.
+     *
+     * Para flujos perpetuos, la ejecución puede estar en:
+     * - 'in_progress': procesando un batch
+     * - 'waiting': sin trabajo activo, esperando nuevos prospectos
+     * - 'paused': temporalmente pausada por circuit breaker
+     * - 'completed': bug histórico — algunos perpetuos quedaron en este estado
+     *
+     * Todos son estados VIVOS para un flujo perpetuo; el sync debe reusarlos.
+     * Si no encontramos ninguno, recién creamos uno nuevo.
      */
     private function obtenerOCrearEjecucionPerpetua(Flujo $flujo, StageOrderResolver $resolver): ?FlujoEjecucion
     {
-        // Try to find existing perpetual execution in progress
+        // Try to find ANY existing perpetual execution (in_progress, waiting, paused, completed)
         $ejecucion = FlujoEjecucion::where('flujo_id', $flujo->id)
             ->where('es_perpetuo', true)
-            ->where('estado', 'in_progress')
+            ->whereIn('estado', ['in_progress', 'waiting', 'paused', 'completed'])
+            ->orderByDesc('id')
             ->first();
 
         if ($ejecucion) {
+            // Si la ejecución está en un estado "muerto" (completed), reactivarla.
+            // En flujos perpetuos, completed es siempre incorrecto — siempre deben estar vivos.
+            if ($ejecucion->estado === 'completed') {
+                Log::warning('AsignarProspectosAEjecucionPerpetua: Reactivando ejecucion perpetua que estaba en completed', [
+                    'ejecucion_id' => $ejecucion->id,
+                    'flujo_id' => $flujo->id,
+                ]);
+                $ejecucion->update(['estado' => 'waiting']);
+                $ejecucion->refresh();
+            }
+
             Log::info('AsignarProspectosAEjecucionPerpetua: Usando ejecucion perpetua existente', [
                 'ejecucion_id' => $ejecucion->id,
+                'estado' => $ejecucion->estado,
                 'flujo_id' => $flujo->id,
             ]);
 
