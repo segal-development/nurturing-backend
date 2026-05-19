@@ -1544,9 +1544,16 @@ class FlujoController extends Controller
     {
         // Obtener ejecuciones activas SIN cargar prospectos_ids (evita memory exhaustion)
         // Usamos prospectos_count en lugar de contar el JSON en memoria
-        // Incluimos 'waiting' para flujos perpetuos que esperan nuevos prospectos
+        // - Para flujos NO perpetuos: in_progress, paused, waiting (excluye completed/failed/cancelled)
+        // - Para flujos PERPETUOS: incluir también completed, porque la ejecución sigue viva
+        //   esperando nuevos prospectos. Si alguna vez quedó marcada completed por bug previo,
+        //   sigue siendo la "cohorte activa" del flujo.
+        $estadosVisibles = $flujo->es_perpetuo
+            ? ['in_progress', 'paused', 'waiting', 'completed']
+            : ['in_progress', 'paused', 'waiting'];
+
         $ejecucionesActivas = $flujo->ejecuciones()
-            ->whereIn('estado', ['in_progress', 'paused', 'waiting'])
+            ->whereIn('estado', $estadosVisibles)
             ->select([
                 'id',
                 'flujo_id',

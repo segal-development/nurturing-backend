@@ -134,9 +134,23 @@ class FlujoEjecucionEtapaObserver
 
     /**
      * Verifica si la ejecución debe completarse después de esta etapa.
+     *
+     * Para flujos NO perpetuos: cuando ya no hay etapas pending/executing, marca la
+     * ejecución como `completed` (el flujo terminó).
+     *
+     * Para flujos PERPETUOS: NUNCA marca la ejecución como `completed` automáticamente,
+     * porque la ejecución sigue viva esperando nuevos prospectos. La transicion correcta
+     * es a `waiting` y la maneja `BatchCompletedCallback::finalizarFlujo`.
      */
     private function verificarCompletarEjecucion(FlujoEjecucion $ejecucion, FlujoEjecucionEtapa $etapa, ?string $nodoFinal = null): void
     {
+        // En flujos perpetuos, no se completan automáticamente: BatchCompletedCallback
+        // las pone en `waiting` y CatchUp las re-activa con cada nuevo prospecto.
+        $esPerpetuo = $ejecucion->es_perpetuo || ($ejecucion->flujo?->es_perpetuo ?? false);
+        if ($esPerpetuo) {
+            return;
+        }
+
         // Solo completar si todas las etapas activas están completadas o failed
         $etapasActivas = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
             ->whereIn('estado', ['pending', 'executing'])
