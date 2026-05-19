@@ -32,7 +32,7 @@ class MetricasController extends Controller
     public function dashboard(Request $request): JsonResponse
     {
         $dias = (int) $request->input('dias', 30);
-        $dias = min(max($dias, 7), 365); // Entre 7 y 365 días
+        $dias = min(max($dias, 1), 365); // Entre 1 (Hoy) y 365 días
 
         $flujoId = $request->input('flujo_id');
         $flujoId = $flujoId !== null && $flujoId !== '' ? (int) $flujoId : null;
