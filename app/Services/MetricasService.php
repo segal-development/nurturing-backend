@@ -108,10 +108,13 @@ class MetricasService
         $totalEnvios = (int) ($envioStats->total ?? 0);
         $enviosExitosos = (int) ($envioStats->exitosos ?? 0);
 
-        // Query 2: Aperturas (JOIN si filtra por flujo)
-        $aperturaQuery = DB::table('email_aperturas as ea')->where('ea.created_at', '>=', $desde);
+        // Query 2: Aperturas de ENVIOS del período (JOIN siempre, para que la tasa sea coherente).
+        // Sin esto, las aperturas pueden ser de emails enviados antes del período y la tasa supera 100%.
+        $aperturaQuery = DB::table('email_aperturas as ea')
+            ->join('envios as e', 'e.id', '=', 'ea.envio_id')
+            ->where('e.created_at', '>=', $desde);
         if ($flujoId !== null) {
-            $aperturaQuery->join('envios as e', 'e.id', '=', 'ea.envio_id')->where('e.flujo_id', $flujoId);
+            $aperturaQuery->where('e.flujo_id', $flujoId);
         }
         $aperturaStats = $aperturaQuery
             ->selectRaw('COUNT(*) as total, COUNT(DISTINCT ea.envio_id) as unicos')
@@ -120,10 +123,12 @@ class MetricasService
         $totalAperturas = (int) ($aperturaStats->total ?? 0);
         $enviosConApertura = (int) ($aperturaStats->unicos ?? 0);
 
-        // Query 3: Clicks (JOIN si filtra por flujo)
-        $clickQuery = DB::table('email_clicks as ec')->where('ec.created_at', '>=', $desde);
+        // Query 3: Clicks de ENVIOS del período (misma lógica que aperturas).
+        $clickQuery = DB::table('email_clicks as ec')
+            ->join('envios as e', 'e.id', '=', 'ec.envio_id')
+            ->where('e.created_at', '>=', $desde);
         if ($flujoId !== null) {
-            $clickQuery->join('envios as e', 'e.id', '=', 'ec.envio_id')->where('e.flujo_id', $flujoId);
+            $clickQuery->where('e.flujo_id', $flujoId);
         }
         $clickStats = $clickQuery
             ->selectRaw('COUNT(*) as total, COUNT(DISTINCT ec.envio_id) as unicos')
@@ -691,27 +696,31 @@ class MetricasService
             ', [$desdeActual, $desdeAnterior, $hastaAnterior])
             ->first();
 
-        // Aperturas (actual + anterior)
-        $aperturasQuery = DB::table('email_aperturas as ea')->where('ea.created_at', '>=', $desdeAnterior);
+        // Aperturas (actual + anterior) — atadas a envios.created_at para coherencia con el KPI
+        $aperturasQuery = DB::table('email_aperturas as ea')
+            ->join('envios as e', 'e.id', '=', 'ea.envio_id')
+            ->where('e.created_at', '>=', $desdeAnterior);
         if ($flujoId !== null) {
-            $aperturasQuery->join('envios as e', 'e.id', '=', 'ea.envio_id')->where('e.flujo_id', $flujoId);
+            $aperturasQuery->where('e.flujo_id', $flujoId);
         }
         $aperturas = $aperturasQuery
             ->selectRaw('
-                COUNT(CASE WHEN ea.created_at >= ? THEN 1 END) as actual,
-                COUNT(CASE WHEN ea.created_at >= ? AND ea.created_at < ? THEN 1 END) as anterior
+                COUNT(CASE WHEN e.created_at >= ? THEN 1 END) as actual,
+                COUNT(CASE WHEN e.created_at >= ? AND e.created_at < ? THEN 1 END) as anterior
             ', [$desdeActual, $desdeAnterior, $hastaAnterior])
             ->first();
 
-        // Clicks (actual + anterior)
-        $clicksQuery = DB::table('email_clicks as ec')->where('ec.created_at', '>=', $desdeAnterior);
+        // Clicks (actual + anterior) — atadas a envios.created_at para coherencia con el KPI
+        $clicksQuery = DB::table('email_clicks as ec')
+            ->join('envios as e', 'e.id', '=', 'ec.envio_id')
+            ->where('e.created_at', '>=', $desdeAnterior);
         if ($flujoId !== null) {
-            $clicksQuery->join('envios as e', 'e.id', '=', 'ec.envio_id')->where('e.flujo_id', $flujoId);
+            $clicksQuery->where('e.flujo_id', $flujoId);
         }
         $clicks = $clicksQuery
             ->selectRaw('
-                COUNT(CASE WHEN ec.created_at >= ? THEN 1 END) as actual,
-                COUNT(CASE WHEN ec.created_at >= ? AND ec.created_at < ? THEN 1 END) as anterior
+                COUNT(CASE WHEN e.created_at >= ? THEN 1 END) as actual,
+                COUNT(CASE WHEN e.created_at >= ? AND e.created_at < ? THEN 1 END) as anterior
             ', [$desdeActual, $desdeAnterior, $hastaAnterior])
             ->first();
 
