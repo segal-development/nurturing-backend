@@ -284,6 +284,12 @@ class GrupoDeudaApiSyncService
         $createBatch = [];
         $updateBatch = [];
 
+        // Flag por-source que permite "doble membresía": el prospecto entra a este flujo
+        // aunque ya esté en otro flujo activo. Útil para flujos post-evento (contratos
+        // firmados) que deben recibir comunicación SI O SI, sin importar otros flujos previos.
+        $syncFilters = $source->sync_filters ?? [];
+        $allowDoubleMembership = (bool) ($syncFilters['allow_double_membership'] ?? false);
+
         foreach ($data as $index => $row) {
             try {
                 $fieldMapping = $source->getFieldMappingWithDefaults();
@@ -309,14 +315,14 @@ class GrupoDeudaApiSyncService
                 $existingId = $this->cacheService->findExistingProspectoId($email, $telefono);
 
                 if ($existingId !== null) {
-                    // Ya existe - verificar si está en flujo activo
-                    if ($this->estaEnFlujoActivo($existingId)) {
+                    // Ya existe - verificar si está en flujo activo (salvo que doble membresía esté habilitada)
+                    if (! $allowDoubleMembership && $this->estaEnFlujoActivo($existingId)) {
                         $omitidosEnFlujo++;
 
                         continue;
                     }
 
-                    // Actualizar prospecto existente
+                    // Actualizar prospecto existente (entra al lote para asignación al flujo)
                     $updateBatch[] = array_merge($prospectoData, ['id' => $existingId]);
                     $actualizados++;
                 } else {
