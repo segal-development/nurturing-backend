@@ -107,24 +107,48 @@ class CatchUpBacklogCommand extends Command
             return self::FAILURE;
         }
 
-        $totalBacklog = ProspectoEnFlujo::where('flujo_id', $flujoId)
+        $baseQuery = fn () => ProspectoEnFlujo::where('flujo_id', $flujoId)
             ->whereNull('ultima_etapa_node_id')
             ->where('completado', false)
-            ->where('cancelado', false)
-            ->count();
+            ->where('cancelado', false);
 
-        $backlog = ProspectoEnFlujo::with('prospecto')
-            ->where('flujo_id', $flujoId)
-            ->whereNull('ultima_etapa_node_id')
-            ->where('completado', false)
-            ->where('cancelado', false)
+        // Solo NURTURABLES: alcanzables por algún canal de la etapa (email válido y/o
+        // teléfono). Sin esto, los sin-canal (ej. sin email en etapa email-only) bloquearían
+        // el progreso — quedan como problema de DATO, no de flujo (ver métrica problemas_envio).
+        $aplicarNurturable = function ($query) use ($usaEmail, $usaSms) {
+            return $query->whereHas('prospecto', function ($p) use ($usaEmail, $usaSms) {
+                $p->where(function ($c) use ($usaEmail, $usaSms) {
+                    if ($usaEmail) {
+                        $c->orWhere(function ($e) {
+                            $e->whereNotNull('email')->where('email', '!=', '')
+                                ->where(function ($ev) {
+                                    $ev->where('email_invalido', false)->orWhereNull('email_invalido');
+                                });
+                        });
+                    }
+                    if ($usaSms) {
+                        $c->orWhere(function ($s) {
+                            $s->whereNotNull('telefono')->where('telefono', '!=', '');
+                        });
+                    }
+                });
+            });
+        };
+
+        $totalBacklog = $baseQuery()->count();
+        $totalNurturable = $aplicarNurturable($baseQuery())->count();
+
+        $backlog = $aplicarNurturable($baseQuery())
+            ->with('prospecto')
             ->orderBy('id')
             ->limit($limit)
             ->get();
 
         $this->info("Flujo {$flujoId}: {$flujo->nombre}");
         $this->line("  Ejecución {$ejecucion->id} ({$ejecucion->estado}) · Etapa 1: {$firstStageId} (etapa_ejec {$etapa->id}, estado {$etapa->estado}) · Canal: {$tipoMensaje}");
-        $this->line("  Backlog total NULL-ultima: {$totalBacklog} · Esta tanda: {$backlog->count()} (limit {$limit})");
+        $sinCanalDato = $totalBacklog - $totalNurturable;
+        $this->line("  Backlog total NULL-ultima: {$totalBacklog} · Nurturables (canal válido): {$totalNurturable} · Sin canal (dato roto): {$sinCanalDato}");
+        $this->line("  Esta tanda: {$backlog->count()} (limit {$limit})");
         if ($usaEmail) {
             $this->line('  Email · asunto: '.($contenidoEmail['asunto'] ?? '(sin asunto)').' · '.strlen((string) $contenidoEmail['contenido']).' chars · html='.($contenidoEmail['es_html'] ? 'sí' : 'no'));
         }
