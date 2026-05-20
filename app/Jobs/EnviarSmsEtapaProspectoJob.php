@@ -31,13 +31,21 @@ class EnviarSmsEtapaProspectoJob implements ShouldBeUnique, ShouldQueue
 
     /**
      * The number of times the job may be attempted.
+     * 0 = ilimitado: un release por rate-limit NO debe matar el job (cuenta como attempt).
+     * El límite real de FALLOS lo pone $maxExceptions.
      */
-    public int $tries;
+    public int $tries = 0;
+
+    /**
+     * Máximo de excepciones REALES antes de fallar (errores de proveedor).
+     * NO cuenta los releases por rate-limit.
+     */
+    public int $maxExceptions = 3;
 
     /**
      * The number of seconds to wait before retrying the job.
      */
-    public array $backoff;
+    public array $backoff = [30, 60, 120];
 
     /**
      * Job timeout in seconds.
@@ -59,9 +67,8 @@ class EnviarSmsEtapaProspectoJob implements ShouldBeUnique, ShouldQueue
         public ?int $flujoId = null,
         public ?int $etapaEjecucionId = null
     ) {
-        // Load configuration from config/envios.php
-        $this->tries = config('envios.queue.tries', 3);
-        $this->backoff = config('envios.queue.backoff', [30, 60, 120]);
+        // tries/maxExceptions/backoff son propiedades fijas (patrón rate-limit-safe,
+        // igual que EnviarEmailEtapaProspectoJob). Solo el timeout viene de config.
         $this->timeout = config('envios.queue.timeout', 60);
     }
 

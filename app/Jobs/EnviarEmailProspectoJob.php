@@ -17,8 +17,16 @@ class EnviarEmailProspectoJob implements ShouldQueue
 
     /**
      * The number of times the job may be attempted.
+     * 0 = ilimitado: un release por rate-limit NO debe matar el job. El límite
+     * real de FALLOS lo pone $maxExceptions.
      */
-    public int $tries = 3;
+    public int $tries = 0;
+
+    /**
+     * Máximo de excepciones REALES antes de fallar (errores de proveedor).
+     * NO cuenta los releases por rate-limit.
+     */
+    public int $maxExceptions = 3;
 
     /**
      * Exponential backoff (seconds): 30s, 60s, 120s
