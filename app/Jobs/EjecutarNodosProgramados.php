@@ -556,6 +556,39 @@ class EjecutarNodosProgramados implements ShouldQueue
             'fecha_ejecucion' => now(),
         ]);
 
+        $this->finalizarEjecucion($ejecucion);
+    }
+
+    /**
+     * Finaliza una ejecución respetando flujos perpetuos.
+     *
+     * Para flujos PERPETUOS nunca se marca 'completed' (eso deja la ejecución
+     * muerta y CatchUpProspectosJob deja de procesarla, dejando a los nuevos
+     * prospectos sin nutrir): queda 'waiting' esperando nuevos prospectos.
+     * Solo los flujos normales se completan.
+     *
+     * Centraliza la lógica que antes estaba repetida e inconsistente en este
+     * job (ejecutarNodoFin, recuperación, programarSiguienteNodo): 4 de los 5
+     * caminos NO respetaban es_perpetuo y re-mataban la ejecución perpetua.
+     */
+    private function finalizarEjecucion(FlujoEjecucion $ejecucion): void
+    {
+        $esPerpetuo = $ejecucion->es_perpetuo || ($ejecucion->flujo?->es_perpetuo ?? false);
+
+        if ($esPerpetuo) {
+            $ejecucion->update([
+                'estado' => 'waiting',
+                'proximo_nodo' => null,
+                'fecha_proximo_nodo' => null,
+            ]);
+
+            Log::info('EjecutarNodosProgramados: Flujo perpetuo, ejecución en waiting (no completed)', [
+                'ejecucion_id' => $ejecucion->id,
+            ]);
+
+            return;
+        }
+
         $ejecucion->update([
             'estado' => 'completed',
             'fecha_fin' => now(),
@@ -879,13 +912,7 @@ class EjecutarNodosProgramados implements ShouldQueue
 
         if (! $siguienteConexion) {
             // No hay siguiente nodo - completar ejecución
-            $ejecucion->update([
-                'estado' => 'completed',
-                'fecha_fin' => now(),
-                'proximo_nodo' => null,
-                'fecha_proximo_nodo' => null,
-            ]);
-            Log::info('EjecutarNodosProgramados: Ejecución completada después de recuperación');
+            $this->finalizarEjecucion($ejecucion);
 
             return;
         }
@@ -894,13 +921,7 @@ class EjecutarNodosProgramados implements ShouldQueue
 
         // Si es nodo final, completar
         if (str_starts_with($siguienteNodoId, 'end-')) {
-            $ejecucion->update([
-                'estado' => 'completed',
-                'fecha_fin' => now(),
-                'proximo_nodo' => null,
-                'fecha_proximo_nodo' => null,
-            ]);
-            Log::info('EjecutarNodosProgramados: Nodo final alcanzado, ejecución completada');
+            $this->finalizarEjecucion($ejecucion);
 
             return;
         }
@@ -1036,16 +1057,7 @@ class EjecutarNodosProgramados implements ShouldQueue
 
         if (! $siguienteConexion) {
             // No hay siguiente nodo, marcar como completado
-            $ejecucion->update([
-                'estado' => 'completed',
-                'fecha_fin' => now(),
-                'proximo_nodo' => null,
-                'fecha_proximo_nodo' => null,
-            ]);
-
-            Log::info('EjecutarNodosProgramados: No hay siguiente nodo, ejecución completada', [
-                'ejecucion_id' => $ejecucion->id,
-            ]);
+            $this->finalizarEjecucion($ejecucion);
 
             return;
         }
