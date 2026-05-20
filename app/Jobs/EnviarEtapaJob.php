@@ -360,19 +360,28 @@ class EnviarEtapaJob implements ShouldQueue
             return $jobs;
         }
 
-        // Email (siempre para 'email' o 'ambos')
-        $jobs[] = new EnviarEmailEtapaProspectoJob(
-            prospectoEnFlujoId: $prospectoEnFlujo->id,
-            contenido: $contenidoEmail['contenido'],
-            asunto: $contenidoEmail['asunto'] ?? $this->stage['template']['asunto'] ?? 'Mensaje',
-            flujoId: $flujoId,
-            etapaEjecucionId: $this->etapaEjecucionId,
-            esHtml: $contenidoEmail['es_html'],
-            providerName: $providerName
-        );
+        // Para 'ambos', un prospecto puede tener solo uno de los dos canales.
+        // Despachamos el job de email solo si tiene email válido y el de SMS solo
+        // si tiene teléfono, para no generar failed jobs de canales imposibles.
+        $prospecto = $prospectoEnFlujo->prospecto;
+        $tieneEmail = ! empty($prospecto?->email) && ! ($prospecto->email_invalido ?? false);
+        $tieneTelefono = ! empty($prospecto?->telefono);
 
-        // SMS adicional para tipo 'ambos'
-        if ($tipoMensaje === 'ambos' && $contenidoSms !== null) {
+        // Email (para 'email' o 'ambos', solo si tiene email válido)
+        if ($tieneEmail) {
+            $jobs[] = new EnviarEmailEtapaProspectoJob(
+                prospectoEnFlujoId: $prospectoEnFlujo->id,
+                contenido: $contenidoEmail['contenido'],
+                asunto: $contenidoEmail['asunto'] ?? $this->stage['template']['asunto'] ?? 'Mensaje',
+                flujoId: $flujoId,
+                etapaEjecucionId: $this->etapaEjecucionId,
+                esHtml: $contenidoEmail['es_html'],
+                providerName: $providerName
+            );
+        }
+
+        // SMS adicional para tipo 'ambos' (solo si tiene teléfono)
+        if ($tipoMensaje === 'ambos' && $contenidoSms !== null && $tieneTelefono) {
             $jobs[] = new EnviarSmsEtapaProspectoJob(
                 prospectoEnFlujoId: $prospectoEnFlujo->id,
                 contenido: $contenidoSms['contenido'],
@@ -665,21 +674,32 @@ class EnviarEtapaJob implements ShouldQueue
             ->where('cancelado', false)
             ->where('completado', false);
 
-        // Exclude prospectos with invalid/missing email when sending email
-        if (in_array($tipoMensaje, ['email', 'ambos'], true)) {
-            $query->whereHas('prospecto', function ($q) {
-                $q->whereNotNull('email')
-                    ->where('email', '!=', '')
-                    ->where(function ($q2) {
-                        $q2->where('email_invalido', false)->orWhereNull('email_invalido');
-                    });
-            });
-        }
+        // Filtro de elegibilidad por canal:
+        // - 'email': requiere email válido
+        // - 'sms': requiere teléfono válido
+        // - 'ambos': elegible si es alcanzable por AL MENOS un canal (email O teléfono).
+        //   Antes 'ambos' exigía email, dejando sin NADA a los contratos sin email
+        //   aunque tuvieran teléfono. Cada job por canal se saltea solo si le falta su dato.
+        $emailValido = function ($q) {
+            $q->whereNotNull('email')
+                ->where('email', '!=', '')
+                ->where(function ($q2) {
+                    $q2->where('email_invalido', false)->orWhereNull('email_invalido');
+                });
+        };
 
-        // Exclude prospectos with missing phone for SMS-only stages
-        if ($tipoMensaje === 'sms') {
-            $query->whereHas('prospecto', function ($q) {
-                $q->whereNotNull('telefono')->where('telefono', '!=', '');
+        $telefonoValido = function ($q) {
+            $q->whereNotNull('telefono')->where('telefono', '!=', '');
+        };
+
+        if ($tipoMensaje === 'email') {
+            $query->whereHas('prospecto', $emailValido);
+        } elseif ($tipoMensaje === 'sms') {
+            $query->whereHas('prospecto', $telefonoValido);
+        } elseif ($tipoMensaje === 'ambos') {
+            $query->where(function ($q) use ($emailValido, $telefonoValido) {
+                $q->whereHas('prospecto', $emailValido)
+                    ->orWhereHas('prospecto', $telefonoValido);
             });
         }
 
