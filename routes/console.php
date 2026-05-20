@@ -243,13 +243,17 @@ Schedule::command('sync:grupo-deuda --endpoint=contratos')
 
 // ============================================================================
 // SINCRONIZACIÓN DIARIA DE CLIENTES POR FECHA INGRESO (Grupo Deudas)
-// De lunes a viernes a las 7:00 AM trae clientes que firmaron hace 3 días.
+// De lunes a viernes a las 7:10 AM trae clientes que firmaron hace 3 días.
 // Después del sync, dispara auto-asignación a flujos de onboarding.
 // Inicia: Lunes 11 de mayo 2026
 // ============================================================================
 Schedule::command('sync:grupo-deuda --endpoint=clientes-ingreso')
     ->weekdays()
-    ->dailyAt('07:00')
+    // Escalonado a 07:10 (no 07:00) para no colisionar con la sync HORARIA de
+    // contratos, que dispara en el :00. SYSGAL devuelve 403 "No permitido"
+    // cuando recibe ambas en ráfaga desde la misma IP. Ambas alimentan flujos
+    // de Onboarding; los SEGMENTO consumen otras APIs (no afectados).
+    ->dailyAt('07:10')
     ->name('grupo-deuda:sync-clientes-ingreso-diario')
     ->withoutOverlapping()
     ->onSuccess(function () {
