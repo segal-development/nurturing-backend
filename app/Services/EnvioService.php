@@ -312,6 +312,7 @@ class EnvioService
         if ($etapaEjecucionId) {
             $envioExistente = Envio::where('prospecto_id', $prospecto->id)
                 ->where('flujo_ejecucion_etapa_id', $etapaEjecucionId)
+                ->where('canal', 'email')
                 ->whereIn('estado', ['enviado', 'abierto', 'clickeado', 'pendiente'])
                 ->first();
 
