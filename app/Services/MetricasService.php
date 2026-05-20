@@ -65,6 +65,7 @@ class MetricasService
                 'conversiones' => $this->getMetricasConversiones($dias, $flujoId),
                 'tendencias' => $this->getTendencias($dias, $flujoId),
                 'nuevos_prospectos' => $this->getNuevosProspectosPorDia($dias, $flujoId),
+                'problemas_envio' => $this->getProblemasEnvio($dias, $flujoId),
                 'envios_hoy' => $this->getEnviosHoyConFallback($flujoId),
                 'generado_at' => now()->toIso8601String(),
             ];
@@ -967,12 +968,125 @@ class MetricasService
     }
 
     /**
+     * Prospectos del flujo con problemas de DATO que impiden el envío:
+     * email faltante/inválido o teléfono faltante. Devuelve resumen por motivo
+     * (solo los canales que usa el flujo) + lista detallada para corregir en el
+     * origen (SYSGAL). Los prospectos igual se insertan al flujo; esto explica
+     * por qué a algunos no se les envió.
+     *
+     * "no_contactables" = no tienen NINGÚN canal válido (en 'ambos': ni email ni
+     * teléfono). Los demás reciben al menos un canal, pero se listan igual para
+     * limpiar el dato de origen.
+     */
+    public function getProblemasEnvio(int $dias = 30, ?int $flujoId = null): array
+    {
+        $cacheKey = "metricas:problemas_envio:{$dias}".$this->cacheSuffix($flujoId);
+
+        return Cache::remember($cacheKey, self::CACHE_TTL, fn () => $this->computeProblemasEnvio($dias, $flujoId));
+    }
+
+    private function computeProblemasEnvio(int $dias, ?int $flujoId): array
+    {
+        $desde = $this->fechaDesdePeriodo($dias);
+
+        $canal = $flujoId !== null ? Flujo::where('id', $flujoId)->value('canal_envio') : null;
+        $consideraEmail = $canal === null || in_array($canal, ['email', 'ambos'], true);
+        $consideraSms = $canal === null || in_array($canal, ['sms', 'ambos'], true);
+
+        // Expresiones SQL (PostgreSQL)
+        $sinEmail = "(p.email IS NULL OR p.email = '')";
+        $emailInvalido = 'p.email_invalido = true';
+        $sinTelefono = "(p.telefono IS NULL OR p.telefono = '')";
+        $emailMalo = "({$sinEmail} OR {$emailInvalido})";
+
+        // "con problema": al menos un dato relevante al canal está mal.
+        // "no contactable": no queda NINGÚN canal válido para ese flujo.
+        if ($canal === 'email') {
+            $conProblema = $emailMalo;
+            $noContactable = $emailMalo;
+        } elseif ($canal === 'sms') {
+            $conProblema = $sinTelefono;
+            $noContactable = $sinTelefono;
+        } else { // 'ambos' o null (todos los flujos)
+            $conProblema = "({$emailMalo} OR {$sinTelefono})";
+            $noContactable = "({$emailMalo} AND {$sinTelefono})";
+        }
+
+        $base = fn () => DB::table('prospecto_en_flujo as pf')
+            ->join('prospectos as p', 'p.id', '=', 'pf.prospecto_id')
+            ->where('pf.cancelado', false)
+            ->where('pf.fecha_inicio', '>=', $desde)
+            ->when($flujoId, fn ($q, $id) => $q->where('pf.flujo_id', $id));
+
+        $stats = $base()->selectRaw("
+            COUNT(*) as total_miembros,
+            COUNT(CASE WHEN {$sinEmail} THEN 1 END) as sin_email,
+            COUNT(CASE WHEN {$emailInvalido} THEN 1 END) as email_invalido,
+            COUNT(CASE WHEN {$sinTelefono} THEN 1 END) as sin_telefono,
+            COUNT(CASE WHEN {$conProblema} THEN 1 END) as con_problemas,
+            COUNT(CASE WHEN {$noContactable} THEN 1 END) as no_contactables
+        ")->first();
+
+        $porMotivo = [];
+        if ($consideraEmail) {
+            $porMotivo['sin_email'] = (int) ($stats->sin_email ?? 0);
+            $porMotivo['email_invalido'] = (int) ($stats->email_invalido ?? 0);
+        }
+        if ($consideraSms) {
+            $porMotivo['sin_telefono'] = (int) ($stats->sin_telefono ?? 0);
+        }
+
+        // Lista detallada (capada para no inflar el payload)
+        $cap = 200;
+        $filas = $base()
+            ->whereRaw($conProblema)
+            ->orderByDesc('pf.fecha_inicio')
+            ->limit($cap + 1)
+            ->get(['p.id', 'p.nombre', 'p.rut', 'p.email', 'p.telefono', 'p.email_invalido', 'p.email_invalido_motivo']);
+
+        $truncado = $filas->count() > $cap;
+
+        $detalle = $filas->take($cap)->map(function ($p) use ($consideraEmail, $consideraSms) {
+            $motivos = [];
+            if ($consideraEmail) {
+                if (empty($p->email)) {
+                    $motivos[] = 'sin_email';
+                } elseif ($p->email_invalido) {
+                    $motivos[] = 'email_invalido';
+                }
+            }
+            if ($consideraSms && empty($p->telefono)) {
+                $motivos[] = 'sin_telefono';
+            }
+
+            return [
+                'prospecto_id' => $p->id,
+                'nombre' => $p->nombre,
+                'rut' => $p->rut,
+                'motivos' => $motivos,
+                'email_invalido_motivo' => $p->email_invalido_motivo,
+            ];
+        })->values();
+
+        return [
+            'canal' => $canal,
+            'por_flujo' => $flujoId !== null,
+            'total_miembros' => (int) ($stats->total_miembros ?? 0),
+            'total_con_problemas' => (int) ($stats->con_problemas ?? 0),
+            'no_contactables' => (int) ($stats->no_contactables ?? 0),
+            'por_motivo' => $porMotivo,
+            'detalle' => $detalle,
+            'detalle_truncado' => $truncado,
+        ];
+    }
+
+    /**
      * Invalida el cache de métricas. Limpia variantes con y sin flujoId.
      */
     public function invalidarCache(): void
     {
         $periodos = [1, 7, 30, 90, 365];
-        $tipos = ['resumen', 'aperturas', 'clicks', 'envios', 'desuscripciones', 'conversiones', 'tendencias', 'nuevos_prospectos'];
+        $tipos = ['resumen', 'aperturas', 'clicks', 'envios', 'desuscripciones', 'conversiones', 'tendencias', 'nuevos_prospectos', 'problemas_envio'];
 
         foreach ($periodos as $dias) {
             Cache::forget("metricas_dashboard_{$dias}");
@@ -993,7 +1107,7 @@ class MetricasService
     public function invalidarCacheFlujo(int $flujoId): void
     {
         $periodos = [1, 7, 30, 90, 365];
-        $tipos = ['resumen', 'aperturas', 'clicks', 'envios', 'desuscripciones', 'conversiones', 'tendencias', 'nuevos_prospectos'];
+        $tipos = ['resumen', 'aperturas', 'clicks', 'envios', 'desuscripciones', 'conversiones', 'tendencias', 'nuevos_prospectos', 'problemas_envio'];
         $suffix = ":f{$flujoId}";
 
         foreach ($periodos as $dias) {
