@@ -1066,7 +1066,7 @@ class MetricasService
                 'motivos' => $motivos,
                 'email_invalido_motivo' => $p->email_invalido_motivo,
             ];
-        })->values();
+        })->values()->all();
 
         return [
             'canal' => $canal,
