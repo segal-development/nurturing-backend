@@ -14,7 +14,7 @@ use App\Enums\CanalEnvio;
  */
 final class CanalEnvioResolver
 {
-    private const VALID_TIPOS_MENSAJE = ['email', 'sms'];
+    private const VALID_TIPOS_MENSAJE = ['email', 'sms', 'ambos'];
 
     /**
      * Infiere el canal de envío basándose en los tipos de mensaje de las etapas.

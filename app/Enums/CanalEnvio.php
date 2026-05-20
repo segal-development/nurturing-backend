@@ -19,7 +19,7 @@ enum CanalEnvio: string
     /**
      * Crea una instancia desde un tipo de mensaje de etapa.
      *
-     * @param  string  $tipoMensaje  'email' o 'sms'
+     * @param  string  $tipoMensaje  'email', 'sms' o 'ambos'
      */
     public static function fromTipoMensaje(string $tipoMensaje): self
     {
@@ -28,6 +28,7 @@ enum CanalEnvio: string
         return match ($normalized) {
             'email' => self::EMAIL,
             'sms' => self::SMS,
+            'ambos' => self::AMBOS,
             default => self::EMAIL, // Fallback seguro
         };
     }
