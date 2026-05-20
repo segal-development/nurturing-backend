@@ -989,9 +989,29 @@ class MetricasService
     {
         $desde = $this->fechaDesdePeriodo($dias);
 
-        $canal = $flujoId !== null ? Flujo::where('id', $flujoId)->value('canal_envio') : null;
-        $consideraEmail = $canal === null || in_array($canal, ['email', 'ambos'], true);
-        $consideraSms = $canal === null || in_array($canal, ['sms', 'ambos'], true);
+        // El canal REAL lo definen los stages (tipo_mensaje), igual que EnviarEtapaJob.
+        // flujo.canal_envio puede estar desincronizado (ej: dice 'email' pero los
+        // stages mandan 'ambos'), así que NO lo usamos como fuente de verdad.
+        $consideraEmail = true;
+        $consideraSms = true;
+        if ($flujoId !== null) {
+            $flujo = Flujo::find($flujoId);
+            $tipos = collect($flujo?->config_structure['stages'] ?? [])
+                ->pluck('tipo_mensaje')
+                ->filter()
+                ->unique();
+            if ($tipos->isEmpty() && $flujo?->canal_envio) {
+                $tipos = collect([$flujo->canal_envio]);
+            }
+            $consideraEmail = $tipos->contains(fn ($t) => in_array($t, ['email', 'ambos'], true));
+            $consideraSms = $tipos->contains(fn ($t) => in_array($t, ['sms', 'ambos'], true));
+            // Sin info de canal → considerar ambos para no perder data.
+            if (! $consideraEmail && ! $consideraSms) {
+                $consideraEmail = $consideraSms = true;
+            }
+        }
+
+        $canal = $consideraEmail && $consideraSms ? 'ambos' : ($consideraEmail ? 'email' : 'sms');
 
         // Expresiones SQL (PostgreSQL)
         $sinEmail = "(p.email IS NULL OR p.email = '')";
@@ -999,17 +1019,17 @@ class MetricasService
         $sinTelefono = "(p.telefono IS NULL OR p.telefono = '')";
         $emailMalo = "({$sinEmail} OR {$emailInvalido})";
 
-        // "con problema": al menos un dato relevante al canal está mal.
-        // "no contactable": no queda NINGÚN canal válido para ese flujo.
-        if ($canal === 'email') {
-            $conProblema = $emailMalo;
-            $noContactable = $emailMalo;
-        } elseif ($canal === 'sms') {
-            $conProblema = $sinTelefono;
-            $noContactable = $sinTelefono;
-        } else { // 'ambos' o null (todos los flujos)
+        // "con problema": al menos un dato relevante a los canales del flujo está mal.
+        // "no contactable": no queda NINGÚN canal válido (en 'ambos': ni email ni teléfono).
+        if ($consideraEmail && $consideraSms) {
             $conProblema = "({$emailMalo} OR {$sinTelefono})";
             $noContactable = "({$emailMalo} AND {$sinTelefono})";
+        } elseif ($consideraEmail) {
+            $conProblema = $emailMalo;
+            $noContactable = $emailMalo;
+        } else { // solo SMS
+            $conProblema = $sinTelefono;
+            $noContactable = $sinTelefono;
         }
 
         $base = fn () => DB::table('prospecto_en_flujo as pf')
