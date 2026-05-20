@@ -76,6 +76,41 @@ class FlujoEjecucion extends Model
         return $this->belongsTo(Flujo::class);
     }
 
+    /**
+     * Finaliza la ejecución respetando flujos perpetuos.
+     *
+     * Para flujos PERPETUOS nunca se marca 'completed' (eso deja la ejecución
+     * muerta y CatchUpProspectosJob deja de procesarla, dejando a los nuevos
+     * prospectos sin nutrir): queda 'waiting', esperando nuevos prospectos.
+     * Solo los flujos normales se completan.
+     *
+     * ÚNICA fuente de verdad para finalizar una ejecución. La usan
+     * BatchCompletedCallback y EjecutarNodosProgramados, que antes duplicaban
+     * esta lógica de forma inconsistente: varios paths olvidaban el guard
+     * es_perpetuo y re-mataban ejecuciones perpetuas (incidente 2026-05-20).
+     */
+    public function finalizarRespetandoPerpetuo(): void
+    {
+        $esPerpetuo = $this->es_perpetuo || ($this->flujo?->es_perpetuo ?? false);
+
+        if ($esPerpetuo) {
+            $this->update([
+                'estado' => 'waiting',
+                'proximo_nodo' => null,
+                'fecha_proximo_nodo' => null,
+            ]);
+
+            return;
+        }
+
+        $this->update([
+            'estado' => 'completed',
+            'fecha_fin' => now(),
+            'proximo_nodo' => null,
+            'fecha_proximo_nodo' => null,
+        ]);
+    }
+
     public function etapas(): HasMany
     {
         return $this->hasMany(FlujoEjecucionEtapa::class);

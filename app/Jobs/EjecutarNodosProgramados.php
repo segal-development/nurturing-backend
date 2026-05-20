@@ -573,31 +573,11 @@ class EjecutarNodosProgramados implements ShouldQueue
      */
     private function finalizarEjecucion(FlujoEjecucion $ejecucion): void
     {
-        $esPerpetuo = $ejecucion->es_perpetuo || ($ejecucion->flujo?->es_perpetuo ?? false);
+        $ejecucion->finalizarRespetandoPerpetuo();
 
-        if ($esPerpetuo) {
-            $ejecucion->update([
-                'estado' => 'waiting',
-                'proximo_nodo' => null,
-                'fecha_proximo_nodo' => null,
-            ]);
-
-            Log::info('EjecutarNodosProgramados: Flujo perpetuo, ejecución en waiting (no completed)', [
-                'ejecucion_id' => $ejecucion->id,
-            ]);
-
-            return;
-        }
-
-        $ejecucion->update([
-            'estado' => 'completed',
-            'fecha_fin' => now(),
-            'proximo_nodo' => null,
-            'fecha_proximo_nodo' => null,
-        ]);
-
-        Log::info('EjecutarNodosProgramados: Ejecución completada', [
+        Log::info('EjecutarNodosProgramados: Ejecución finalizada', [
             'ejecucion_id' => $ejecucion->id,
+            'estado' => $ejecucion->estado,
         ]);
     }
 
