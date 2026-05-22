@@ -37,7 +37,10 @@ class MetricasController extends Controller
         $flujoId = $request->input('flujo_id');
         $flujoId = $flujoId !== null && $flujoId !== '' ? (int) $flujoId : null;
 
-        $metricas = $this->metricasService->getDashboardCompleto($dias, $flujoId);
+        $fechaInicio = $request->input('fecha_inicio');
+        $fechaFin = $request->input('fecha_fin');
+
+        $metricas = $this->metricasService->getDashboardCompleto($dias, $flujoId, $fechaInicio, $fechaFin);
 
         return response()->json([
             'success' => true,
@@ -53,7 +56,9 @@ class MetricasController extends Controller
     public function resumen(Request $request): JsonResponse
     {
         $dias = (int) $request->input('dias', 30);
-        $resumen = $this->metricasService->getResumenGeneral($dias);
+        $fechaInicio = $request->input('fecha_inicio');
+        $fechaFin = $request->input('fecha_fin');
+        $resumen = $this->metricasService->getResumenGeneral($dias, null, $fechaInicio, $fechaFin);
 
         return response()->json([
             'success' => true,
@@ -69,7 +74,9 @@ class MetricasController extends Controller
     public function aperturas(Request $request): JsonResponse
     {
         $dias = (int) $request->input('dias', 30);
-        $metricas = $this->metricasService->getMetricasAperturas($dias);
+        $fechaInicio = $request->input('fecha_inicio');
+        $fechaFin = $request->input('fecha_fin');
+        $metricas = $this->metricasService->getMetricasAperturas($dias, null, $fechaInicio, $fechaFin);
 
         return response()->json([
             'success' => true,
@@ -85,7 +92,9 @@ class MetricasController extends Controller
     public function clicks(Request $request): JsonResponse
     {
         $dias = (int) $request->input('dias', 30);
-        $metricas = $this->metricasService->getMetricasClicks($dias);
+        $fechaInicio = $request->input('fecha_inicio');
+        $fechaFin = $request->input('fecha_fin');
+        $metricas = $this->metricasService->getMetricasClicks($dias, null, $fechaInicio, $fechaFin);
 
         return response()->json([
             'success' => true,
@@ -101,7 +110,9 @@ class MetricasController extends Controller
     public function envios(Request $request): JsonResponse
     {
         $dias = (int) $request->input('dias', 30);
-        $metricas = $this->metricasService->getMetricasEnvios($dias);
+        $fechaInicio = $request->input('fecha_inicio');
+        $fechaFin = $request->input('fecha_fin');
+        $metricas = $this->metricasService->getMetricasEnvios($dias, null, $fechaInicio, $fechaFin);
 
         return response()->json([
             'success' => true,
@@ -117,7 +128,9 @@ class MetricasController extends Controller
     public function desuscripciones(Request $request): JsonResponse
     {
         $dias = (int) $request->input('dias', 30);
-        $metricas = $this->metricasService->getMetricasDesuscripciones($dias);
+        $fechaInicio = $request->input('fecha_inicio');
+        $fechaFin = $request->input('fecha_fin');
+        $metricas = $this->metricasService->getMetricasDesuscripciones($dias, null, $fechaInicio, $fechaFin);
 
         return response()->json([
             'success' => true,
@@ -133,7 +146,9 @@ class MetricasController extends Controller
     public function conversiones(Request $request): JsonResponse
     {
         $dias = (int) $request->input('dias', 30);
-        $metricas = $this->metricasService->getMetricasConversiones($dias);
+        $fechaInicio = $request->input('fecha_inicio');
+        $fechaFin = $request->input('fecha_fin');
+        $metricas = $this->metricasService->getMetricasConversiones($dias, null, $fechaInicio, $fechaFin);
 
         return response()->json([
             'success' => true,
@@ -150,7 +165,9 @@ class MetricasController extends Controller
     {
         $dias = (int) $request->input('dias', 30);
         $limit = (int) $request->input('limit', 10);
-        $flujos = $this->metricasService->getTopFlujos($dias, $limit);
+        $fechaInicio = $request->input('fecha_inicio');
+        $fechaFin = $request->input('fecha_fin');
+        $flujos = $this->metricasService->getTopFlujos($dias, $limit, $fechaInicio, $fechaFin);
 
         return response()->json([
             'success' => true,
@@ -166,7 +183,9 @@ class MetricasController extends Controller
     public function tendencias(Request $request): JsonResponse
     {
         $dias = (int) $request->input('dias', 30);
-        $tendencias = $this->metricasService->getTendencias($dias);
+        $fechaInicio = $request->input('fecha_inicio');
+        $fechaFin = $request->input('fecha_fin');
+        $tendencias = $this->metricasService->getTendencias($dias, null, $fechaInicio, $fechaFin);
 
         return response()->json([
             'success' => true,
