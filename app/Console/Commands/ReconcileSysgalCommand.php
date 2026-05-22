@@ -7,6 +7,7 @@ use App\Models\Prospecto;
 use App\Services\GrupoDeudaApiSyncService;
 use Carbon\Carbon;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Reconcilia los datos crudos de la API de Sysgal contra lo que ingerimos.
@@ -106,14 +107,29 @@ class ReconcileSysgalCommand extends Command
     private function reconciliar(string $endpoint, ExternalApiSource $source, array $mapping, array $rows): array
     {
         $total = count($rows);
+        $idField = $mapping['id_field'];
 
-        // IDs que SÍ tenemos en BD para este endpoint (cruce por metadata->id_field).
-        $idsEnBd = Prospecto::query()
-            ->where('metadata->endpoint', $mapping['meta_endpoint'])
-            ->pluck('metadata->'.$mapping['id_field'])
+        // IDs que devolvió Sysgal en este lote (acotamos la query a estos).
+        $sysgalIds = collect($rows)
+            ->pluck('Id')
             ->filter(fn ($v) => $v !== null)
             ->map(fn ($v) => (string) $v)
-            ->flip();
+            ->unique()
+            ->values();
+
+        // De esos IDs, cuáles YA tenemos en BD (cruce por metadata->id_field).
+        // selectRaw con alias: pluck() no resuelve el path JSON 'metadata->x' directo.
+        $idsEnBd = collect();
+        if ($sysgalIds->isNotEmpty()) {
+            $idsEnBd = Prospecto::query()
+                ->where('metadata->endpoint', $mapping['meta_endpoint'])
+                ->whereIn(DB::raw("metadata->>'{$idField}'"), $sysgalIds->all())
+                ->selectRaw("metadata->>'{$idField}' as ext_id")
+                ->pluck('ext_id')
+                ->filter(fn ($v) => $v !== null && $v !== '')
+                ->map(fn ($v) => (string) $v)
+                ->flip();
+        }
 
         $tally = [
             'ingresado' => 0,
