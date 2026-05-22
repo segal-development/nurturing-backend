@@ -20,6 +20,7 @@ use Illuminate\Support\Facades\DB;
  *   php artisan sync:grupo-deuda --test --endpoint=cuotas-vencer  # Test endpoint específico
  *   php artisan sync:grupo-deuda --stats                      # Ver estadísticas
  *   php artisan sync:grupo-deuda --horas=48                   # Últimas 48 horas
+ *   php artisan sync:grupo-deuda --horas=600 --no-asignar     # Backfill SIN asignar a flujos (seguro)
  */
 class SyncGrupoDeudaCommand extends Command
 {
@@ -27,7 +28,8 @@ class SyncGrupoDeudaCommand extends Command
                             {--endpoint= : Endpoint a sincronizar (contratos, cuotas-vencer, cuotas-vencidas, clientes-ingreso)}
                             {--test : Solo probar conexión sin sincronizar}
                             {--stats : Mostrar estadísticas de la fuente}
-                            {--horas= : Forzar sync de las últimas N horas (ignora last_synced_at)}';
+                            {--horas= : Forzar sync de las últimas N horas (ignora last_synced_at)}
+                            {--no-asignar : Sincroniza datos sin disparar la asignación automática a flujos (backfill seguro)}';
 
     protected $description = 'Sincroniza prospectos desde la API de Grupo Deudas';
 
@@ -125,10 +127,14 @@ class SyncGrupoDeudaCommand extends Command
                 GrupoDeudaApiSyncService::ENDPOINT_CONTRATOS_NUEVOS,
                 GrupoDeudaApiSyncService::ENDPOINT_CLIENTES_INGRESO,
             ];
-            
+
             if (in_array($endpoint, $endpointsConAutoAsignar) && $resultado['nuevos'] > 0) {
-                $this->info('Disparando asignación automática a flujos...');
-                \App\Jobs\AsignarNuevosProspectosAFlujoJob::dispatch();
+                if ($this->option('no-asignar')) {
+                    $this->warn("--no-asignar activo: {$resultado['nuevos']} prospectos nuevos NO se asignaron a flujos (no se dispara ningún envío).");
+                } else {
+                    $this->info('Disparando asignación automática a flujos...');
+                    \App\Jobs\AsignarNuevosProspectosAFlujoJob::dispatch();
+                }
             }
 
             return Command::SUCCESS;
