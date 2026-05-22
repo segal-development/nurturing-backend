@@ -120,6 +120,7 @@ class MetricasService
                 'conversiones' => $this->getMetricasConversiones($dias, $flujoId, $fechaInicio, $fechaFin),
                 'tendencias' => $this->getTendencias($dias, $flujoId, $fechaInicio, $fechaFin),
                 'nuevos_prospectos' => $this->getNuevosProspectosPorDia($dias, $flujoId, $fechaInicio, $fechaFin),
+                'clientes_ingresados' => $this->getClientesIngresados($dias, $fechaInicio, $fechaFin),
                 'problemas_envio' => $this->getProblemasEnvio($dias, $flujoId, $fechaInicio, $fechaFin),
                 'envios_hoy' => $this->getEnviosHoyConFallback($flujoId),
                 'generado_at' => now()->toIso8601String(),
@@ -885,6 +886,54 @@ class MetricasService
             'promedio_diario' => $promedioDiario,
             'por_dia' => $porDiaCompleto,
             'por_flujo' => $porFlujo,
+        ];
+    }
+
+    /**
+     * Clientes ingresados (prospectos creados) en el período — conteo system-wide.
+     *
+     * A diferencia de getNuevosProspectosPorDia (que cuenta incorporaciones a flujos),
+     * esto cuenta cuántos clientes ENTRARON al sistema (tabla prospectos), sin importar
+     * si se asignaron a una campaña. El gap entre ambos = clientes ingresados que NO
+     * entraron a ningún flujo. No se filtra por flujo: es una métrica de ingreso global.
+     */
+    public function getClientesIngresados(int $dias = 30, ?string $fechaInicio = null, ?string $fechaFin = null): array
+    {
+        $cacheKey = "metricas:clientes_ingresados:{$dias}".$this->rangoSuffix($fechaInicio, $fechaFin);
+
+        return Cache::remember($cacheKey, self::CACHE_TTL, fn () => $this->computeClientesIngresados($dias, $fechaInicio, $fechaFin));
+    }
+
+    /**
+     * @return array{total: int, por_dia: array<int, array{fecha: string, total: int}>}
+     */
+    private function computeClientesIngresados(int $dias, ?string $fechaInicio = null, ?string $fechaFin = null): array
+    {
+        [$desde, $hasta] = $this->resolverRango($dias, $fechaInicio, $fechaFin);
+
+        $porDia = DB::table('prospectos')
+            ->select(
+                DB::raw('DATE(created_at) as fecha'),
+                DB::raw('COUNT(*) as total')
+            )
+            ->whereBetween('created_at', [$desde, $hasta])
+            ->groupBy('fecha')
+            ->orderBy('fecha')
+            ->get()
+            ->keyBy('fecha')
+            ->toArray();
+
+        $porDiaCompleto = [];
+        $total = 0;
+        foreach ($this->fechasDelRango($desde, $hasta) as $fecha) {
+            $count = isset($porDia[$fecha]) ? (int) $porDia[$fecha]->total : 0;
+            $total += $count;
+            $porDiaCompleto[] = ['fecha' => $fecha, 'total' => $count];
+        }
+
+        return [
+            'total' => $total,
+            'por_dia' => $porDiaCompleto,
         ];
     }
 
