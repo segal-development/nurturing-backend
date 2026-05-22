@@ -49,10 +49,22 @@ class GrupoDeudaApiSyncService
 
     public const ENDPOINT_CLIENTES_INGRESO = 'clientes-ingreso';
 
+    // Categorías de reconciliación (read-only). Reflejan el criterio de descarte del sync.
+    public const RECON_CONTACTABLE = 'contactable';
+
+    public const RECON_SIN_NOMBRE = 'sin_nombre';
+
+    public const RECON_SIN_CONTACTO = 'sin_contacto';
+
+    public const RECON_SIN_TIPO = 'sin_tipo';
+
     private ProspectoCacheService $cacheService;
 
     /** @var array<int, bool> IDs de prospectos ya en flujos activos */
     private array $prospectosEnFlujoActivo = [];
+
+    /** Memo de tipos de prospecto para la reconciliación (read-only) */
+    private ?Collection $tiposProspectoReconCache = null;
 
     public function __construct()
     {
@@ -1497,5 +1509,176 @@ class GrupoDeudaApiSyncService
                 'message' => "Error de conexión: {$e->getMessage()}",
             ];
         }
+    }
+
+    /**
+     * RECONCILIACIÓN (read-only).
+     *
+     * Estos métodos NO persisten nada. Reusan los mismos helpers que el sync
+     * (isValidEmail, normalizarTelefono, determinarTipoProspecto) para clasificar
+     * cada fila cruda de la API con EXACTAMENTE el mismo criterio que la ingesta.
+     *
+     * IMPORTANTE: las reglas de descarte aquí deben reflejar las de
+     * mapRowToProspecto() y mapClienteIngresoToProspecto(). Si cambia una, cambiá la otra.
+     */
+
+    /**
+     * Trae las filas crudas de un endpoint sin persistir (para reconciliar).
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function fetchRowsForReconciliation(ExternalApiSource $source, string $endpoint, Carbon $desde, Carbon $hasta): array
+    {
+        return match ($endpoint) {
+            self::ENDPOINT_CONTRATOS_NUEVOS => $this->fetchContratos($source, $desde, $hasta),
+            self::ENDPOINT_CLIENTES_INGRESO => $this->fetchClientesIngreso($source, $desde, $hasta),
+            default => throw new \InvalidArgumentException("Endpoint no soportado para reconciliación: {$endpoint}"),
+        };
+    }
+
+    /**
+     * Mapeo de reconciliación por endpoint: cómo encontrar la fila en nuestra BD.
+     *
+     * @return array{meta_endpoint: string, id_field: string, source_name: string}
+     */
+    public function reconciliationMapping(string $endpoint): array
+    {
+        return match ($endpoint) {
+            self::ENDPOINT_CONTRATOS_NUEVOS => [
+                'meta_endpoint' => 'contratos_nuevos',
+                'id_field' => 'contrato_id',
+                'source_name' => 'grupo_deuda_contratos',
+            ],
+            self::ENDPOINT_CLIENTES_INGRESO => [
+                'meta_endpoint' => 'clientes_por_fecha_ingreso',
+                'id_field' => 'cliente_id',
+                'source_name' => 'grupo_deuda_clientes_ingreso',
+            ],
+            default => throw new \InvalidArgumentException("Endpoint no soportado para reconciliación: {$endpoint}"),
+        };
+    }
+
+    /**
+     * Clasifica una fila cruda según el MISMO criterio de ingesta del sync.
+     *
+     * @param  array<string, mixed>  $row
+     * @return string Una de las constantes RECON_* (contactable|sin_nombre|sin_contacto|sin_tipo)
+     */
+    public function classifyApiRow(string $endpoint, array $row, ExternalApiSource $source): string
+    {
+        return match ($endpoint) {
+            self::ENDPOINT_CONTRATOS_NUEVOS => $this->classifyContratoRow($row, $source),
+            self::ENDPOINT_CLIENTES_INGRESO => $this->classifyClienteIngresoRow($row),
+            default => throw new \InvalidArgumentException("Endpoint no soportado para reconciliación: {$endpoint}"),
+        };
+    }
+
+    /**
+     * Extrae el contacto normalizado (email/teléfono) de una fila, igual que el sync.
+     * Sirve para detectar duplicados en la reconciliación.
+     *
+     * @param  array<string, mixed>  $row
+     * @return array{email: ?string, telefono: ?string}
+     */
+    public function extractContact(string $endpoint, array $row, ExternalApiSource $source): array
+    {
+        if ($endpoint === self::ENDPOINT_CONTRATOS_NUEVOS) {
+            $fieldMapping = $source->getFieldMappingWithDefaults();
+            $email = $this->getFieldValue($row, $fieldMapping['email'] ?? 'Email');
+            $telefono = $this->getFieldValue($row, $fieldMapping['telefono'] ?? 'Telefono');
+        } else {
+            $email = $row['Email'] ?? null;
+            $telefono = $row['Telefono'] ?? null;
+        }
+
+        if (! empty($email)) {
+            $email = strtolower(trim((string) $email));
+            if (! $this->isValidEmail($email)) {
+                $email = null;
+            }
+        } else {
+            $email = null;
+        }
+
+        if (! empty($telefono)) {
+            $telefono = $this->normalizarTelefono((string) $telefono);
+        } else {
+            $telefono = null;
+        }
+
+        return ['email' => $email, 'telefono' => $telefono];
+    }
+
+    /**
+     * @param  array<string, mixed>  $row
+     */
+    private function classifyContratoRow(array $row, ExternalApiSource $source): string
+    {
+        $fieldMapping = $source->getFieldMappingWithDefaults();
+
+        $nombre = $this->getFieldValue($row, $fieldMapping['nombre'] ?? 'Cliente');
+        if (! empty($nombre)) {
+            $nombre = trim(preg_replace('/\s+/', ' ', $nombre));
+        }
+        if (empty($nombre)) {
+            return self::RECON_SIN_NOMBRE;
+        }
+
+        $contacto = $this->extractContact(self::ENDPOINT_CONTRATOS_NUEVOS, $row, $source);
+        if (empty($contacto['email']) && empty($contacto['telefono'])) {
+            return self::RECON_SIN_CONTACTO;
+        }
+
+        $montoDeuda = $this->parsearMontoDeuda($this->getFieldValue($row, $fieldMapping['monto_deuda'] ?? 'Monto'));
+        if ($this->determinarTipoProspecto($this->loadTiposProspectoCached(), $montoDeuda) === null) {
+            return self::RECON_SIN_TIPO;
+        }
+
+        return self::RECON_CONTACTABLE;
+    }
+
+    /**
+     * @param  array<string, mixed>  $cliente
+     */
+    private function classifyClienteIngresoRow(array $cliente): string
+    {
+        $nombre = trim(implode(' ', array_filter([
+            $cliente['Nombre'] ?? '',
+            $cliente['Apellido_Paterno'] ?? '',
+            $cliente['Apellido_Materno'] ?? '',
+        ])));
+        if (empty($nombre)) {
+            return self::RECON_SIN_NOMBRE;
+        }
+
+        $email = $cliente['Email'] ?? null;
+        if (! empty($email)) {
+            $email = strtolower(trim((string) $email));
+            if (! $this->isValidEmail($email)) {
+                $email = null;
+            }
+        }
+        $telefono = $cliente['Telefono'] ?? null;
+        if (! empty($telefono)) {
+            $telefono = $this->normalizarTelefono((string) $telefono);
+        }
+        if (empty($email) && empty($telefono)) {
+            return self::RECON_SIN_CONTACTO;
+        }
+
+        $montoDeuda = 0;
+        foreach (($cliente['Cuotas'] ?? []) as $cuota) {
+            $montoDeuda += (int) ($cuota['Monto'] ?? 0);
+        }
+        if ($this->determinarTipoProspecto($this->loadTiposProspectoCached(), $montoDeuda) === null) {
+            return self::RECON_SIN_TIPO;
+        }
+
+        return self::RECON_CONTACTABLE;
+    }
+
+    private function loadTiposProspectoCached(): Collection
+    {
+        return $this->tiposProspectoReconCache ??= $this->loadTiposProspecto();
     }
 }
