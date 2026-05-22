@@ -37,82 +37,12 @@ return Application::configure(basePath: dirname(__DIR__))
         ], 401));
     })
     ->withSchedule(function (\Illuminate\Console\Scheduling\Schedule $schedule): void {
-        // Ejecutar verificación de nodos programados cada minuto
-        $schedule->job(\App\Jobs\EjecutarNodosProgramados::class)
-            ->everyMinute()
-            ->name('ejecutar-nodos-programados')
-            ->withoutOverlapping();
-
-        // Verificar salud de APIs y reanudar etapas pausadas cada 2 minutos
-        $schedule->job(\App\Jobs\VerificarSaludApiJob::class)
-            ->everyTwoMinutes()
-            ->name('verificar-salud-api')
-            ->withoutOverlapping();
-
-        // Sincronizar prospectos desde APIs externas - todos los viernes a las 2am
-        $schedule->job(\App\Jobs\SyncExternalApiJob::class)
-            ->fridays()
-            ->at('02:00')
-            ->name('sync-external-api-prospectos')
-            ->withoutOverlapping()
-            ->onFailure(function () {
-                \Illuminate\Support\Facades\Log::error('SyncExternalApiJob: Job programado falló');
-            });
-
-        // Sincronizar contratos nuevos desde Grupo Deudas - cada hora
-        $schedule->job(\App\Jobs\SyncGrupoDeudaJob::class)
-            ->hourly()
-            ->name('sync-grupo-deuda-contratos')
-            ->withoutOverlapping()
-            ->onFailure(function () {
-                \Illuminate\Support\Facades\Log::error('SyncGrupoDeudaJob: Job programado falló');
-            });
-
-        // Sincronizar cuotas por vencer desde Grupo Deudas - diario a las 7am
-        $schedule->job(\App\Jobs\SyncGrupoDeudaCuotasPorVencerJob::class)
-            ->dailyAt('07:00')
-            ->name('sync-grupo-deuda-cuotas-vencer')
-            ->withoutOverlapping()
-            ->onFailure(function () {
-                \Illuminate\Support\Facades\Log::error('SyncGrupoDeudaCuotasPorVencerJob: Job programado falló');
-            });
-
-        // Sincronizar cuotas vencidas desde Grupo Deudas - diario a las 7am
-        $schedule->job(\App\Jobs\SyncGrupoDeudaCuotasVencidasJob::class)
-            ->dailyAt('07:00')
-            ->name('sync-grupo-deuda-cuotas-vencidas')
-            ->withoutOverlapping()
-            ->onFailure(function () {
-                \Illuminate\Support\Facades\Log::error('SyncGrupoDeudaCuotasVencidasJob: Job programado falló');
-            });
-
-        // Sincronizar clientes ingreso desde Grupo Deudas - diario a las 7am
-        $schedule->job(\App\Jobs\SyncGrupoDeudaClientesIngresoJob::class)
-            ->dailyAt('07:00')
-            ->name('sync-grupo-deuda-clientes-ingreso')
-            ->withoutOverlapping()
-            ->onFailure(function () {
-                \Illuminate\Support\Facades\Log::error('SyncGrupoDeudaClientesIngresoJob: Job programado falló');
-            });
-
-        // Asignar nuevos prospectos a flujos perpetuos - cada hora (después del sync)
-        // Corre 5 minutos después de la hora para dar tiempo al sync de contratos
-        $schedule->job(\App\Jobs\AsignarNuevosProspectosAFlujoJob::class)
-            ->hourlyAt(5)
-            ->name('asignar-nuevos-prospectos-flujos')
-            ->withoutOverlapping()
-            ->onFailure(function () {
-                \Illuminate\Support\Facades\Log::error('AsignarNuevosProspectosAFlujoJob: Job programado falló');
-            });
-
-        // También correr después de los syncs diarios de las 7am (a las 7:30am)
-        $schedule->job(\App\Jobs\AsignarNuevosProspectosAFlujoJob::class)
-            ->dailyAt('07:30')
-            ->name('asignar-nuevos-prospectos-flujos-post-sync')
-            ->withoutOverlapping()
-            ->onFailure(function () {
-                \Illuminate\Support\Facades\Log::error('AsignarNuevosProspectosAFlujoJob (post-sync): Job programado falló');
-            });
+        // Scheduling consolidado 100% en routes/console.php (un solo scheduler).
+        //
+        // NO agregar tareas acá. bootstrap/app.php (withSchedule) y routes/console.php
+        // (Schedule facade) corren AMBOS: duplicar tareas hizo que los syncs de SYSGAL
+        // se dispararan en ráfaga (07:00) y devolvieran 403 "No permitido" (mayo 2026).
+        // Cualquier tarea programada va en routes/console.php, una sola vez.
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         // Always return JSON for API authentication/authorization errors

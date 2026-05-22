@@ -209,6 +209,15 @@ Schedule::job(new \App\Jobs\EjecutarNodosProgramados)
     });
 
 // ============================================================================
+// VERIFICACIÓN DE SALUD DE APIs + REANUDAR ETAPAS PAUSADAS (circuit breaker)
+// Cada 2 minutos. Consolidado desde bootstrap/app.php.
+// ============================================================================
+Schedule::job(\App\Jobs\VerificarSaludApiJob::class)
+    ->everyTwoMinutes()
+    ->name('verificar-salud-api')
+    ->withoutOverlapping();
+
+// ============================================================================
 // RECUPERACIÓN DE ETAPAS ESTANCADAS
 // Cada 10 minutos detecta etapas de flujo que quedaron estancadas
 // (executing sin actividad) y las marca como completadas.
@@ -249,11 +258,10 @@ Schedule::command('sync:grupo-deuda --endpoint=contratos')
 // ============================================================================
 Schedule::command('sync:grupo-deuda --endpoint=clientes-ingreso')
     ->weekdays()
-    // Escalonado a 07:10 (no 07:00) para no colisionar con la sync HORARIA de
-    // contratos, que dispara en el :00. SYSGAL devuelve 403 "No permitido"
-    // cuando recibe ambas en ráfaga desde la misma IP. Ambas alimentan flujos
-    // de Onboarding; los SEGMENTO consumen otras APIs (no afectados).
-    ->dailyAt('07:10')
+    // Escalonado a 07:15 para no colisionar con los otros syncs de SYSGAL.
+    // Llamadas en ráfaga desde la misma IP → SYSGAL devuelve 403 "No permitido".
+    // Calendario SYSGAL: contratos :00, cuotas-vencer 07:05, clientes 07:15, cuotas-vencidas 07:25.
+    ->dailyAt('07:15')
     ->name('grupo-deuda:sync-clientes-ingreso-diario')
     ->withoutOverlapping()
     ->onSuccess(function () {
@@ -261,6 +269,32 @@ Schedule::command('sync:grupo-deuda --endpoint=clientes-ingreso')
     })
     ->onFailure(function () {
         Log::error('Scheduler: Falló la sincronización diaria de clientes ingreso');
+    });
+
+// ============================================================================
+// SINCRONIZACIÓN DIARIA DE CUOTAS POR VENCER (Grupo Deudas)
+// Diario 07:05 — escalonado para no colisionar con SYSGAL (evita 403 por ráfaga).
+// Consolidado: antes era job en bootstrap/app.php a las 07:00.
+// ============================================================================
+Schedule::command('sync:grupo-deuda --endpoint=cuotas-vencer')
+    ->dailyAt('07:05')
+    ->name('grupo-deuda:sync-cuotas-vencer-diario')
+    ->withoutOverlapping()
+    ->onFailure(function () {
+        Log::error('Scheduler: Falló la sincronización diaria de cuotas por vencer');
+    });
+
+// ============================================================================
+// SINCRONIZACIÓN DIARIA DE CUOTAS VENCIDAS (Grupo Deudas)
+// Diario 07:25 — escalonado para no colisionar con SYSGAL (evita 403 por ráfaga).
+// Consolidado: antes era job en bootstrap/app.php a las 07:00.
+// ============================================================================
+Schedule::command('sync:grupo-deuda --endpoint=cuotas-vencidas')
+    ->dailyAt('07:25')
+    ->name('grupo-deuda:sync-cuotas-vencidas-diario')
+    ->withoutOverlapping()
+    ->onFailure(function () {
+        Log::error('Scheduler: Falló la sincronización diaria de cuotas vencidas');
     });
 
 // ============================================================================
@@ -300,12 +334,13 @@ Schedule::job(new \App\Jobs\AsignarProspectosSysgalJob)
 
 // ============================================================================
 // AUTO-ASIGNACIÓN DE NUEVOS PROSPECTOS A FLUJOS CON auto_asignar_nuevos = true
-// Todos los viernes a las 7:30 AM (30 min después del sync de Sysgal).
+// Cada hora a los :05 (después del sync de contratos del :00).
 // Busca flujos activos con auto_asignar_nuevos=true y asigna prospectos nuevos
 // que coincidan con lotes_ids (prioridad) o el origen del flujo.
+// (Consolidado: antes corría duplicado en bootstrap/app.php hourlyAt(5) + diario 7:30.)
 // ============================================================================
 Schedule::job(new \App\Jobs\AsignarNuevosProspectosAFlujoJob)
-    ->weeklyOn(5, '07:30') // Viernes a las 7:30 AM
+    ->hourlyAt(5) // cada hora a los :05
     ->name('auto-asignar-nuevos-prospectos')
     ->withoutOverlapping()
     ->onSuccess(function () {
