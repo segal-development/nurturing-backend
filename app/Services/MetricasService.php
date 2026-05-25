@@ -917,7 +917,9 @@ class MetricasService
      */
     public function getReconciliacionSysgal(): ?array
     {
-        return Cache::get('metricas:reconciliacion-sysgal');
+        // Store en base de datos (NO Redis): la VM que computa el reconcile y la API/Cloud
+        // Run NO comparten Redis; la DB (Cloud SQL) sí. Lo escribe nurturing:cache-reconciliacion.
+        return Cache::store('database')->get('metricas:reconciliacion-sysgal');
     }
 
     /**

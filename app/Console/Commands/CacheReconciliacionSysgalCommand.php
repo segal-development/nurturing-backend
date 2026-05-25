@@ -58,14 +58,20 @@ class CacheReconciliacionSysgalCommand extends Command
             return self::FAILURE;
         }
 
+        // Store en BASE DE DATOS, NO en el Redis default: la VM (que corre este comando)
+        // y la API/Cloud Run NO comparten Redis (la VM usa Redis local 127.0.0.1). La DB
+        // (Cloud SQL) SÍ es compartida, así que el dashboard de la API puede leer lo que
+        // escribe la VM acá.
+        $store = Cache::store('database');
+
         // Merge sobre lo previo: si un endpoint falló, conserva su último valor bueno.
         $payload = array_merge(
-            (array) Cache::get(self::CACHE_KEY, []),
+            (array) $store->get(self::CACHE_KEY, []),
             $resultado,
             ['generado_at' => now()->toIso8601String(), 'desde' => $desde]
         );
 
-        Cache::put(self::CACHE_KEY, $payload, now()->addHours(12));
+        $store->put(self::CACHE_KEY, $payload, now()->addHours(12));
 
         $this->info('Reconciliación SYSGAL cacheada para: '.implode(', ', array_keys($resultado)));
 
