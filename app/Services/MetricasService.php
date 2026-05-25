@@ -120,7 +120,7 @@ class MetricasService
                 'conversiones' => $this->getMetricasConversiones($dias, $flujoId, $fechaInicio, $fechaFin),
                 'tendencias' => $this->getTendencias($dias, $flujoId, $fechaInicio, $fechaFin),
                 'nuevos_prospectos' => $this->getNuevosProspectosPorDia($dias, $flujoId, $fechaInicio, $fechaFin),
-                'clientes_ingresados' => $this->getClientesIngresados($dias, $fechaInicio, $fechaFin),
+                'clientes_ingresados' => $this->getClientesIngresados($dias, $flujoId, $fechaInicio, $fechaFin),
                 'problemas_envio' => $this->getProblemasEnvio($dias, $flujoId, $fechaInicio, $fechaFin),
                 'reconciliacion_sysgal' => $this->getReconciliacionSysgal(),
                 'envios_hoy' => $this->getEnviosHoyConFallback($flujoId),
@@ -898,11 +898,11 @@ class MetricasService
      * si se asignaron a una campaña. El gap entre ambos = clientes ingresados que NO
      * entraron a ningún flujo. No se filtra por flujo: es una métrica de ingreso global.
      */
-    public function getClientesIngresados(int $dias = 30, ?string $fechaInicio = null, ?string $fechaFin = null): array
+    public function getClientesIngresados(int $dias = 30, ?int $flujoId = null, ?string $fechaInicio = null, ?string $fechaFin = null): array
     {
-        $cacheKey = "metricas:clientes_ingresados:{$dias}".$this->rangoSuffix($fechaInicio, $fechaFin);
+        $cacheKey = "metricas:clientes_ingresados:{$dias}".$this->cacheSuffix($flujoId).$this->rangoSuffix($fechaInicio, $fechaFin);
 
-        return Cache::remember($cacheKey, self::CACHE_TTL, fn () => $this->computeClientesIngresados($dias, $fechaInicio, $fechaFin));
+        return Cache::remember($cacheKey, self::CACHE_TTL, fn () => $this->computeClientesIngresados($dias, $flujoId, $fechaInicio, $fechaFin));
     }
 
     /**
@@ -925,21 +925,32 @@ class MetricasService
     /**
      * @return array{total: int, por_dia: array<int, array{fecha: string, total: int}>}
      */
-    private function computeClientesIngresados(int $dias, ?string $fechaInicio = null, ?string $fechaFin = null): array
+    private function computeClientesIngresados(int $dias, ?int $flujoId = null, ?string $fechaInicio = null, ?string $fechaFin = null): array
     {
         [$desde, $hasta] = $this->resolverRango($dias, $fechaInicio, $fechaFin);
 
-        $porDia = DB::table('prospectos')
-            ->select(
-                DB::raw('DATE(created_at) as fecha'),
-                DB::raw('COUNT(*) as total')
-            )
-            ->whereBetween('created_at', [$desde, $hasta])
-            ->groupBy('fecha')
-            ->orderBy('fecha')
-            ->get()
-            ->keyBy('fecha')
-            ->toArray();
+        // Con flujo seleccionado: clientes que ENTRARON a ese flujo en el período (miembros
+        // del flujo, por fecha_inicio). Sin flujo: ingreso global al sistema (prospectos
+        // creados). Distinto criterio, MISMA forma de salida {total, por_dia}.
+        $porDia = $flujoId !== null
+            ? DB::table('prospecto_en_flujo')
+                ->select(DB::raw('DATE(fecha_inicio) as fecha'), DB::raw('COUNT(*) as total'))
+                ->where('flujo_id', $flujoId)
+                ->where('cancelado', false)
+                ->whereBetween('fecha_inicio', [$desde, $hasta])
+                ->groupBy('fecha')
+                ->orderBy('fecha')
+                ->get()
+                ->keyBy('fecha')
+                ->toArray()
+            : DB::table('prospectos')
+                ->select(DB::raw('DATE(created_at) as fecha'), DB::raw('COUNT(*) as total'))
+                ->whereBetween('created_at', [$desde, $hasta])
+                ->groupBy('fecha')
+                ->orderBy('fecha')
+                ->get()
+                ->keyBy('fecha')
+                ->toArray();
 
         $porDiaCompleto = [];
         $total = 0;
