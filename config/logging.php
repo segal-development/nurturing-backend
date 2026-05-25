@@ -54,7 +54,9 @@ return [
 
         'stack' => [
             'driver' => 'stack',
-            'channels' => explode(',', (string) env('LOG_STACK', 'single')),
+            // Default 'daily' (no 'single'): rota por día y poda a LOG_DAILY_DAYS (14).
+            // Con 'single' el laravel.log crecía sin límite (llegó a 1.1 GB en prod).
+            'channels' => explode(',', (string) env('LOG_STACK', 'daily')),
             'ignore_exceptions' => false,
         ],
 
