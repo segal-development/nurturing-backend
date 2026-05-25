@@ -690,21 +690,19 @@ class GrupoDeudaApiSyncService
             return;
         }
 
+        // Dedup por id (keep last): si el batch trae 2 filas del MISMO id (dos contratos
+        // que dedupean al mismo prospecto), el upsert tira "cardinality violation: ON
+        // CONFLICT DO UPDATE cannot affect row a second time", cae al fallback per-row y
+        // ahí se pisaba created_at/importacion_id. Deduplicar evita la violación de raíz.
+        $batch = array_values(collect($batch)->keyBy('id')->all());
+
+        // Columnas que un UPDATE NUNCA debe tocar: created_at (fecha de ingreso real, alimenta
+        // la métrica clientes_ingresados) e importacion_id (lote de origen). Mismo set para
+        // el upsert y el fallback, así ninguno las pisa.
+        $updatable = ['nombre', 'email', 'telefono', 'rut', 'monto_deuda', 'tipo_prospecto_id', 'metadata', 'updated_at'];
+
         try {
-            DB::table('prospectos')->upsert(
-                $batch,
-                ['id'],
-                [
-                    'nombre',
-                    'email',
-                    'telefono',
-                    'rut',
-                    'monto_deuda',
-                    'tipo_prospecto_id',
-                    'metadata',
-                    'updated_at',
-                ]
-            );
+            DB::table('prospectos')->upsert($batch, ['id'], $updatable);
         } catch (\Exception $e) {
             Log::warning('GrupoDeudaApiSyncService: Batch upsert falló, actualizando uno por uno', [
                 'error' => $e->getMessage(),
@@ -713,10 +711,11 @@ class GrupoDeudaApiSyncService
 
             foreach ($batch as $data) {
                 $id = $data['id'];
-                unset($data['id']);
+                // Solo columnas actualizables: NO pisar created_at ni importacion_id.
+                $payload = array_intersect_key($data, array_flip($updatable));
 
                 try {
-                    DB::table('prospectos')->where('id', $id)->update($data);
+                    DB::table('prospectos')->where('id', $id)->update($payload);
                 } catch (\Exception $individualError) {
                     Log::debug('GrupoDeudaApiSyncService: Update individual falló', [
                         'id' => $id,
