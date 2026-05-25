@@ -8,7 +8,6 @@ use App\Models\ProspectoEnFlujo;
 use App\Services\StageOrderResolver;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
-use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -42,11 +41,6 @@ class CatchUpProspectosJob implements ShouldQueue
      */
     public int $tries = 3;
 
-    /**
-     * The number of prospects to process per chunk to avoid memory issues.
-     */
-    private const CHUNK_SIZE = 1000;
-
     public function __construct()
     {
         $this->onQueue('default');
@@ -78,11 +72,27 @@ class CatchUpProspectosJob implements ShouldQueue
             'ejecucion_ids' => $ejecuciones->pluck('id')->toArray(),
         ]);
 
+        // Gobernador de tasa: tope GLOBAL de prospectos por corrida, compartido entre
+        // todas las ejecuciones perpetuas. Evita el flood al marcar un flujo perpetuo
+        // con backlog grande; el backlog drena a esta tasa (cada 5 min) y el rate-limiter
+        // de envíos pacea la entrega real. Tuneable vía NURTURING_CATCHUP_MAX_PER_RUN.
+        $maxPerRun = (int) config('nurturing.catchup.max_prospectos_per_run', 50);
+        if ($maxPerRun <= 0) {
+            $maxPerRun = 50;
+        }
+        $remaining = $maxPerRun;
+
         $totalProcessed = 0;
         $totalDispatched = 0;
 
         foreach ($ejecuciones as $ejecucion) {
-            $result = $this->procesarEjecucion($ejecucion, $resolver);
+            if ($remaining <= 0) {
+                Log::info('CatchUpProspectosJob: Tope por corrida alcanzado, corto el resto', [
+                    'max_per_run' => $maxPerRun,
+                ]);
+                break;
+            }
+            $result = $this->procesarEjecucion($ejecucion, $resolver, $remaining);
             $totalProcessed += $result['processed'];
             $totalDispatched += $result['dispatched'];
         }
@@ -90,6 +100,8 @@ class CatchUpProspectosJob implements ShouldQueue
         Log::info('CatchUpProspectosJob: Completado', [
             'total_processed' => $totalProcessed,
             'total_dispatched' => $totalDispatched,
+            'max_per_run' => $maxPerRun,
+            'budget_restante' => $remaining,
         ]);
     }
 
@@ -98,7 +110,7 @@ class CatchUpProspectosJob implements ShouldQueue
      *
      * @return array{processed: int, dispatched: int}
      */
-    private function procesarEjecucion(FlujoEjecucion $ejecucion, StageOrderResolver $resolver): array
+    private function procesarEjecucion(FlujoEjecucion $ejecucion, StageOrderResolver $resolver, int &$remaining): array
     {
         $flujo = $ejecucion->flujo;
 
@@ -144,20 +156,23 @@ class CatchUpProspectosJob implements ShouldQueue
         $totalProcessed = 0;
         $totalDispatched = 0;
 
-        // 1. Process NEW prospects (ultima_etapa_node_id = NULL) - they need stage 1
-        $newProspectResult = $this->processNewProspects($ejecucion, $flujo->id, $firstStageId, $resolver);
+        // 1. Process NEW prospects (ultima_etapa_node_id = NULL) - they need stage 1.
+        //    Van primero: así un recién llegado (fecha_inicio reciente) se nutre antes
+        //    que el backlog viejo, sin quedar starve-ado por el drenado.
+        $newProspectResult = $this->processNewProspects($ejecucion, $flujo->id, $firstStageId, $resolver, $remaining);
         $totalProcessed += $newProspectResult['processed'];
         $totalDispatched += $newProspectResult['dispatched'];
 
         // 2. Process BEHIND prospects (at earlier stages than current)
-        // Only if execution has advanced past stage 1
-        if ($currentStageIndex > 0) {
+        // Only if execution has advanced past stage 1 y queda presupuesto en la corrida.
+        if ($currentStageIndex > 0 && $remaining > 0) {
             $behindResult = $this->processBehindProspects(
                 $ejecucion,
                 $flujo->id,
                 $stageOrder,
                 $currentStageIndex,
-                $resolver
+                $resolver,
+                $remaining
             );
             $totalProcessed += $behindResult['processed'];
             $totalDispatched += $behindResult['dispatched'];
@@ -178,57 +193,51 @@ class CatchUpProspectosJob implements ShouldQueue
         FlujoEjecucion $ejecucion,
         int $flujoId,
         string $firstStageId,
-        StageOrderResolver $resolver
+        StageOrderResolver $resolver,
+        int &$remaining
     ): array {
+        if ($remaining <= 0) {
+            return ['processed' => 0, 'dispatched' => 0];
+        }
+
         $flujo = $ejecucion->flujo;
         $stages = $flujo->config_structure['stages'] ?? [];
         $firstStage = collect($stages)->firstWhere('id', $firstStageId);
         $tiempoEspera = $firstStage['tiempo_espera'] ?? 0;
 
-        // Find prospects in this flow with NULL ultima_etapa_node_id
-        // Include fecha_inicio to calculate proper scheduling
-        $query = ProspectoEnFlujo::where('flujo_id', $flujoId)
+        // Gobernador: traemos a lo sumo $remaining por corrida, MÁS NUEVOS PRIMERO
+        // (fecha_inicio desc), para que un recién llegado se nutra antes que el backlog
+        // viejo y para no inundar el pipeline al activar/recuperar un flujo perpetuo.
+        $prospects = ProspectoEnFlujo::where('flujo_id', $flujoId)
             ->whereNull('ultima_etapa_node_id')
             ->where('completado', false)
-            ->where('cancelado', false);
+            ->where('cancelado', false)
+            ->orderByDesc('fecha_inicio')
+            ->limit($remaining)
+            ->get(['id', 'prospecto_id', 'fecha_inicio']);
 
-        $count = $query->count();
-
-        if ($count === 0) {
+        if ($prospects->isEmpty()) {
             return ['processed' => 0, 'dispatched' => 0];
         }
 
-        Log::info('CatchUpProspectosJob: Encontrados prospectos nuevos', [
+        $prospectoIds = $prospects->pluck('prospecto_id')->toArray();
+        $earliestFechaInicio = $prospects->min('fecha_inicio');
+        $fechaProgramada = \Carbon\Carbon::parse($earliestFechaInicio)->addDays($tiempoEspera);
+
+        Log::info('CatchUpProspectosJob: Procesando prospectos nuevos (gobernado)', [
             'ejecucion_id' => $ejecucion->id,
-            'count' => $count,
+            'count' => count($prospectoIds),
+            'budget_restante' => $remaining,
             'target_stage' => $firstStageId,
             'tiempo_espera_dias' => $tiempoEspera,
         ]);
 
-        $dispatched = 0;
-
-        // Process in chunks to avoid memory issues
-        $query->select(['id', 'prospecto_id', 'fecha_inicio'])
-            ->chunkById(self::CHUNK_SIZE, function (Collection $prospects) use (
-                $ejecucion,
-                $firstStageId,
-                $tiempoEspera,
-                $resolver,
-                &$dispatched
-            ) {
-                $prospectoIds = $prospects->pluck('prospecto_id')->toArray();
-
-                // Calculate fecha_programada based on earliest fecha_inicio in this batch + tiempo_espera
-                $earliestFechaInicio = $prospects->min('fecha_inicio');
-                $fechaProgramada = \Carbon\Carbon::parse($earliestFechaInicio)->addDays($tiempoEspera);
-
-                $this->scheduleStageForProspects($ejecucion, $firstStageId, $prospectoIds, $fechaProgramada, $resolver);
-                $dispatched++;
-            }, 'id');
+        $this->scheduleStageForProspects($ejecucion, $firstStageId, $prospectoIds, $fechaProgramada, $resolver);
+        $remaining -= count($prospectoIds);
 
         return [
-            'processed' => $count,
-            'dispatched' => $dispatched,
+            'processed' => count($prospectoIds),
+            'dispatched' => 1,
         ];
     }
 
@@ -244,7 +253,8 @@ class CatchUpProspectosJob implements ShouldQueue
         int $flujoId,
         array $stageOrder,
         int $currentStageIndex,
-        StageOrderResolver $resolver
+        StageOrderResolver $resolver,
+        int &$remaining
     ): array {
         $totalProcessed = 0;
         $totalDispatched = 0;
@@ -257,6 +267,11 @@ class CatchUpProspectosJob implements ShouldQueue
 
         // For each "behind" stage, find prospects at that stage and advance them
         foreach ($behindStages as $stageIndex => $stageNodeId) {
+            // Gobernador: si se acabó el presupuesto de la corrida, paramos.
+            if ($remaining <= 0) {
+                break;
+            }
+
             $nextStageId = $stageOrder[$stageIndex + 1] ?? null;
 
             if (! $nextStageId) {
@@ -267,49 +282,38 @@ class CatchUpProspectosJob implements ShouldQueue
             $nextStage = collect($stages)->firstWhere('id', $nextStageId);
             $tiempoEspera = $nextStage['tiempo_espera'] ?? 0;
 
-            // Find prospects at this stage - use updated_at to calculate timing
-            $query = ProspectoEnFlujo::where('flujo_id', $flujoId)
+            // A lo sumo $remaining por corrida, MÁS RECIENTES PRIMERO (updated_at desc).
+            // updated_at se setea al actualizar ultima_etapa_node_id tras un envío exitoso.
+            $prospects = ProspectoEnFlujo::where('flujo_id', $flujoId)
                 ->where('ultima_etapa_node_id', $stageNodeId)
                 ->where('completado', false)
-                ->where('cancelado', false);
+                ->where('cancelado', false)
+                ->orderByDesc('updated_at')
+                ->limit($remaining)
+                ->get(['id', 'prospecto_id', 'updated_at']);
 
-            $count = $query->count();
-
-            if ($count === 0) {
+            if ($prospects->isEmpty()) {
                 continue;
             }
 
-            Log::info('CatchUpProspectosJob: Encontrados prospectos rezagados', [
+            $prospectoIds = $prospects->pluck('prospecto_id')->toArray();
+            $latestCompletion = $prospects->max('updated_at');
+            $fechaProgramada = \Carbon\Carbon::parse($latestCompletion)->addDays($tiempoEspera);
+
+            Log::info('CatchUpProspectosJob: Procesando prospectos rezagados (gobernado)', [
                 'ejecucion_id' => $ejecucion->id,
                 'current_stage' => $stageNodeId,
                 'next_stage' => $nextStageId,
-                'count' => $count,
+                'count' => count($prospectoIds),
+                'budget_restante' => $remaining,
                 'tiempo_espera_dias' => $tiempoEspera,
             ]);
 
-            // Process in chunks
-            $dispatchedForStage = 0;
-            $query->select(['id', 'prospecto_id', 'updated_at'])
-                ->chunkById(self::CHUNK_SIZE, function (Collection $prospects) use (
-                    $ejecucion,
-                    $nextStageId,
-                    $tiempoEspera,
-                    $resolver,
-                    &$dispatchedForStage
-                ) {
-                    $prospectoIds = $prospects->pluck('prospecto_id')->toArray();
+            $this->scheduleStageForProspects($ejecucion, $nextStageId, $prospectoIds, $fechaProgramada, $resolver);
+            $remaining -= count($prospectoIds);
 
-                    // Calculate fecha_programada based on when they completed the previous stage
-                    // updated_at is set when ultima_etapa_node_id is updated after successful send
-                    $latestCompletion = $prospects->max('updated_at');
-                    $fechaProgramada = \Carbon\Carbon::parse($latestCompletion)->addDays($tiempoEspera);
-
-                    $this->scheduleStageForProspects($ejecucion, $nextStageId, $prospectoIds, $fechaProgramada, $resolver);
-                    $dispatchedForStage++;
-                }, 'id');
-
-            $totalProcessed += $count;
-            $totalDispatched += $dispatchedForStage;
+            $totalProcessed += count($prospectoIds);
+            $totalDispatched++;
         }
 
         return [
