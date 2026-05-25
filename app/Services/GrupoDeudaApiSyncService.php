@@ -110,8 +110,8 @@ class GrupoDeudaApiSyncService
             if (empty($data)) {
                 Log::info('GrupoDeudaApiSyncService: No hay contratos nuevos');
 
-                // Igual marcar como sincronizado
-                $source->markAsSynced(0);
+                // Igual marcar como sincronizado, hasta el fin de la ventana fetcheada
+                $source->markAsSynced(0, $hasta);
 
                 return $this->emptyResult();
             }
@@ -119,8 +119,9 @@ class GrupoDeudaApiSyncService
             // 5. Procesar los datos en un único lote
             $resultado = $this->procesarDatos($data, $source, $userId ?? 1);
 
-            // 6. Marcar la fuente como sincronizada
-            $source->markAsSynced($resultado['total_prospectos']);
+            // 6. Marcar la fuente como sincronizada hasta el `hasta` del fetch (no un now()
+            //    post-proceso) para no dejar grieta entre corridas incrementales.
+            $source->markAsSynced($resultado['total_prospectos'], $hasta);
 
             Log::info('GrupoDeudaApiSyncService: Sincronización completada', [
                 'source' => $source->name,

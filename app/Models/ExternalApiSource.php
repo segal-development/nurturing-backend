@@ -118,10 +118,13 @@ class ExternalApiSource extends Model
     /**
      * Marca la fuente como sincronizada exitosamente.
      */
-    public function markAsSynced(int $count): void
+    public function markAsSynced(int $count, ?\DateTimeInterface $syncedUpTo = null): void
     {
         $this->update([
-            'last_synced_at' => now(),
+            // Usar el `hasta` con que se hizo el fetch, NO un now() fresco post-proceso:
+            // si el procesamiento tarda, un now() deja una grieta (los registros creados
+            // durante el proceso quedan fuera de esta corrida y de la próxima). Ver sync().
+            'last_synced_at' => $syncedUpTo ?? now(),
             'last_sync_count' => $count,
             'last_sync_error' => null,
         ]);
@@ -132,8 +135,11 @@ class ExternalApiSource extends Model
      */
     public function markAsFailed(string $error): void
     {
+        // NO avanzar last_synced_at en un fallo: el fetch lanza la excepción ANTES de
+        // traer datos, así que avanzar el puntero saltearía esa ventana PARA SIEMPRE
+        // (cada 403 perdía los contratos de esa ventana). La próxima corrida reintenta
+        // la misma ventana intacta.
         $this->update([
-            'last_synced_at' => now(),
             'last_sync_error' => $error,
         ]);
     }
