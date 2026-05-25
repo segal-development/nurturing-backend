@@ -72,27 +72,11 @@ class CatchUpProspectosJob implements ShouldQueue
             'ejecucion_ids' => $ejecuciones->pluck('id')->toArray(),
         ]);
 
-        // Gobernador de tasa: tope GLOBAL de prospectos por corrida, compartido entre
-        // todas las ejecuciones perpetuas. Evita el flood al marcar un flujo perpetuo
-        // con backlog grande; el backlog drena a esta tasa (cada 5 min) y el rate-limiter
-        // de envíos pacea la entrega real. Tuneable vía NURTURING_CATCHUP_MAX_PER_RUN.
-        $maxPerRun = (int) config('nurturing.catchup.max_prospectos_per_run', 50);
-        if ($maxPerRun <= 0) {
-            $maxPerRun = 50;
-        }
-        $remaining = $maxPerRun;
-
         $totalProcessed = 0;
         $totalDispatched = 0;
 
         foreach ($ejecuciones as $ejecucion) {
-            if ($remaining <= 0) {
-                Log::info('CatchUpProspectosJob: Tope por corrida alcanzado, corto el resto', [
-                    'max_per_run' => $maxPerRun,
-                ]);
-                break;
-            }
-            $result = $this->procesarEjecucion($ejecucion, $resolver, $remaining);
+            $result = $this->procesarEjecucion($ejecucion, $resolver);
             $totalProcessed += $result['processed'];
             $totalDispatched += $result['dispatched'];
         }
@@ -100,8 +84,6 @@ class CatchUpProspectosJob implements ShouldQueue
         Log::info('CatchUpProspectosJob: Completado', [
             'total_processed' => $totalProcessed,
             'total_dispatched' => $totalDispatched,
-            'max_per_run' => $maxPerRun,
-            'budget_restante' => $remaining,
         ]);
     }
 
@@ -110,7 +92,7 @@ class CatchUpProspectosJob implements ShouldQueue
      *
      * @return array{processed: int, dispatched: int}
      */
-    private function procesarEjecucion(FlujoEjecucion $ejecucion, StageOrderResolver $resolver, int &$remaining): array
+    private function procesarEjecucion(FlujoEjecucion $ejecucion, StageOrderResolver $resolver): array
     {
         $flujo = $ejecucion->flujo;
 
@@ -155,6 +137,15 @@ class CatchUpProspectosJob implements ShouldQueue
 
         $totalProcessed = 0;
         $totalDispatched = 0;
+
+        // Gobernador de tasa POR FLUJO: esta ejecución procesa a lo sumo N prospectos
+        // por corrida. Evita el flood al activar un flujo con backlog grande SIN que un
+        // flujo gigante (ej. SEGMENTO 1) starve-e a los chicos (onboarding 48/49). El
+        // rate-limiter de envíos sigue siendo el tope GLOBAL de entrega real.
+        $remaining = (int) config('nurturing.catchup.max_prospectos_per_run', 50);
+        if ($remaining <= 0) {
+            $remaining = 50;
+        }
 
         // 1. Process NEW prospects (ultima_etapa_node_id = NULL) - they need stage 1.
         //    Van primero: así un recién llegado (fecha_inicio reciente) se nutre antes
