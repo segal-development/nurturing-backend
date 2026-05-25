@@ -122,6 +122,7 @@ class MetricasService
                 'nuevos_prospectos' => $this->getNuevosProspectosPorDia($dias, $flujoId, $fechaInicio, $fechaFin),
                 'clientes_ingresados' => $this->getClientesIngresados($dias, $fechaInicio, $fechaFin),
                 'problemas_envio' => $this->getProblemasEnvio($dias, $flujoId, $fechaInicio, $fechaFin),
+                'reconciliacion_sysgal' => $this->getReconciliacionSysgal(),
                 'envios_hoy' => $this->getEnviosHoyConFallback($flujoId),
                 'generado_at' => now()->toIso8601String(),
             ];
@@ -902,6 +903,21 @@ class MetricasService
         $cacheKey = "metricas:clientes_ingresados:{$dias}".$this->rangoSuffix($fechaInicio, $fechaFin);
 
         return Cache::remember($cacheKey, self::CACHE_TTL, fn () => $this->computeClientesIngresados($dias, $fechaInicio, $fechaFin));
+    }
+
+    /**
+     * Resultado cacheado del reconcile SYSGAL (contratos + clientes-ingreso) del mes.
+     *
+     * Lo refresca el comando `nurturing:cache-reconciliacion` (scheduler, en la VM),
+     * porque el reconcile pega en vivo a SYSGAL y no debe correr en cada request.
+     * Devuelve null si todavía no se computó. NO depende del flujo: es una verificación
+     * global SYSGAL ↔ ingresados (clave de cache: metricas:reconciliacion-sysgal).
+     *
+     * @return array<string, mixed>|null
+     */
+    public function getReconciliacionSysgal(): ?array
+    {
+        return Cache::get('metricas:reconciliacion-sysgal');
     }
 
     /**

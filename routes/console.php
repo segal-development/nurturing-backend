@@ -298,6 +298,20 @@ Schedule::command('sync:grupo-deuda --endpoint=cuotas-vencidas')
     });
 
 // ============================================================================
+// CACHE DE RECONCILIACIÓN SYSGAL (para el dashboard)
+// Cada hora a los :40 (lejos de los syncs :00/:05/:15/:25 para no colisionar).
+// Corre el reconcile contratos + clientes-ingreso del mes y deja el resumen en
+// cache; el dashboard lo lee SIN pegarle en vivo a SYSGAL. Solo corre en la VM.
+// ============================================================================
+Schedule::command('nurturing:cache-reconciliacion')
+    ->hourlyAt(40)
+    ->name('cache-reconciliacion-sysgal')
+    ->withoutOverlapping()
+    ->onFailure(function () {
+        Log::error('Scheduler: Falló el cache de reconciliación SYSGAL');
+    });
+
+// ============================================================================
 // SINCRONIZACIÓN SEMANAL DE APIs EXTERNAS (Informes Comerciales, Sysgal, etc.)
 // Todos los viernes a las 6:00 AM sincroniza prospectos desde APIs externas.
 // Usa sync incremental: solo trae registros nuevos desde el último sync.
