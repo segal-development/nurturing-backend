@@ -31,15 +31,18 @@ class CacheReconciliacionSysgalCommand extends Command
 
     public function handle(): int
     {
-        $mesDesde = now()->startOfMonth()->toDateString();
         $hoyDesde = now()->toDateString();
+        $ayerDesde = now()->subDay()->toDateString();
+        $mesDesde = now()->startOfMonth()->toDateString();
 
         $resultado = [];
         foreach (['contratos', 'clientes-ingreso'] as $endpoint) {
-            $mes = $this->reconcile($endpoint, $mesDesde);
-            $hoy = $this->reconcile($endpoint, $hoyDesde);
+            $periodos = array_filter([
+                'hoy' => $this->reconcile($endpoint, $hoyDesde),
+                'ayer' => $this->reconcile($endpoint, $ayerDesde, $ayerDesde), // ventana completa de ayer
+                'mes' => $this->reconcile($endpoint, $mesDesde),
+            ], fn ($v) => $v !== null);
 
-            $periodos = array_filter(['mes' => $mes, 'hoy' => $hoy], fn ($v) => $v !== null);
             if (! empty($periodos)) {
                 $resultado[$endpoint] = $periodos;
             }
@@ -68,14 +71,19 @@ class CacheReconciliacionSysgalCommand extends Command
      *
      * @return array<string, mixed>|null  El resumen, o null si falló/no parseó.
      */
-    private function reconcile(string $endpoint, string $desdeDate): ?array
+    private function reconcile(string $endpoint, string $desdeDate, ?string $hastaDate = null): ?array
     {
         try {
-            Artisan::call('nurturing:reconcile-sysgal', [
+            $params = [
                 '--endpoint' => $endpoint,
                 '--desde' => $desdeDate,
                 '--json' => true,
-            ]);
+            ];
+            if ($hastaDate !== null) {
+                $params['--hasta'] = $hastaDate;
+            }
+
+            Artisan::call('nurturing:reconcile-sysgal', $params);
 
             $json = json_decode(trim(Artisan::output()), true);
 
