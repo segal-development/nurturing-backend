@@ -171,6 +171,10 @@ return [
         // Hora del resumen diario (formato 24h)
         'daily_summary_hour' => (int) env('ALERT_DAILY_SUMMARY_HOUR', 8),
 
+        // Aviso de datos a corregir en SYSGAL (email malo / sin email) → destinatarios
+        'sysgal_data_to' => env('SYSGAL_DATA_ALERT_TO', 'dchavez@segal.cl'),
+        'sysgal_data_cc' => env('SYSGAL_DATA_ALERT_CC', 'csalinas@segal.cl'),
+
         // Umbral de tasa de error para warning (porcentaje)
         'error_rate_threshold' => (int) env('ALERT_ERROR_RATE_THRESHOLD', 5),
 

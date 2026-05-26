@@ -176,6 +176,24 @@ Schedule::job(new \App\Jobs\SincronizarDesuscripcionesAthenaJob(7))
     });
 
 // ============================================================================
+// AVISO DE DATOS A CORREGIR EN SYSGAL
+// Diario 08:00. Manda un email (a config envios.alerts.sysgal_data_to, CC sysgal_data_cc)
+// con los prospectos NUEVOS que tienen email malo (sin email / inválido) para corregir en
+// SYSGAL. Modo "solo nuevos": no re-avisa. No consulta SYSGAL (lee datos locales), así que
+// corre donde corra el scheduler.
+// ============================================================================
+Schedule::command('sysgal:notificar-datos-problema')
+    ->dailyAt('08:00')
+    ->name('sysgal:notificar-datos-problema')
+    ->withoutOverlapping()
+    ->onSuccess(function () {
+        Log::info('Scheduler: aviso de datos a corregir en SYSGAL ejecutado');
+    })
+    ->onFailure(function () {
+        Log::error('Scheduler: falló el aviso de datos a corregir en SYSGAL');
+    });
+
+// ============================================================================
 // RESUMEN DIARIO DE MÉTRICAS
 // DISABLED: La info ya está disponible en /metricas y /costos del dashboard.
 // Si se necesita reactivar, descomentar el bloque de abajo.
