@@ -4,10 +4,12 @@
 # =============================================================================
 #
 # Triggers:
-#   - Push a 'staging' (paths: app/Jobs/**, app/Services/**, config/**)
+#   - Push a 'staging' (paths: app/Jobs, app/Services, app/Console, app/Events,
+#     app/Listeners, app/Mail, app/Models, config, routes/console.php, resources/views/emails)
 #   - Manual dispatch
 #
-# La VM nurturing-worker corre los queue workers para envío de SMS/Email
+# La VM corre los queue workers (envío SMS/Email) Y el scheduler (crontab schedule:run),
+# por eso necesita también app/Console (comandos) y routes/console.php (definición del schedule).
 # usando Supervisor. Este workflow:
 #   1. Conecta via SSH
 #   2. Hace git pull
@@ -26,9 +28,14 @@ on:
     paths:
       - 'app/Jobs/**'
       - 'app/Services/**'
+      - 'app/Console/**'
       - 'app/Events/**'
       - 'app/Listeners/**'
+      - 'app/Mail/**'
+      - 'app/Models/**'
       - 'config/**'
+      - 'routes/console.php'
+      - 'resources/views/emails/**'
       - '.github/workflows/deploy-vm-workers.yml'
   workflow_dispatch:
     inputs:
