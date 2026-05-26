@@ -14,8 +14,9 @@ use Illuminate\Support\Facades\DB;
  * un rango de fechas arbitrario que el usuario elige en el dashboard.
  *
  * Por qué un job (y no la API directo): la API/Cloud Run NO está whitelisteada en SYSGAL.
- * Solo la VM puede consultar SYSGAL. Este job se despacha a la cola 'default', que SOLO
- * procesa la VM (whitelisteada), así que la llamada a SYSGAL funciona. El resultado
+ * Solo la VM puede consultar SYSGAL. Este job se despacha a la cola 'sysgal', que SOLO
+ * procesa la VM (whitelisteada). OJO: 'default' es una cola COMPARTIDA VM+Cloud Run, así que
+ * NO sirve para jobs que llaman a SYSGAL (Cloud Run los tomaría y daría 403). El resultado
  * (conteo + CSV) se deja en la tabla `cache` con key literal 'export-sysgal:{token}',
  * compartida con la API (Cloud SQL), que la lee para el status y la descarga.
  */
@@ -35,7 +36,7 @@ class GenerarExportSysgalJob implements ShouldQueue
         public string $desde,  // Y-m-d
         public string $hasta,  // Y-m-d
     ) {
-        $this->onQueue('default'); // la VM procesa 'default' (única whitelisteada en SYSGAL)
+        $this->onQueue('sysgal'); // cola dedicada que SOLO procesa la VM (whitelisteada en SYSGAL)
     }
 
     public function handle(GrupoDeudaApiSyncService $svc): void
