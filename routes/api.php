@@ -225,6 +225,14 @@ Route::middleware(['auth:sanctum', 'throttle:api'])->group(function () {
         Route::post('/refresh', [MetricasController::class, 'refresh']);
     });
 
+    // Export SYSGAL on-demand por rango (el CSV lo genera la VM). Throttle más alto
+    // que el grupo 'heavy' porque el front poll-ea el estado cada pocos segundos.
+    Route::prefix('metricas')->middleware('throttle:60,1')->group(function () {
+        Route::post('/export-sysgal', [MetricasController::class, 'exportSysgal']);
+        Route::get('/export-sysgal/{token}', [MetricasController::class, 'exportSysgalStatus']);
+        Route::get('/export-sysgal/{token}/download', [MetricasController::class, 'exportSysgalDownload']);
+    });
+
     // Rutas de Admin - Fuentes Externas de Prospectos
     Route::prefix('admin/external-sources')->group(function () {
         Route::get('/', [ExternalApiSourceController::class, 'index']);
