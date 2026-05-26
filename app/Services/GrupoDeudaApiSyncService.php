@@ -724,6 +724,67 @@ class GrupoDeudaApiSyncService
                 }
             }
         }
+
+        // Cierra el loop "corregir en SYSGAL": si llegó un email nuevo y válido para un
+        // prospecto que estaba marcado como inválido, le sacamos la marca para que CatchUp
+        // lo retome y reanude los envíos del flujo.
+        $this->rehabilitarEmailsCorregidos($batch);
+    }
+
+    /**
+     * Rehabilita los emails de un batch que estaban marcados como inválidos y ahora traen un
+     * email VÁLIDO (mismo criterio que EmailValidationService, el que los marca al enviar). Así
+     * no rehabilitamos algo que el envío volvería a marcar inválido (evita un loop).
+     *
+     * Sin esto, corregir el email en SYSGAL no servía de nada: el sync actualizaba la columna
+     * `email` pero dejaba `email_invalido = true`, y todos los reenvíos (CatchUp, EnviarEtapa)
+     * filtran por `email_invalido = false`, dejando al prospecto parado para siempre.
+     *
+     * @param  array<int, array<string, mixed>>  $batch
+     */
+    private function rehabilitarEmailsCorregidos(array $batch): void
+    {
+        $ids = collect($batch)
+            ->filter(fn ($r) => ! empty($r['email'] ?? null))
+            ->pluck('id')
+            ->all();
+
+        if (empty($ids)) {
+            return;
+        }
+
+        // De los recién actualizados, los que SIGUEN marcados inválidos (ya con su email nuevo).
+        $marcados = DB::table('prospectos')
+            ->whereIn('id', $ids)
+            ->where('email_invalido', true)
+            ->whereNotNull('email')
+            ->where('email', '!=', '')
+            ->pluck('email', 'id');
+
+        if ($marcados->isEmpty()) {
+            return;
+        }
+
+        $validator = app(EmailValidationService::class);
+        $aRehabilitar = $marcados
+            ->filter(fn ($email) => ($validator->validar((string) $email)['valid'] ?? false))
+            ->keys()
+            ->all();
+
+        if (empty($aRehabilitar)) {
+            return;
+        }
+
+        DB::table('prospectos')->whereIn('id', $aRehabilitar)->update([
+            'email_invalido' => false,
+            'email_invalido_motivo' => null,
+            'email_invalido_at' => null,
+            'updated_at' => now(),
+        ]);
+
+        Log::info('GrupoDeudaApiSyncService: emails rehabilitados tras corrección en origen', [
+            'count' => count($aRehabilitar),
+        ]);
     }
 
     /**
