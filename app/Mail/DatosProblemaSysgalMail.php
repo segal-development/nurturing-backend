@@ -29,7 +29,7 @@ class DatosProblemaSysgalMail extends Mailable
     public function envelope(): Envelope
     {
         return new Envelope(
-            subject: "Datos a corregir en SYSGAL — {$this->cantidad} cliente(s) con problema de contacto",
+            subject: "Emails a corregir en SYSGAL — {$this->cantidad} cliente(s) con email mal escrito",
         );
     }
 

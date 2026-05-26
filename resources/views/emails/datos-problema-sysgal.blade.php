@@ -11,8 +11,8 @@
 
         <p>
             Los siguientes <strong>{{ $cantidad }}</strong> cliente(s) entraron al flujo de nurturing
-            pero tienen el dato de contacto mal y <strong>no se les puede enviar</strong>. Hay que
-            corregirlo en <strong>SYSGAL</strong>:
+            pero tienen el <strong>email mal escrito</strong> y <strong>no se les puede enviar</strong>.
+            Hay que corregirlo en <strong>SYSGAL</strong>:
         </p>
 
         <table cellpadding="8" cellspacing="0" style="border-collapse:collapse; width:100%; margin:16px 0;">
