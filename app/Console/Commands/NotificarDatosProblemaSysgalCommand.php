@@ -28,20 +28,26 @@ class NotificarDatosProblemaSysgalCommand extends Command
     public function handle(): int
     {
         $dias = (int) ($this->option('dias') ?: config('envios.alerts.sysgal_data_dias', 7));
-        $items = $this->buscarNuevos($dias);
+        $todos = $this->buscarNuevos($dias);
 
-        if ($items->isEmpty()) {
-            $this->info('No hay clientes nuevos con problema de email. Nada que avisar.');
+        if ($todos->isEmpty()) {
+            $this->info('No hay clientes nuevos con email inválido. Nada que avisar.');
 
             return self::SUCCESS;
         }
+
+        // Para el correo: una persona (RUT) una sola vez. Igual registramos TODOS los ids
+        // (incluidos registros duplicados del mismo RUT), si no, el duplicado reaparecería mañana.
+        $mostrar = $todos
+            ->unique(fn ($it) => filled($it['rut']) ? 'rut:'.trim((string) $it['rut']) : 'id:'.$it['prospecto_id'])
+            ->values();
 
         $to = config('envios.alerts.sysgal_data_to', 'dchavez@segal.cl');
         $cc = config('envios.alerts.sysgal_data_cc', 'csalinas@segal.cl');
 
         if ($this->option('dry-run')) {
-            $this->warn("DRY-RUN ({$dias}d): se enviaría a {$to} (CC {$cc}) con {$items->count()} cliente(s):");
-            foreach ($items as $it) {
+            $this->warn("DRY-RUN ({$dias}d): se enviaría a {$to} (CC {$cc}) con {$mostrar->count()} persona(s):");
+            foreach ($mostrar as $it) {
                 $detalle = $it['detalle'] ? " ({$it['detalle']})" : '';
                 $this->line("  - {$it['nombre']} | RUT {$it['rut']} | {$it['motivo']}{$detalle}");
             }
@@ -50,11 +56,11 @@ class NotificarDatosProblemaSysgalCommand extends Command
             return self::SUCCESS;
         }
 
-        Mail::to($to)->cc($cc)->send(new DatosProblemaSysgalMail($items->all(), $items->count()));
+        Mail::to($to)->cc($cc)->send(new DatosProblemaSysgalMail($mostrar->all(), $mostrar->count()));
 
         $now = now();
         DB::table('sysgal_dato_notificaciones')->insertOrIgnore(
-            $items->map(fn ($it) => [
+            $todos->map(fn ($it) => [
                 'prospecto_id' => $it['prospecto_id'],
                 'motivo' => $it['motivo_key'],
                 'email_malo' => $it['email_malo'],
@@ -64,7 +70,7 @@ class NotificarDatosProblemaSysgalCommand extends Command
             ])->all()
         );
 
-        $this->info("Aviso enviado a {$to} (CC {$cc}) con {$items->count()} cliente(s).");
+        $this->info("Aviso enviado a {$to} (CC {$cc}): {$mostrar->count()} persona(s), {$todos->count()} registro(s) marcados.");
 
         return self::SUCCESS;
     }
