@@ -4,51 +4,44 @@ namespace App\Console\Commands;
 
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Artisan;
-use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Corre el reconcile de SYSGAL (contratos + clientes-ingreso) del mes en curso y
- * cachea el resumen para que el dashboard lo muestre SIN pegarle en vivo a SYSGAL.
+ * Reconcilia SYSGAL (contratos + clientes-ingreso) HOY y mes en curso, y deja el
+ * resumen en la tabla `cache` (Cloud SQL, compartida VM↔API) para que el dashboard lo
+ * lea sin pegarle en vivo a SYSGAL.
  *
- * Por qué cachear: el reconcile hace llamadas live a la API de SYSGAL (solo desde la
- * VM whitelisteada). Correrlo en cada carga del panel la saturaría y dispararía 403.
- * Este comando lo corre en background (scheduler) y deja el resultado listo en cache.
- *
- * El dashboard lee la cache via MetricasService::getReconciliacionSysgal().
+ * Por qué tabla `cache` con KEY LITERAL (y no la facade Cache):
+ * - El reconcile hace llamadas live a SYSGAL (solo desde la VM whitelisteada), así que
+ *   no puede correr por request; lo corre el scheduler y deja el resultado listo.
+ * - La VM y la API/Cloud Run NO comparten Redis (la VM usa Redis local). La DB sí.
+ * - Usamos una key LITERAL ('reconciliacion-sysgal', sin el prefijo de Laravel) para que
+ *   VM y API lean/escriban exactamente la misma fila, sin depender de que el cache.prefix
+ *   coincida entre los dos servicios (que es lo que rompía la lectura antes).
  */
 class CacheReconciliacionSysgalCommand extends Command
 {
     protected $signature = 'nurturing:cache-reconciliacion';
 
-    protected $description = 'Corre el reconcile SYSGAL (contratos + clientes-ingreso) del mes y cachea el resumen para el dashboard';
+    protected $description = 'Reconcilia SYSGAL (contratos + clientes-ingreso) HOY y mes, y lo guarda en la tabla cache para el dashboard';
 
-    public const CACHE_KEY = 'metricas:reconciliacion-sysgal';
+    /** Key LITERAL en la tabla cache (sin prefijo Laravel). La lee MetricasService. */
+    public const CACHE_KEY = 'reconciliacion-sysgal';
 
     public function handle(): int
     {
-        $desde = now()->startOfMonth()->toDateString();
+        $mesDesde = now()->startOfMonth()->toDateString();
+        $hoyDesde = now()->toDateString();
+
         $resultado = [];
-
         foreach (['contratos', 'clientes-ingreso'] as $endpoint) {
-            try {
-                Artisan::call('nurturing:reconcile-sysgal', [
-                    '--endpoint' => $endpoint,
-                    '--desde' => $desde,
-                    '--json' => true,
-                ]);
+            $mes = $this->reconcile($endpoint, $mesDesde);
+            $hoy = $this->reconcile($endpoint, $hoyDesde);
 
-                $json = json_decode(trim(Artisan::output()), true);
-
-                if (is_array($json) && isset($json['sysgal_total'])) {
-                    $resultado[$endpoint] = $json;
-                } else {
-                    $this->warn("Reconcile '{$endpoint}': salida no parseable, se conserva el cache previo de este endpoint.");
-                }
-            } catch (\Throwable $e) {
-                Log::warning('CacheReconciliacionSysgal: error reconciliando '.$endpoint, [
-                    'error' => $e->getMessage(),
-                ]);
+            $periodos = array_filter(['mes' => $mes, 'hoy' => $hoy], fn ($v) => $v !== null);
+            if (! empty($periodos)) {
+                $resultado[$endpoint] = $periodos;
             }
         }
 
@@ -58,23 +51,48 @@ class CacheReconciliacionSysgalCommand extends Command
             return self::FAILURE;
         }
 
-        // Store en BASE DE DATOS, NO en el Redis default: la VM (que corre este comando)
-        // y la API/Cloud Run NO comparten Redis (la VM usa Redis local 127.0.0.1). La DB
-        // (Cloud SQL) SÍ es compartida, así que el dashboard de la API puede leer lo que
-        // escribe la VM acá.
-        $store = Cache::store('database');
+        $payload = $resultado + ['generado_at' => now()->toIso8601String()];
 
-        // Merge sobre lo previo: si un endpoint falló, conserva su último valor bueno.
-        $payload = array_merge(
-            (array) $store->get(self::CACHE_KEY, []),
-            $resultado,
-            ['generado_at' => now()->toIso8601String(), 'desde' => $desde]
+        DB::table('cache')->updateOrInsert(
+            ['key' => self::CACHE_KEY],
+            ['value' => json_encode($payload), 'expiration' => now()->addHours(12)->timestamp]
         );
 
-        $store->put(self::CACHE_KEY, $payload, now()->addHours(12));
-
-        $this->info('Reconciliación SYSGAL cacheada para: '.implode(', ', array_keys($resultado)));
+        $this->info('Reconciliación SYSGAL (hoy + mes) cacheada para: '.implode(', ', array_keys($resultado)));
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Corre el reconcile de un endpoint desde $desdeDate (Y-m-d) hasta ahora.
+     *
+     * @return array<string, mixed>|null  El resumen, o null si falló/no parseó.
+     */
+    private function reconcile(string $endpoint, string $desdeDate): ?array
+    {
+        try {
+            Artisan::call('nurturing:reconcile-sysgal', [
+                '--endpoint' => $endpoint,
+                '--desde' => $desdeDate,
+                '--json' => true,
+            ]);
+
+            $json = json_decode(trim(Artisan::output()), true);
+
+            if (is_array($json) && isset($json['sysgal_total'])) {
+                return $json;
+            }
+
+            $this->warn("Reconcile '{$endpoint}' desde {$desdeDate}: salida no parseable.");
+
+            return null;
+        } catch (\Throwable $e) {
+            Log::warning('CacheReconciliacionSysgal: error reconciliando '.$endpoint, [
+                'desde' => $desdeDate,
+                'error' => $e->getMessage(),
+            ]);
+
+            return null;
+        }
     }
 }

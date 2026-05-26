@@ -917,9 +917,20 @@ class MetricasService
      */
     public function getReconciliacionSysgal(): ?array
     {
-        // Store en base de datos (NO Redis): la VM que computa el reconcile y la API/Cloud
-        // Run NO comparten Redis; la DB (Cloud SQL) sí. Lo escribe nurturing:cache-reconciliacion.
-        return Cache::store('database')->get('metricas:reconciliacion-sysgal');
+        // Lee la tabla `cache` con KEY LITERAL (sin prefijo de Laravel): la VM que computa
+        // el reconcile y la API/Cloud Run NO comparten Redis, y el cache.prefix puede diferir
+        // entre servicios. Una key literal en la DB compartida garantiza que se crucen.
+        // La escribe nurturing:cache-reconciliacion (scheduler en la VM).
+        $row = DB::table('cache')->where('key', 'reconciliacion-sysgal')->first();
+
+        if (! $row) {
+            return null;
+        }
+        if (isset($row->expiration) && (int) $row->expiration < now()->timestamp) {
+            return null;
+        }
+
+        return json_decode($row->value, true) ?: null;
     }
 
     /**
