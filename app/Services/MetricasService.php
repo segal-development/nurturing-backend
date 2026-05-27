@@ -121,6 +121,12 @@ class MetricasService
                 'tendencias' => $this->getTendencias($dias, $flujoId, $fechaInicio, $fechaFin),
                 'nuevos_prospectos' => $this->getNuevosProspectosPorDia($dias, $flujoId, $fechaInicio, $fechaFin),
                 'clientes_ingresados' => $this->getClientesIngresados($dias, $flujoId, $fechaInicio, $fechaFin),
+                // Embudo por COHORTE (solo por flujo): de los que ENTRARON en la ventana, cuántos
+                // recibieron y abrieron. Así el embudo nunca crece (recibieron <= entraron) — a
+                // diferencia de los KPI de período, que cuentan envíos de cualquier cohorte.
+                'embudo' => $flujoId !== null
+                    ? $this->getEmbudoCohorte($dias, $flujoId, $fechaInicio, $fechaFin)
+                    : null,
                 'problemas_envio' => $this->getProblemasEnvio($dias, $flujoId, $fechaInicio, $fechaFin),
                 'reconciliacion_sysgal' => $this->getReconciliacionSysgal(),
                 'envios_hoy' => $this->getEnviosHoyConFallback($flujoId),
@@ -887,6 +893,64 @@ class MetricasService
             'promedio_diario' => $promedioDiario,
             'por_dia' => $porDiaCompleto,
             'por_flujo' => $porFlujo,
+        ];
+    }
+
+    /**
+     * Embudo por COHORTE para un flujo: de los prospectos que ENTRARON al flujo en la ventana,
+     * cuántos RECIBIERON un email exitoso y cuántos ABRIERON. Es MONÓTONO (entraron >= recibieron
+     * >= abrieron) porque sigue a la MISMA gente — a diferencia de los KPI de período, que cuentan
+     * envíos de cualquier cohorte (eso hacía que "recibieron" superara a "entraron" en los drips).
+     */
+    private function getEmbudoCohorte(int $dias, int $flujoId, ?string $fechaInicio, ?string $fechaFin): array
+    {
+        [$desde, $hasta] = $this->resolverRango($dias, $fechaInicio, $fechaFin);
+
+        // Cohorte: prospectos que entraron a ESTE flujo en la ventana (mismo criterio que
+        // getClientesIngresados: prospecto_en_flujo por fecha_inicio, no cancelados).
+        $cohorte = DB::table('prospecto_en_flujo')
+            ->where('flujo_id', $flujoId)
+            ->where('cancelado', false)
+            ->whereBetween('fecha_inicio', [$desde, $hasta])
+            ->select('prospecto_id');
+
+        $entraron = (clone $cohorte)->distinct()->count('prospecto_id');
+
+        if ($entraron === 0) {
+            return ['entraron' => 0, 'recibieron' => 0, 'abrieron' => 0, 'con_problema' => 0];
+        }
+
+        // Recibieron: de la cohorte, cuántos tienen >=1 envío exitoso en ESTE flujo.
+        $recibieron = DB::table('envios')
+            ->where('flujo_id', $flujoId)
+            ->whereIn('estado', ['enviado', 'entregado', 'abierto', 'clickeado'])
+            ->whereIn('prospecto_id', (clone $cohorte))
+            ->distinct()
+            ->count('prospecto_id');
+
+        // Abrieron: de la cohorte, cuántos abrieron al menos un email de ESTE flujo.
+        $abrieron = DB::table('email_aperturas as ea')
+            ->join('envios as e', 'e.id', '=', 'ea.envio_id')
+            ->where('e.flujo_id', $flujoId)
+            ->whereIn('e.prospecto_id', (clone $cohorte))
+            ->distinct()
+            ->count('e.prospecto_id');
+
+        // Con problema de dato: de la cohorte, cuántos NO pueden recibir (email inválido o sin email).
+        $conProblema = DB::table('prospectos')
+            ->whereIn('id', (clone $cohorte))
+            ->where(function ($q) {
+                $q->where('email_invalido', true)
+                    ->orWhereNull('email')
+                    ->orWhere('email', '');
+            })
+            ->count();
+
+        return [
+            'entraron' => $entraron,
+            'recibieron' => $recibieron,
+            'abrieron' => $abrieron,
+            'con_problema' => $conProblema,
         ];
     }
 
