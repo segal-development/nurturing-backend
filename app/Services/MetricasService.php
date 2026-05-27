@@ -906,13 +906,30 @@ class MetricasService
     {
         [$desde, $hasta] = $this->resolverRango($dias, $fechaInicio, $fechaFin);
 
-        // Cohorte: prospectos que entraron a ESTE flujo en la ventana (mismo criterio que
-        // getClientesIngresados: prospecto_en_flujo por fecha_inicio, no cancelados).
-        $cohorte = DB::table('prospecto_en_flujo')
-            ->where('flujo_id', $flujoId)
-            ->where('cancelado', false)
-            ->whereBetween('fecha_inicio', [$desde, $hasta])
-            ->select('prospecto_id');
+        // Onboarding "Clientes por Fecha Ingreso": el embudo se ancla en la FECHA DE INGRESO real
+        // (columna fecha_ingreso), NO en fecha_inicio (cuándo entró al flujo). Para el día de contacto
+        // seleccionado, la cohorte = los que ingresaron 3 días antes — igual que SYSGAL. Así "Entraron"
+        // cuadra con "SYSGAL reportó" por día de ingreso, inmune a catch-ups/re-syncs.
+        $flujo = Flujo::find($flujoId);
+        $porFechaIngreso = $flujo && $flujo->origen === 'Grupo Deudas - Clientes Ingreso';
+
+        if ($porFechaIngreso) {
+            $desdeIngreso = Carbon::parse($desde)->subDays(3)->toDateString();
+            $hastaIngreso = Carbon::parse($hasta)->subDays(3)->toDateString();
+            $cohorte = DB::table('prospecto_en_flujo')
+                ->where('flujo_id', $flujoId)
+                ->where('cancelado', false)
+                ->whereNotNull('fecha_ingreso')
+                ->whereBetween('fecha_ingreso', [$desdeIngreso, $hastaIngreso])
+                ->select('prospecto_id');
+        } else {
+            // Resto (contratos, etc.): por fecha de ENTRADA al flujo (el envío es ~inmediato).
+            $cohorte = DB::table('prospecto_en_flujo')
+                ->where('flujo_id', $flujoId)
+                ->where('cancelado', false)
+                ->whereBetween('fecha_inicio', [$desde, $hasta])
+                ->select('prospecto_id');
+        }
 
         $entraron = (clone $cohorte)->distinct()->count('prospecto_id');
 
