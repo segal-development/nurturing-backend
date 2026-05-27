@@ -137,6 +137,44 @@ class SyncGrupoDeudaCommand extends Command
                 }
             }
 
+            // Onboarding doble membresía: los prospectos que YA existían pero vinieron en ESTE sync
+            // deben entrar IGUAL al flujo de onboarding, aunque estén en otro flujo. Se asignan por ID
+            // (solo lo de este sync — nunca el backlog histórico) al flujo que apunta a este lote.
+            if (in_array($endpoint, $endpointsConAutoAsignar)) {
+                $idsExistentes = array_values(array_unique($resultado['prospectos_existentes'] ?? []));
+
+                if (! empty($idsExistentes)) {
+                    $flujosOnboarding = \App\Models\Flujo::where('activo', true)
+                        ->where('auto_asignar_nuevos', true)
+                        ->get()
+                        ->filter(function ($flujo) use ($resultado) {
+                            $lotesIds = $flujo->lotes_ids ?? [];
+                            foreach ($resultado['lotes'] as $lote) {
+                                if (in_array($lote->id, $lotesIds)) {
+                                    return true;
+                                }
+                            }
+
+                            return false;
+                        });
+
+                    $habilitado = (bool) config('envios.onboarding_doble_membresia', false);
+
+                    if ($this->option('no-asignar') || ! $habilitado) {
+                        $motivo = $this->option('no-asignar') ? '--no-asignar' : 'flag onboarding_doble_membresia=OFF';
+                        $this->warn("DRY-RUN ({$motivo}): ".count($idsExistentes).' prospectos existentes SE ASIGNARÍAN a onboarding ('.$flujosOnboarding->count().' flujo/s). No se disparó ningún envío.');
+                    } else {
+                        foreach ($flujosOnboarding as $flujoOnb) {
+                            \App\Jobs\AsignarNuevosProspectosAFlujoJob::dispatch([
+                                'flujo_id' => $flujoOnb->id,
+                                'prospecto_ids' => $idsExistentes,
+                            ]);
+                        }
+                        $this->info('Onboarding doble membresía: '.count($idsExistentes).' prospectos existentes encaminados a '.$flujosOnboarding->count().' flujo(s).');
+                    }
+                }
+            }
+
             return Command::SUCCESS;
 
         } catch (\Exception $e) {

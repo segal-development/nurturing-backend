@@ -4,6 +4,20 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Onboarding — Doble Membresía
+    |--------------------------------------------------------------------------
+    |
+    | Si está en true, los clientes que ingresan (clientes-ingreso / contratos)
+    | entran al flujo de onboarding y reciben el correo AUNQUE ya estén en otro
+    | flujo. Se asignan por ID, solo lo que trae cada sync (nunca el backlog).
+    | Apagado por defecto: con OFF, los syncs solo LOGUEAN el conteo (dry-run)
+    | sin disparar envíos. Prender recién después de verificar el conteo real.
+    |
+    */
+    'onboarding_doble_membresia' => (bool) env('ONBOARDING_DOBLE_MEMBRESIA', false),
+
+    /*
+    |--------------------------------------------------------------------------
     | Rate Limiting Configuration
     |--------------------------------------------------------------------------
     |

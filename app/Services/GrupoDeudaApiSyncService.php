@@ -231,6 +231,7 @@ class GrupoDeudaApiSyncService
             'nuevos' => $resultado['nuevos'],
             'actualizados' => $resultado['actualizados'],
             'omitidos_en_flujo' => $resultado['omitidos_en_flujo'],
+            'prospectos_existentes' => $resultado['prospectos_existentes'] ?? [],
         ];
     }
 
@@ -297,6 +298,10 @@ class GrupoDeudaApiSyncService
         $createBatch = [];
         $updateBatch = [];
 
+        // Onboarding doble membresía: IDs de prospectos que YA existían y vinieron en este sync.
+        // Se encaminan por ID al flujo de onboarding (entran aunque ya estén en otro flujo).
+        $prospectosExistentes = [];
+
         // Flag por-source que permite "doble membresía": el prospecto entra a este flujo
         // aunque ya esté en otro flujo activo. Útil para flujos post-evento (contratos
         // firmados) que deben recibir comunicación SI O SI, sin importar otros flujos previos.
@@ -328,6 +333,10 @@ class GrupoDeudaApiSyncService
                 $existingId = $this->cacheService->findExistingProspectoId($email, $telefono);
 
                 if ($existingId !== null) {
+                    // Lo recolectamos ANTES de la omisión: aunque esté en otro flujo, debe entrar
+                    // al onboarding por ID (se encamina después del sync).
+                    $prospectosExistentes[] = $existingId;
+
                     // Ya existe - verificar si está en flujo activo (salvo que doble membresía esté habilitada)
                     if (! $allowDoubleMembership && $this->estaEnFlujoActivo($existingId)) {
                         $omitidosEnFlujo++;
@@ -381,6 +390,7 @@ class GrupoDeudaApiSyncService
             'nuevos' => $nuevos,
             'actualizados' => $actualizados,
             'omitidos_en_flujo' => $omitidosEnFlujo,
+            'prospectos_existentes' => $prospectosExistentes,
             'errores' => $errores,
         ];
     }
@@ -1318,6 +1328,9 @@ class GrupoDeudaApiSyncService
         $createBatch = [];
         $updateBatch = [];
 
+        // Onboarding doble membresía: IDs existentes que vinieron en este sync (ver procesarDatos).
+        $prospectosExistentes = [];
+
         // Este endpoint tiene Clientes como array
         foreach ($clientes as $index => $cliente) {
             try {
@@ -1340,6 +1353,9 @@ class GrupoDeudaApiSyncService
                 $existingId = $this->cacheService->findExistingProspectoId($email, $telefono);
 
                 if ($existingId !== null) {
+                    // Recolectar ANTES de la omisión: debe entrar al onboarding por ID igual.
+                    $prospectosExistentes[] = $existingId;
+
                     if ($this->estaEnFlujoActivo($existingId)) {
                         $omitidosEnFlujo++;
 
@@ -1397,6 +1413,7 @@ class GrupoDeudaApiSyncService
             'nuevos' => $nuevos,
             'actualizados' => $actualizados,
             'omitidos_en_flujo' => $omitidosEnFlujo,
+            'prospectos_existentes' => $prospectosExistentes,
         ];
     }
 

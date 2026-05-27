@@ -35,13 +35,21 @@ class AsignarNuevosProspectosAFlujoJob implements ShouldQueue
 
     private const BATCH_SIZE = 500;
 
-    public function __construct()
+    public function __construct(private ?array $asignacionEspecifica = null)
     {
         $this->onQueue('default');
     }
 
     public function handle(): void
     {
+        // Asignación por ID (onboarding doble membresía): mete prospectos puntuales al flujo aunque
+        // ya estén en otro flujo. Ruta separada y gateada — la asignación normal por lote no cambia.
+        if ($this->asignacionEspecifica !== null) {
+            $this->handleAsignacionEspecifica();
+
+            return;
+        }
+
         Log::info('=== Iniciando AsignarNuevosProspectosAFlujoJob ===');
 
         // Buscar flujos activos con auto_asignar_nuevos = true
@@ -71,6 +79,78 @@ class AsignarNuevosProspectosAFlujoJob implements ShouldQueue
             'total_asignados' => $totalAsignados,
             'ejecuciones_creadas' => $totalEjecuciones,
         ]);
+    }
+
+    /**
+     * Asignación por ID a un flujo puntual (onboarding doble membresía).
+     *
+     * Mete los prospectos indicados al flujo AUNQUE ya estén en otro flujo, con el guard
+     * "no está ya en ESTE flujo" para no duplicar envíos. Reusa asignarBatch + la ejecución
+     * perpetua igual que procesarFlujo, así el comportamiento (canal, perpetua) es idéntico.
+     * Solo procesa los IDs recibidos (lo de un sync puntual), nunca consulta el backlog.
+     */
+    private function handleAsignacionEspecifica(): void
+    {
+        $flujoId = $this->asignacionEspecifica['flujo_id'] ?? null;
+        $ids = $this->asignacionEspecifica['prospecto_ids'] ?? [];
+
+        if (! $flujoId || empty($ids)) {
+            return;
+        }
+
+        $flujo = Flujo::find($flujoId);
+
+        if (! $flujo || ! $flujo->activo) {
+            Log::warning("AsignacionEspecifica: flujo {$flujoId} inexistente o inactivo, saltando");
+
+            return;
+        }
+
+        $configStructure = $flujo->config_structure;
+
+        if (empty($configStructure) || empty($configStructure['stages'])) {
+            Log::warning("AsignacionEspecifica: flujo {$flujo->id} sin config_structure válido, saltando");
+
+            return;
+        }
+
+        // Solo prospectos activos que NO estén YA en ESTE flujo (anti doble-envío).
+        $batch = Prospecto::whereIn('id', $ids)
+            ->where('estado', 'activo')
+            ->whereDoesntHave('prospectosEnFlujo', function ($q) use ($flujo) {
+                $q->where('flujo_id', $flujo->id);
+            })
+            ->select('id', 'email', 'telefono')
+            ->get();
+
+        if ($batch->isEmpty()) {
+            Log::info("AsignacionEspecifica: flujo {$flujo->id}, nada para asignar (ya estaban o inactivos)");
+
+            return;
+        }
+
+        $canalAsignado = $this->determinarCanal($flujo);
+        $asignados = $this->asignarBatch($flujo, $batch, $canalAsignado);
+        $prospectoIds = $batch->pluck('id')->toArray();
+
+        Log::info("AsignacionEspecifica: asignados {$asignados} prospectos al flujo {$flujo->id} (onboarding doble membresía)");
+
+        // Perpetuo con ejecución activa: sumarlos a la ejecución en curso (igual que procesarFlujo).
+        if ($flujo->es_perpetuo) {
+            $ejecucionExistente = FlujoEjecucion::where('flujo_id', $flujo->id)
+                ->where('es_perpetuo', true)
+                ->whereIn('estado', ['in_progress', 'waiting'])
+                ->first();
+
+            if ($ejecucionExistente) {
+                AsignarProspectosAEjecucionPerpetua::dispatch($flujo->id, $prospectoIds);
+
+                return;
+            }
+        }
+
+        // Sin ejecución activa: crear una para esta cohorte.
+        $this->crearEjecucion($flujo, $prospectoIds, $configStructure);
     }
 
     /**
