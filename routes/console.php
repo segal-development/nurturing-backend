@@ -269,6 +269,27 @@ Schedule::command('sync:grupo-deuda --endpoint=contratos')
     });
 
 // ============================================================================
+// RECONCILIACIÓN DIARIA DE CONTRATOS (red de seguridad)
+// El sync horario de arriba da FRESCURA; este barrido diario garantiza COMPLETITUD: re-consulta
+// las últimas ~30h y asigna al onboarding cualquier contrato rezagado (un sync que falló, un caso
+// borde). Es IDEMPOTENTE (el guard "no está ya en ESTE flujo" evita doble-envío), así que solo
+// agarra los pocos que se escaparon — nunca un aluvión. Patrón: incremental + reconcile.
+// 06:50 = slot libre del calendario SYSGAL (contratos :00, cuotas-vencer 07:05, clientes 07:15),
+// para no provocar 403 por ráfaga de llamadas desde la misma IP.
+// (clientes-ingreso NO necesita esto: ya usa ventana móvil de 3 días en el sync diario.)
+// ============================================================================
+Schedule::command('sync:grupo-deuda --endpoint=contratos --horas=30')
+    ->dailyAt('06:50')
+    ->name('grupo-deuda:reconciliar-contratos-diario')
+    ->withoutOverlapping()
+    ->onSuccess(function () {
+        Log::info('Scheduler: Reconciliación diaria de contratos completada');
+    })
+    ->onFailure(function () {
+        Log::error('Scheduler: Falló la reconciliación diaria de contratos');
+    });
+
+// ============================================================================
 // SINCRONIZACIÓN DIARIA DE CLIENTES POR FECHA INGRESO (Grupo Deudas)
 // De lunes a viernes a las 7:10 AM trae clientes que firmaron hace 3 días.
 // Después del sync, dispara auto-asignación a flujos de onboarding.
