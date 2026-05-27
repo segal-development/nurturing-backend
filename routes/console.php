@@ -291,12 +291,12 @@ Schedule::command('sync:grupo-deuda --endpoint=contratos --horas=30')
 
 // ============================================================================
 // SINCRONIZACIÓN DIARIA DE CLIENTES POR FECHA INGRESO (Grupo Deudas)
-// De lunes a viernes a las 7:10 AM trae clientes que firmaron hace 3 días.
+// TODOS los días (incluido fin de semana) a las 7:15 AM trae clientes que ingresaron EXACTAMENTE
+// hace 3 días (un solo día). Corre los 7 días a propósito: así cada cliente recibe el correo a los
+// 3 días justos, sin adelantarse ni perder a los que su +3 cae sábado/domingo.
 // Después del sync, dispara auto-asignación a flujos de onboarding.
-// Inicia: Lunes 11 de mayo 2026
 // ============================================================================
 Schedule::command('sync:grupo-deuda --endpoint=clientes-ingreso')
-    ->weekdays()
     // Escalonado a 07:15 para no colisionar con los otros syncs de SYSGAL.
     // Llamadas en ráfaga desde la misma IP → SYSGAL devuelve 403 "No permitido".
     // Calendario SYSGAL: contratos :00, cuotas-vencer 07:05, clientes 07:15, cuotas-vencidas 07:25.

@@ -1215,11 +1215,12 @@ class GrupoDeudaApiSyncService
             $this->cacheService->loadExistingProspectos();
             $this->loadProspectosEnFlujoActivo();
 
-            // Traer clientes que firmaron en los últimos 3 días (ventana móvil)
-            // Esto evita perder clientes por fines de semana cuando el sync no corre
-            // El servicio de deduplicación evita procesar el mismo cliente dos veces
+            // Trae clientes que ingresaron EXACTAMENTE hace 3 días (un solo día). La campaña los
+            // contacta a los 3 días justos. El sync corre los 7 días (incluido fin de semana), así
+            // cada día contacta a la cohorte de su día-3 exacto: sin adelantar a nadie ni perder a
+            // los que su +3 cae fin de semana. La deduplicación evita procesar dos veces al mismo.
             $desde = now()->subDays(3)->startOfDay();
-            $hasta = now()->subDays(1)->endOfDay();
+            $hasta = now()->subDays(3)->endOfDay();
 
             Log::info('GrupoDeudaApiSyncService: Rango de fechas ClientesPorFechaIngreso', [
                 'desde' => $desde->format('Y-m-d H:i:s'),
