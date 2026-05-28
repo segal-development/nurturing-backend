@@ -922,10 +922,10 @@ class MetricasService
         $porFechaIngreso = $esClientesIngreso || $esContratosNuevos;
 
         if ($porFechaIngreso) {
-            // Embudo PERÍODO-PURO: la cohorte = prospectos que (1) entraron al flujo en el período
-            // seleccionado [desde, hasta] (fecha_inicio) Y (2) cuyo SYSGAL ingreso cae en el período
-            // shifted ([desde - shift, hasta - shift]). Así "Entraron al flujo" cuenta SOLO actividad
-            // del período, no cumulativa de la cohorte. Match exacto con "Envíos por Día".
+            // Cohorte CUMULATIVA: todos los prospectos con fecha_ingreso en el período shifted,
+            // sin filtro de fecha_inicio. "Entraron al flujo" = total de esa cohorte en el flujo,
+            // independiente de cuándo entraron físicamente. Esto da el match natural con SYSGAL
+            // (39 reportó → 31 están, 8 no se pudieron) que la gerencia espera ver.
             $shift = $esClientesIngreso ? 3 : 0;
             $desdeIngreso = Carbon::parse($desde)->subDays($shift)->toDateString();
             $hastaIngreso = Carbon::parse($hasta)->subDays($shift)->toDateString();
@@ -934,7 +934,6 @@ class MetricasService
                 ->where('cancelado', false)
                 ->whereNotNull('fecha_ingreso')
                 ->whereBetween('fecha_ingreso', [$desdeIngreso, $hastaIngreso])
-                ->whereBetween('fecha_inicio', [$desde, $hasta])
                 ->select('prospecto_id');
         } else {
             // Resto: por fecha de ENTRADA al flujo (el envío es ~inmediato).
@@ -955,36 +954,33 @@ class MetricasService
             ];
         }
 
-        // Recibieron: de la cohorte, cuántos recibieron envío exitoso EN EL PERÍODO. Excluye los
-        // duplicados marcados (race condition arreglada 2026-05-28).
+        // Recibieron: de la cohorte CUMULATIVA, cuántos recibieron al menos un envío exitoso
+        // (sin filtro de fecha — un envío hecho ayer cuenta igual). Excluye duplicados marcados.
         $recibieron = DB::table('envios')
             ->where('flujo_id', $flujoId)
             ->whereIn('estado', ['enviado', 'entregado', 'abierto', 'clickeado'])
             ->whereRaw("COALESCE(metadata->>'razon_fallo', '') != 'duplicado_race_condition'")
-            ->whereBetween('created_at', [$desde, $hasta])
             ->whereIn('prospecto_id', (clone $cohorte))
             ->distinct()
             ->count('prospecto_id');
 
-        // Abrieron: de la cohorte, cuántos abrieron un email del FLUJO enviado EN EL PERÍODO.
+        // Abrieron: de la cohorte, cuántos abrieron al menos un email del flujo (sin filtro de fecha).
         $abrieron = DB::table('email_aperturas as ea')
             ->join('envios as e', 'e.id', '=', 'ea.envio_id')
             ->where('e.flujo_id', $flujoId)
-            ->whereBetween('e.created_at', [$desde, $hasta])
             ->whereIn('e.prospecto_id', (clone $cohorte))
             ->distinct()
             ->count('e.prospecto_id');
 
-        // Clickaron: de la cohorte, cuántos clickearon un email enviado EN EL PERÍODO.
+        // Clickaron: de la cohorte, cuántos clickearon al menos un email (sin filtro de fecha).
         $clickaron = DB::table('email_clicks as ec')
             ->join('envios as e', 'e.id', '=', 'ec.envio_id')
             ->where('e.flujo_id', $flujoId)
-            ->whereBetween('e.created_at', [$desde, $hasta])
             ->whereIn('e.prospecto_id', (clone $cohorte))
             ->distinct()
             ->count('e.prospecto_id');
 
-        // Desuscribieron: de la cohorte que entró en el período.
+        // Desuscribieron: de la cohorte cumulativa.
         $desuscribieron = DB::table('desuscripciones')
             ->where('flujo_id', $flujoId)
             ->whereIn('prospecto_id', (clone $cohorte))
