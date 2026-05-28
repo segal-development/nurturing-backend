@@ -311,6 +311,26 @@ Schedule::command('sync:grupo-deuda --endpoint=clientes-ingreso')
     });
 
 // ============================================================================
+// RECONCILIACIÓN DIARIA DE CLIENTES POR FECHA DE INGRESO (Grupo Deudas)
+// Cierra el gap del sync de las 07:15: si SYSGAL agrega clientes con ingreso=hoy-3
+// DESPUÉS de las 07:15 (durante el día), el sync diario no los traía. Esta segunda
+// corrida a las 22:00 los recoge. El sync consulta SYSGAL para el mismo día (hoy-3)
+// y vuelve a procesar: UPSERT por RUT garantiza que los ya procesados NO se duplican,
+// solo se actualizan. Los nuevos entran al flujo onboarding.
+// 22:00 es slot tranquilo (sin colisión con el resto del calendario SYSGAL).
+// ============================================================================
+Schedule::command('sync:grupo-deuda --endpoint=clientes-ingreso')
+    ->dailyAt('22:00')
+    ->name('grupo-deuda:reconciliar-clientes-ingreso-diario')
+    ->withoutOverlapping()
+    ->onSuccess(function () {
+        Log::info('Scheduler: Reconciliación diaria de clientes ingreso completada');
+    })
+    ->onFailure(function () {
+        Log::error('Scheduler: Falló la reconciliación diaria de clientes ingreso');
+    });
+
+// ============================================================================
 // SINCRONIZACIÓN DIARIA DE CUOTAS POR VENCER (Grupo Deudas)
 // Diario 07:05 — escalonado para no colisionar con SYSGAL (evita 403 por ráfaga).
 // Consolidado: antes era job en bootstrap/app.php a las 07:00.
