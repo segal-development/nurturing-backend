@@ -934,7 +934,11 @@ class MetricasService
         $entraron = (clone $cohorte)->distinct()->count('prospecto_id');
 
         if ($entraron === 0) {
-            return ['entraron' => 0, 'recibieron' => 0, 'abrieron' => 0, 'con_problema' => 0];
+            return [
+                'entraron' => 0, 'recibieron' => 0, 'abrieron' => 0, 'clickaron' => 0,
+                'desuscribieron' => 0, 'con_problema' => 0,
+                'tasa_entrega' => 0, 'tasa_apertura' => 0, 'tasa_ctr' => 0, 'tasa_desuscripcion' => 0,
+            ];
         }
 
         // Recibieron: de la cohorte, cuántos tienen >=1 envío exitoso en ESTE flujo.
@@ -953,6 +957,21 @@ class MetricasService
             ->distinct()
             ->count('e.prospecto_id');
 
+        // Clickaron: de la cohorte, cuántos hicieron click en al menos un email de ESTE flujo.
+        $clickaron = DB::table('email_clicks as ec')
+            ->join('envios as e', 'e.id', '=', 'ec.envio_id')
+            ->where('e.flujo_id', $flujoId)
+            ->whereIn('e.prospecto_id', (clone $cohorte))
+            ->distinct()
+            ->count('e.prospecto_id');
+
+        // Desuscribieron: de la cohorte, cuántos se dieron de baja en ESTE flujo.
+        $desuscribieron = DB::table('desuscripciones')
+            ->where('flujo_id', $flujoId)
+            ->whereIn('prospecto_id', (clone $cohorte))
+            ->distinct()
+            ->count('prospecto_id');
+
         // Con problema de dato: de la cohorte, cuántos NO pueden recibir (email inválido o sin email).
         $conProblema = DB::table('prospectos')
             ->whereIn('id', (clone $cohorte))
@@ -963,11 +982,18 @@ class MetricasService
             })
             ->count();
 
+        // Tasas de COHORTE (no de período): por eso cuadran con el embudo de arriba.
         return [
             'entraron' => $entraron,
             'recibieron' => $recibieron,
             'abrieron' => $abrieron,
+            'clickaron' => $clickaron,
+            'desuscribieron' => $desuscribieron,
             'con_problema' => $conProblema,
+            'tasa_entrega' => round($recibieron / $entraron * 100, 2),
+            'tasa_apertura' => $recibieron > 0 ? round($abrieron / $recibieron * 100, 2) : 0,
+            'tasa_ctr' => $abrieron > 0 ? round($clickaron / $abrieron * 100, 2) : 0,
+            'tasa_desuscripcion' => $recibieron > 0 ? round($desuscribieron / $recibieron * 100, 2) : 0,
         ];
     }
 
