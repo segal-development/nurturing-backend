@@ -98,22 +98,27 @@ class GenerarExportSysgalJob implements ShouldQueue
                 ? trim((string) ($r['Cliente'] ?? ''))
                 : trim(((string) ($r['Nombre'] ?? '')).' '.((string) ($r['Apellido_Paterno'] ?? '')).' '.((string) ($r['Apellido_Materno'] ?? '')));
 
-            // 1) Buscar al prospecto en nuestra DB (por RUT, email o teléfono).
-            $prospectoId = null;
+            // 1) Buscar TODOS los prospectos que pueden ser este cliente. La DB tiene
+            // prospectos duplicados con mismo email/RUT (legacy de syncs viejos). Si solo
+            // miramos el primer match, podemos marcar como rechazado a alguien que SÍ está
+            // en el flujo via su prospecto duplicado.
+            $prospectoIds = [];
             if ($rutNorm !== '') {
-                $prospectoId = DB::table('prospectos')->where('rut', $rutNorm)->value('id');
+                $prospectoIds = array_merge($prospectoIds, DB::table('prospectos')->where('rut', $rutNorm)->pluck('id')->toArray());
             }
-            if (! $prospectoId && $email !== '') {
-                $prospectoId = DB::table('prospectos')->where('email', $email)->value('id');
+            if ($email !== '') {
+                $prospectoIds = array_merge($prospectoIds, DB::table('prospectos')->where('email', $email)->pluck('id')->toArray());
             }
-            if (! $prospectoId && $telefono !== '') {
-                $prospectoId = DB::table('prospectos')->where('telefono', $telefono)->value('id');
+            if ($telefono !== '') {
+                $prospectoIds = array_merge($prospectoIds, DB::table('prospectos')->where('telefono', $telefono)->pluck('id')->toArray());
             }
+            $prospectoIds = array_values(array_unique($prospectoIds));
 
-            // 2) Si está en el flujo onboarding, no es rechazado.
-            if ($prospectoId) {
+            // 2) Si CUALQUIERA de los prospectos matcheados está en el flujo onboarding,
+            // no es rechazado (el cliente recibe el email via su prospecto duplicado).
+            if (! empty($prospectoIds)) {
                 $enFlujo = DB::table('prospecto_en_flujo')
-                    ->where('prospecto_id', $prospectoId)
+                    ->whereIn('prospecto_id', $prospectoIds)
                     ->where('flujo_id', $flujoId)
                     ->where('cancelado', false)
                     ->exists();
@@ -121,6 +126,7 @@ class GenerarExportSysgalJob implements ShouldQueue
                     continue;
                 }
             }
+            $prospectoId = $prospectoIds[0] ?? null; // para mantener el resto de la lógica
 
             // 3) NO está en el flujo. Determinar la razón.
             $razones = [];
@@ -141,10 +147,11 @@ class GenerarExportSysgalJob implements ShouldQueue
             $emailValido = $email !== '' && $this->isValidEmail($email);
             $telefonoValido = $telefono !== '' && $telefono !== '0';
             if (($emailValido || $telefonoValido) && $nombre !== '') {
-                if ($prospectoId) {
-                    // Existe en DB pero no en este flujo. ¿Está en otro flujo activo (doble-membresía)?
+                if (! empty($prospectoIds)) {
+                    // Existe en DB (en algún prospecto duplicado o único) pero ninguno en este
+                    // flujo. ¿Está en otro flujo activo (doble-membresía pendiente)?
                     $enOtroFlujo = DB::table('prospecto_en_flujo')
-                        ->where('prospecto_id', $prospectoId)
+                        ->whereIn('prospecto_id', $prospectoIds)
                         ->where('cancelado', false)
                         ->where('flujo_id', '!=', $flujoId)
                         ->exists();
