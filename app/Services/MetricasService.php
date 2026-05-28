@@ -159,9 +159,11 @@ class MetricasService
     {
         [$desde, $hasta] = $this->resolverRango($dias, $fechaInicio, $fechaFin);
 
-        // Query 1: Envíos
+        // Query 1: Envíos. Excluimos duplicados marcados (race condition arreglada el
+        // 2026-05-28) para que Tasa de Entrega y Total Envíos no se vean afectados por ellos.
         $envioStats = DB::table('envios')
             ->whereBetween('created_at', [$desde, $hasta])
+            ->whereRaw("COALESCE(metadata->>'razon_fallo', '') != 'duplicado_race_condition'")
             ->when($flujoId, fn ($q, $id) => $q->where('flujo_id', $id))
             ->selectRaw("
                 COUNT(*) as total,
@@ -470,7 +472,9 @@ class MetricasService
             ->pluck('total', 'canal')
             ->toArray();
 
-        // Por día y estado
+        // Por día y estado.
+        // Excluimos duplicados marcados (race condition arreglado el 2026-05-28) para no
+        // ensuciar el chart con un spike artificial de fallidos en días pasados.
         $porDia = DB::table('envios')
             ->select(
                 DB::raw('DATE(created_at) as fecha'),
@@ -479,6 +483,7 @@ class MetricasService
                 DB::raw("COUNT(CASE WHEN estado = 'pendiente' THEN 1 END) as pendientes")
             )
             ->whereBetween('created_at', [$desde, $hasta])
+            ->whereRaw("COALESCE(metadata->>'razon_fallo', '') != 'duplicado_race_condition'")
             ->when($flujoId, fn ($q, $id) => $q->where('flujo_id', $id))
             ->groupBy('fecha')
             ->orderBy('fecha')
