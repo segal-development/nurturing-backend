@@ -906,16 +906,20 @@ class MetricasService
     {
         [$desde, $hasta] = $this->resolverRango($dias, $fechaInicio, $fechaFin);
 
-        // Onboarding "Clientes por Fecha Ingreso": el embudo se ancla en la FECHA DE INGRESO real
-        // (columna fecha_ingreso), NO en fecha_inicio (cuándo entró al flujo). Para el día de contacto
-        // seleccionado, la cohorte = los que ingresaron 3 días antes — igual que SYSGAL. Así "Entraron"
-        // cuadra con "SYSGAL reportó" por día de ingreso, inmune a catch-ups/re-syncs.
+        // Flujos SYSGAL: el embudo se ancla en la FECHA DE INGRESO real (columna fecha_ingreso),
+        // NO en fecha_inicio (cuándo entró al flujo). Así "Entraron" cuadra con "SYSGAL reportó" por
+        // día de ingreso, inmune a catch-ups/re-syncs/doble-membresía.
+        //  - Clientes-Ingreso: SYSGAL consulta el día (hoy − 3) → ventana de ingreso desplazada −3.
+        //  - Contratos Nuevos: SYSGAL consulta el día tal cual → ventana de ingreso = ventana SYSGAL.
         $flujo = Flujo::find($flujoId);
-        $porFechaIngreso = $flujo && $flujo->origen === 'Grupo Deudas - Clientes Ingreso';
+        $esClientesIngreso = $flujo && $flujo->origen === 'Grupo Deudas - Clientes Ingreso';
+        $esContratosNuevos = $flujo && $flujo->origen === 'Grupo Deudas - Contratos Nuevos';
+        $porFechaIngreso = $esClientesIngreso || $esContratosNuevos;
 
         if ($porFechaIngreso) {
-            $desdeIngreso = Carbon::parse($desde)->subDays(3)->toDateString();
-            $hastaIngreso = Carbon::parse($hasta)->subDays(3)->toDateString();
+            $shift = $esClientesIngreso ? 3 : 0;
+            $desdeIngreso = Carbon::parse($desde)->subDays($shift)->toDateString();
+            $hastaIngreso = Carbon::parse($hasta)->subDays($shift)->toDateString();
             $cohorte = DB::table('prospecto_en_flujo')
                 ->where('flujo_id', $flujoId)
                 ->where('cancelado', false)
@@ -923,7 +927,7 @@ class MetricasService
                 ->whereBetween('fecha_ingreso', [$desdeIngreso, $hastaIngreso])
                 ->select('prospecto_id');
         } else {
-            // Resto (contratos, etc.): por fecha de ENTRADA al flujo (el envío es ~inmediato).
+            // Resto: por fecha de ENTRADA al flujo (el envío es ~inmediato).
             $cohorte = DB::table('prospecto_en_flujo')
                 ->where('flujo_id', $flujoId)
                 ->where('cancelado', false)
