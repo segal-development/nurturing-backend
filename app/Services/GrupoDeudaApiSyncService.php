@@ -95,13 +95,22 @@ class GrupoDeudaApiSyncService
             // 2. Cargar IDs de prospectos ya en flujos activos
             $this->loadProspectosEnFlujoActivo();
 
-            // 3. Calcular rango de fechas (incremental)
+            // 3. Calcular rango de fechas. Garantizamos que cada sync cubra AL MENOS desde el
+            // inicio del día actual — SYSGAL no siempre devuelve los contratos firmados hoy en
+            // una ventana corta tipo [last_synced, now]; los devuelve solo cuando SYSGAL los
+            // "agrega" en ese intervalo. Usar startOfDay como piso elimina gaps (contratos
+            // que aparecen en SYSGAL en momentos desalineados con el reloj de hourly). Si
+            // last_synced_at viene de hace más de 1 día (server downtime o --horas=N), usamos
+            // ese valor más viejo para no perder catch-up histórico.
             $hasta = now();
-            $desde = $source->last_synced_at ?? now()->subHours(24);
+            $lastSynced = $source->last_synced_at ?? now()->subHours(24);
+            $startOfDay = now()->startOfDay();
+            $desde = $lastSynced->lessThan($startOfDay) ? $lastSynced : $startOfDay;
 
             Log::info('GrupoDeudaApiSyncService: Rango de fechas', [
                 'desde' => $desde->format('Y-m-d H:i:s'),
                 'hasta' => $hasta->format('Y-m-d H:i:s'),
+                'last_synced_at' => $source->last_synced_at?->format('Y-m-d H:i:s'),
             ]);
 
             // 4. Llamar a la API
