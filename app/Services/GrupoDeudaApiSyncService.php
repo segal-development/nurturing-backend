@@ -337,9 +337,14 @@ class GrupoDeudaApiSyncService
 
                 $email = $prospectoData['email'];
                 $telefono = $prospectoData['telefono'];
+                $rut = $prospectoData['rut'] ?? null;
 
-                // Buscar si ya existe
-                $existingId = $this->cacheService->findExistingProspectoId($email, $telefono);
+                // Buscar si ya existe. Priorizamos RUT (clave canónica del cliente). Email y
+                // teléfono son fallback para SYSGAL responses sin RUT o RUTs malformados.
+                // Esto reduce drásticamente la creación de duplicados nuevos: la DB tiene 95k
+                // duplicados legacy precisamente porque buscábamos solo por email/teléfono y
+                // los typos rompían el match.
+                $existingId = $this->cacheService->findExistingProspectoIdByRut($rut, $email, $telefono);
 
                 if ($existingId !== null) {
                     // Recolectamos TODOS los existentes (omit y no-omit) para el dispatch por ID
@@ -367,7 +372,7 @@ class GrupoDeudaApiSyncService
                     $nuevos++;
 
                     // Registrar en cache para detectar duplicados dentro del mismo sync
-                    $this->cacheService->registerNewProspecto($email, $telefono);
+                    $this->cacheService->registerNewProspecto($email, $telefono, -1, $rut);
                 }
 
                 $exitosos++;
@@ -1063,8 +1068,10 @@ class GrupoDeudaApiSyncService
 
                 $email = $prospectoData['email'];
                 $telefono = $prospectoData['telefono'];
+                $rut = $prospectoData['rut'] ?? null;
 
-                $existingId = $this->cacheService->findExistingProspectoId($email, $telefono);
+                // Igual que en otros syncs: RUT primero, email/teléfono fallback.
+                $existingId = $this->cacheService->findExistingProspectoIdByRut($rut, $email, $telefono);
 
                 if ($existingId !== null) {
                     if ($this->estaEnFlujoActivo($existingId)) {
@@ -1078,7 +1085,7 @@ class GrupoDeudaApiSyncService
                 } else {
                     $createBatch[] = $prospectoData;
                     $nuevos++;
-                    $this->cacheService->registerNewProspecto($email, $telefono);
+                    $this->cacheService->registerNewProspecto($email, $telefono, -1, $rut);
                 }
 
                 $exitosos++;
@@ -1364,8 +1371,11 @@ class GrupoDeudaApiSyncService
 
                 $email = $prospectoData['email'];
                 $telefono = $prospectoData['telefono'];
+                $rut = $prospectoData['rut'] ?? null;
 
-                $existingId = $this->cacheService->findExistingProspectoId($email, $telefono);
+                // Mismo cambio que en processProspectos: priorizar RUT (clave canónica).
+                // Email/teléfono son fallback para los casos sin RUT o RUT malformado.
+                $existingId = $this->cacheService->findExistingProspectoIdByRut($rut, $email, $telefono);
 
                 if ($existingId !== null) {
                     // Recolectamos TODOS los existentes (omit y no-omit) para el dispatch por ID
@@ -1386,7 +1396,7 @@ class GrupoDeudaApiSyncService
                 } else {
                     $createBatch[] = $prospectoData;
                     $nuevos++;
-                    $this->cacheService->registerNewProspecto($email, $telefono);
+                    $this->cacheService->registerNewProspecto($email, $telefono, -1, $rut);
                 }
 
                 $exitosos++;

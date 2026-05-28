@@ -30,6 +30,9 @@ final class ProspectoCacheService
     /** @var array<string, int> telefono => prospecto_id */
     private array $telefonoIndex = [];
 
+    /** @var array<string, int> rut => prospecto_id */
+    private array $rutIndex = [];
+
     private bool $loaded = false;
 
     // =========================================================================
@@ -50,6 +53,7 @@ final class ProspectoCacheService
 
         $this->loadEmailIndex();
         $this->loadTelefonoIndex();
+        $this->loadRutIndex();
 
         $this->loaded = true;
 
@@ -71,6 +75,20 @@ final class ProspectoCacheService
             ->whereNotNull('telefono')
             ->where('telefono', '!=', '')
             ->pluck('id', 'telefono')
+            ->toArray();
+    }
+
+    private function loadRutIndex(): void
+    {
+        // Normalizamos a UPPERCASE para que "K" minúscula y mayúscula matcheen igual.
+        // Eso es lo que decide al primer hit cuando hay duplicados (la DB tiene varios
+        // prospectos por RUT — el más viejo gana porque pluck mantiene el último encontrado
+        // y los recorre por id asc por default).
+        $this->rutIndex = DB::table('prospectos')
+            ->whereNotNull('rut')
+            ->where('rut', '!=', '')
+            ->orderBy('id')
+            ->pluck('id', DB::raw('UPPER(rut)'))
             ->toArray();
     }
 
@@ -101,6 +119,32 @@ final class ProspectoCacheService
         return $this->findByEmail($email) ?? $this->findByTelefono($telefono);
     }
 
+    /**
+     * Busca un prospecto existente PRIORIZANDO RUT (clave más fuerte para dedup).
+     *
+     * Prioridad: RUT > email > teléfono. Usar esta variante en flujos donde el RUT viene
+     * en la respuesta de la API (SYSGAL Contratos, Cuotas, etc.), porque email/teléfono
+     * pueden tener typos o variantes (+56) que rompen el match — el RUT es el identificador
+     * canónico del cliente. Evita crear duplicados nuevos.
+     *
+     * Complejidad: O(1).
+     */
+    public function findExistingProspectoIdByRut(?string $rut, ?string $email, ?string $telefono): ?int
+    {
+        return $this->findByRut($rut)
+            ?? $this->findByEmail($email)
+            ?? $this->findByTelefono($telefono);
+    }
+
+    private function findByRut(?string $rut): ?int
+    {
+        if ($rut === null || $rut === '') {
+            return null;
+        }
+
+        return $this->rutIndex[strtoupper($rut)] ?? null;
+    }
+
     private function findByEmail(?string $email): ?int
     {
         if ($email === null) {
@@ -129,7 +173,7 @@ final class ProspectoCacheService
      *
      * @param  int  $id  ID del prospecto (-1 para pendientes de crear)
      */
-    public function registerNewProspecto(?string $email, ?string $telefono, int $id = -1): void
+    public function registerNewProspecto(?string $email, ?string $telefono, int $id = -1, ?string $rut = null): void
     {
         if ($email !== null) {
             $this->emailIndex[$email] = $id;
@@ -137,6 +181,10 @@ final class ProspectoCacheService
 
         if ($telefono !== null) {
             $this->telefonoIndex[$telefono] = $id;
+        }
+
+        if ($rut !== null && $rut !== '') {
+            $this->rutIndex[strtoupper($rut)] = $id;
         }
     }
 
