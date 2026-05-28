@@ -82,14 +82,23 @@ final class ProspectoCacheService
     {
         // Normalizamos a UPPERCASE para que "K" minúscula y mayúscula matcheen igual.
         // Eso es lo que decide al primer hit cuando hay duplicados (la DB tiene varios
-        // prospectos por RUT — el más viejo gana porque pluck mantiene el último encontrado
-        // y los recorre por id asc por default).
-        $this->rutIndex = DB::table('prospectos')
+        // prospectos por RUT — el más viejo gana porque ordenamos por id asc).
+        // No usamos pluck con expresión: PG devuelve la columna con nombre raro y rompe.
+        // Hacemos query plana y construimos el índice a mano.
+        $rows = DB::table('prospectos')
             ->whereNotNull('rut')
             ->where('rut', '!=', '')
             ->orderBy('id')
-            ->pluck('id', DB::raw('UPPER(rut)'))
-            ->toArray();
+            ->select('id', 'rut')
+            ->get();
+
+        $this->rutIndex = [];
+        foreach ($rows as $row) {
+            $key = strtoupper((string) $row->rut);
+            if (! isset($this->rutIndex[$key])) {
+                $this->rutIndex[$key] = (int) $row->id; // primer hit gana (id más bajo)
+            }
+        }
     }
 
     private function logCacheLoaded(float $startTime): void
