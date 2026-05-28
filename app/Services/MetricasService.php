@@ -1089,11 +1089,15 @@ class MetricasService
             $stageLabels[$s['id'] ?? ''] = $s['label'] ?? ($s['nombre'] ?? '(sin nombre)');
         }
 
-        // Envíos de HOY agrupados por etapa
+        // Envíos de HOY agrupados por etapa. Filtramos node_id NULL: son envíos sin etapa
+        // (huérfanos creados fuera del flujo normal); aparecían como "(etapa desconocida)" y
+        // confundían. Si hay nuevos huérfanos en el futuro hay que investigarlos en la DB, no
+        // por el dashboard.
         $porEtapaHoy = DB::table('envios as e')
             ->leftJoin('flujo_ejecucion_etapas as fee', 'fee.id', '=', 'e.flujo_ejecucion_etapa_id')
             ->where('e.flujo_id', $flujoId)
             ->whereDate('e.created_at', now()->toDateString())
+            ->whereNotNull('fee.node_id')
             ->select(
                 'fee.node_id',
                 DB::raw('COUNT(*) as total'),
@@ -1118,6 +1122,7 @@ class MetricasService
             $ultimos = DB::table('envios as e')
                 ->leftJoin('flujo_ejecucion_etapas as fee', 'fee.id', '=', 'e.flujo_ejecucion_etapa_id')
                 ->where('e.flujo_id', $flujoId)
+                ->whereNotNull('fee.node_id') // huérfanos sin etapa: fuera del listing
                 ->select(
                     'fee.node_id',
                     DB::raw('MAX(e.created_at) as ultimo'),
