@@ -333,12 +333,14 @@ class GrupoDeudaApiSyncService
                 $existingId = $this->cacheService->findExistingProspectoId($email, $telefono);
 
                 if ($existingId !== null) {
-                    // Lo recolectamos ANTES de la omisión: aunque esté en otro flujo, debe entrar
-                    // al onboarding por ID (se encamina después del sync).
-                    $prospectosExistentes[] = $existingId;
-
                     // Ya existe - verificar si está en flujo activo (salvo que doble membresía esté habilitada)
                     if (! $allowDoubleMembership && $this->estaEnFlujoActivo($existingId)) {
+                        // SOLO los omitidos van por ID al onboarding doble-membresía. Los que no están
+                        // en flujo activo entran al updateBatch + lote y los asigna el dispatch normal
+                        // (línea 136 de SyncGrupoDeudaCommand). Si los pusiéramos en ambas listas,
+                        // los dos dispatches correrían en paralelo (queue 'default' con N workers) y
+                        // mandarían dos envíos al mismo prospecto. Bug observado el 2026-05-28.
+                        $prospectosExistentes[] = $existingId;
                         $omitidosEnFlujo++;
 
                         continue;
@@ -1354,10 +1356,12 @@ class GrupoDeudaApiSyncService
                 $existingId = $this->cacheService->findExistingProspectoId($email, $telefono);
 
                 if ($existingId !== null) {
-                    // Recolectar ANTES de la omisión: debe entrar al onboarding por ID igual.
-                    $prospectosExistentes[] = $existingId;
-
                     if ($this->estaEnFlujoActivo($existingId)) {
+                        // Solo los OMITIDOS van por ID al onboarding doble-membresía. Si recolectáramos
+                        // a todos, los que NO están en flujo activo entrarían dos veces (vía updateBatch
+                        // + vía prospectos_existentes) y producirían envíos duplicados por race entre
+                        // workers paralelos.
+                        $prospectosExistentes[] = $existingId;
                         $omitidosEnFlujo++;
 
                         continue;
