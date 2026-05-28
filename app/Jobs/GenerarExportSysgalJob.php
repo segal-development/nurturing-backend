@@ -99,9 +99,9 @@ class GenerarExportSysgalJob implements ShouldQueue
                 : trim(((string) ($r['Nombre'] ?? '')).' '.((string) ($r['Apellido_Paterno'] ?? '')).' '.((string) ($r['Apellido_Materno'] ?? '')));
 
             // 1) Buscar TODOS los prospectos que pueden ser este cliente. La DB tiene
-            // prospectos duplicados con mismo email/RUT (legacy de syncs viejos). Si solo
-            // miramos el primer match, podemos marcar como rechazado a alguien que SÍ está
-            // en el flujo via su prospecto duplicado.
+            // prospectos duplicados con mismo email/RUT (legacy de syncs viejos) y a veces
+            // SYSGAL trae el email con typo o el teléfono sin prefijo +56. Probamos varias
+            // variantes para no marcar como rechazado a alguien que SÍ está en el flujo.
             $prospectoIds = [];
             if ($rutNorm !== '') {
                 $prospectoIds = array_merge($prospectoIds, DB::table('prospectos')->where('rut', $rutNorm)->pluck('id')->toArray());
@@ -110,7 +110,15 @@ class GenerarExportSysgalJob implements ShouldQueue
                 $prospectoIds = array_merge($prospectoIds, DB::table('prospectos')->where('email', $email)->pluck('id')->toArray());
             }
             if ($telefono !== '') {
-                $prospectoIds = array_merge($prospectoIds, DB::table('prospectos')->where('telefono', $telefono)->pluck('id')->toArray());
+                $telDigits = preg_replace('/\D/', '', $telefono);
+                $telBase = ltrim($telDigits, '56');
+                $variantesTel = array_values(array_unique(array_filter([
+                    $telefono,
+                    $telDigits,
+                    '+56'.$telBase,
+                    '56'.$telBase,
+                ])));
+                $prospectoIds = array_merge($prospectoIds, DB::table('prospectos')->whereIn('telefono', $variantesTel)->pluck('id')->toArray());
             }
             $prospectoIds = array_values(array_unique($prospectoIds));
 
