@@ -1134,15 +1134,37 @@ class MetricasService
             $stageLabels[$s['id'] ?? ''] = $s['label'] ?? ($s['nombre'] ?? '(sin nombre)');
         }
 
+        // Para flujos SYSGAL: filtrar a la cohorte del día (fecha_inicio=hoy AND
+        // fecha_ingreso=hoy-shift), no a todos los envíos por created_at. Así no entra
+        // el catch-up del sync horario (firmados días previos) que pertenece a otra cohorte.
+        $esClientesIngreso = $flujo && $flujo->origen === 'Grupo Deudas - Clientes Ingreso';
+        $esContratosNuevos = $flujo && $flujo->origen === 'Grupo Deudas - Contratos Nuevos';
+        $esSysgal = $esClientesIngreso || $esContratosNuevos;
+
         // Envíos de HOY agrupados por etapa. Filtramos node_id NULL: son envíos sin etapa
         // (huérfanos creados fuera del flujo normal); aparecían como "(etapa desconocida)" y
-        // confundían. Si hay nuevos huérfanos en el futuro hay que investigarlos en la DB, no
-        // por el dashboard.
-        $porEtapaHoy = DB::table('envios as e')
+        // confundían. Excluimos duplicados marcados (race condition arreglada 2026-05-28).
+        $porEtapaQuery = DB::table('envios as e')
             ->leftJoin('flujo_ejecucion_etapas as fee', 'fee.id', '=', 'e.flujo_ejecucion_etapa_id')
             ->where('e.flujo_id', $flujoId)
             ->whereDate('e.created_at', now()->toDateString())
             ->whereNotNull('fee.node_id')
+            ->whereRaw("COALESCE(e.metadata->>'razon_fallo', '') != 'duplicado_race_condition'");
+
+        if ($esSysgal) {
+            $shift = $esClientesIngreso ? 3 : 0;
+            $hoyShifted = now()->subDays($shift)->toDateString();
+            $cohorteIds = DB::table('prospecto_en_flujo')
+                ->where('flujo_id', $flujoId)
+                ->where('cancelado', false)
+                ->whereDate('fecha_inicio', now()->toDateString())
+                ->whereDate('fecha_ingreso', $hoyShifted)
+                ->pluck('prospecto_id');
+
+            $porEtapaQuery->whereIn('e.prospecto_id', $cohorteIds);
+        }
+
+        $porEtapaHoy = $porEtapaQuery
             ->select(
                 'fee.node_id',
                 DB::raw('COUNT(*) as total'),
