@@ -69,45 +69,93 @@ class GenerarExportSysgalJob implements ShouldQueue
     }
 
     /**
-     * Detecta los registros de SYSGAL que NO van a entrar al flujo porque no son
-     * contactables (sin email válido Y sin teléfono). Mismo criterio que
-     * GrupoDeudaApiSyncService::mapRowToProspecto: si ninguno de los dos canales
-     * es usable, se descarta. La gerencia los necesita para saber qué dato corregir
-     * en SYSGAL.
+     * Para cada cliente que SYSGAL reportó, identifica si está en el flujo onboarding
+     * correspondiente y, si NO, por qué. La gerencia necesita saber con detalle qué
+     * pasó con cada uno: si tiene datos malos (corregir en SYSGAL) o si ya estaba en
+     * otro flujo (situación legítima, se omitió).
+     *
+     * Razones que puede devolver:
+     *  - sin_nombre, sin_email, email_invalido, sin_telefono: datos del SYSGAL malos.
+     *  - en_otro_flujo_activo: el prospecto ya estaba en otro flujo (doble-membresía).
+     *  - no_se_creo: tiene contacto válido pero por alguna razón no se creó en DB.
+     *  - no_asignado: existe en DB pero no se asignó al flujo (raro, investigar).
      *
      * @param  array<int, array<string, mixed>>  $rows
      * @return array<int, array<string, mixed>>
      */
     private function computeRechazados(string $tipo, array $rows): array
     {
+        $flujoId = $tipo === 'contratos' ? 48 : 49;
         $rechazados = [];
+
         foreach ($rows as $r) {
             $email = isset($r['Email']) ? strtolower(trim((string) $r['Email'])) : '';
             $telefono = isset($r['Telefono']) ? trim((string) $r['Telefono']) : '';
-            $emailValido = $email !== '' && $this->isValidEmail($email);
-            $telefonoValido = $telefono !== '' && $telefono !== '0';
+            $rutRaw = (string) ($r['Rut'] ?? '');
+            $rutNorm = str_replace('.', '', trim($rutRaw));
 
-            if ($emailValido || $telefonoValido) {
-                continue; // entrará al flujo
+            $nombre = $tipo === 'contratos'
+                ? trim((string) ($r['Cliente'] ?? ''))
+                : trim(((string) ($r['Nombre'] ?? '')).' '.((string) ($r['Apellido_Paterno'] ?? '')).' '.((string) ($r['Apellido_Materno'] ?? '')));
+
+            // 1) Buscar al prospecto en nuestra DB (por RUT, email o teléfono).
+            $prospectoId = null;
+            if ($rutNorm !== '') {
+                $prospectoId = DB::table('prospectos')->where('rut', $rutNorm)->value('id');
+            }
+            if (! $prospectoId && $email !== '') {
+                $prospectoId = DB::table('prospectos')->where('email', $email)->value('id');
+            }
+            if (! $prospectoId && $telefono !== '') {
+                $prospectoId = DB::table('prospectos')->where('telefono', $telefono)->value('id');
             }
 
-            // Identificar la razón concreta (para que gerencia sepa qué corregir en SYSGAL).
+            // 2) Si está en el flujo onboarding, no es rechazado.
+            if ($prospectoId) {
+                $enFlujo = DB::table('prospecto_en_flujo')
+                    ->where('prospecto_id', $prospectoId)
+                    ->where('flujo_id', $flujoId)
+                    ->where('cancelado', false)
+                    ->exists();
+                if ($enFlujo) {
+                    continue;
+                }
+            }
+
+            // 3) NO está en el flujo. Determinar la razón.
             $razones = [];
+
+            if ($nombre === '') {
+                $razones[] = 'sin_nombre';
+            }
             if ($email === '') {
                 $razones[] = 'sin_email';
-            } elseif (! $emailValido) {
+            } elseif (! $this->isValidEmail($email)) {
                 $razones[] = 'email_invalido';
             }
-            if (! $telefonoValido) {
+            if ($telefono === '' || $telefono === '0') {
                 $razones[] = 'sin_telefono';
             }
 
-            $nombre = $tipo === 'contratos'
-                ? (string) ($r['Cliente'] ?? '')
-                : trim(((string) ($r['Nombre'] ?? '')).' '.((string) ($r['Apellido_Paterno'] ?? '')).' '.((string) ($r['Apellido_Materno'] ?? '')));
+            // 4) Si tiene contacto + nombre, debió haber entrado. Buscar la razón fina.
+            $emailValido = $email !== '' && $this->isValidEmail($email);
+            $telefonoValido = $telefono !== '' && $telefono !== '0';
+            if (($emailValido || $telefonoValido) && $nombre !== '') {
+                if ($prospectoId) {
+                    // Existe en DB pero no en este flujo. ¿Está en otro flujo activo (doble-membresía)?
+                    $enOtroFlujo = DB::table('prospecto_en_flujo')
+                        ->where('prospecto_id', $prospectoId)
+                        ->where('cancelado', false)
+                        ->where('flujo_id', '!=', $flujoId)
+                        ->exists();
+                    $razones[] = $enOtroFlujo ? 'en_otro_flujo_activo' : 'no_asignado';
+                } else {
+                    $razones[] = 'no_se_creo';
+                }
+            }
 
             $rechazados[] = [
-                'rut' => (string) ($r['Rut'] ?? ''),
+                'rut' => $rutRaw,
                 'nombre' => $nombre,
                 'email' => (string) ($r['Email'] ?? ''),
                 'telefono' => (string) ($r['Telefono'] ?? ''),
