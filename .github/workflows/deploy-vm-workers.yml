@@ -33,6 +33,7 @@ on:
       - 'app/Listeners/**'
       - 'app/Mail/**'
       - 'app/Models/**'
+      - 'app/Observers/**'
       - 'config/**'
       - 'routes/console.php'
       - 'resources/views/emails/**'
