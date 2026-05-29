@@ -646,12 +646,16 @@ class EnviarEtapaJob implements ShouldQueue
             $now = now();
             $chunks = array_chunk($idsToCreate, 1000);
 
+            // canal_asignado en pef solo admite 'email' o 'sms' (constraint en DB).
+            // Para stages tipo_mensaje='ambos' normalizamos a 'email' (canal primario).
+            $canalAsignado = $tipoMensaje === 'ambos' ? 'email' : $tipoMensaje;
+
             foreach ($chunks as $chunk) {
-                $insertData = array_map(function ($prospectoId) use ($flujoId, $tipoMensaje, $now) {
+                $insertData = array_map(function ($prospectoId) use ($flujoId, $canalAsignado, $now) {
                     return [
                         'prospecto_id' => $prospectoId,
                         'flujo_id' => $flujoId,
-                        'canal_asignado' => $tipoMensaje,
+                        'canal_asignado' => $canalAsignado,
                         'estado' => 'en_proceso',
                         'fecha_inicio' => $now,
                         'completado' => false,

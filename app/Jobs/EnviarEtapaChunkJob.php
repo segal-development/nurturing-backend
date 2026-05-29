@@ -213,11 +213,14 @@ class EnviarEtapaChunkJob implements ShouldQueue
 
         if (! empty($idsToCreate)) {
             $now = now();
-            $insertData = array_map(function ($prospectoId) use ($tipoMensaje, $now) {
+            // canal_asignado en pef solo admite 'email' o 'sms' (constraint en DB).
+            // Para tipo_mensaje='ambos' normalizamos a 'email'.
+            $canalAsignado = $tipoMensaje === 'ambos' ? 'email' : $tipoMensaje;
+            $insertData = array_map(function ($prospectoId) use ($canalAsignado, $now) {
                 return [
                     'prospecto_id' => $prospectoId,
                     'flujo_id' => $this->flujoId,
-                    'canal_asignado' => $tipoMensaje,
+                    'canal_asignado' => $canalAsignado,
                     'estado' => 'en_proceso',
                     'fecha_inicio' => $now,
                     'completado' => false,
