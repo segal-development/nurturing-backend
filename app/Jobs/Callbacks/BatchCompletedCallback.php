@@ -187,9 +187,14 @@ class BatchCompletedCallback
             if (! $condicionEtapa->wasRecentlyCreated) {
                 $condicionEtapa->prospectos()->syncWithoutDetaching($prospectoIds);
                 $mergedCount = $condicionEtapa->prospectos()->count();
+                // En flujos perpetuos la etapa pudo haber sido ejecutada en un ciclo anterior
+                // (estado='completed', ejecutado=true). Reseteamos ambos campos para que vuelva
+                // a ser elegible por el scheduler.
                 $condicionEtapa->update([
                     'prospectos_ids' => $condicionEtapa->prospectos()->pluck('prospectos.id')->toArray(),
                     'prospectos_count' => $mergedCount,
+                    'estado' => 'pending',
+                    'ejecutado' => false,
                 ]);
             }
         } else {
@@ -205,6 +210,8 @@ class BatchCompletedCallback
                 'prospectos_ids' => $mergedProspectos,
                 'prospectos_count' => count($mergedProspectos),
                 'fecha_programada' => $fechaVerificacion,
+                'estado' => 'pending',
+                'ejecutado' => false,
                 'response_athenacampaign' => [
                     'pending_condition' => true,
                     'source_message_id' => $messageId,
@@ -264,9 +271,14 @@ class BatchCompletedCallback
             if (! $siguienteEtapaEjecucion->wasRecentlyCreated) {
                 $siguienteEtapaEjecucion->prospectos()->syncWithoutDetaching($prospectoIds);
                 $mergedCount = $siguienteEtapaEjecucion->prospectos()->count();
+                // En flujos perpetuos la etapa pudo haber sido ejecutada en un ciclo anterior
+                // (estado='completed', ejecutado=true). Reseteamos ambos campos para que vuelva
+                // a ser elegible por el scheduler.
                 $siguienteEtapaEjecucion->update([
                     'prospectos_ids' => $siguienteEtapaEjecucion->prospectos()->pluck('prospectos.id')->toArray(),
                     'prospectos_count' => $mergedCount,
+                    'estado' => 'pending',
+                    'ejecutado' => false,
                 ]);
             }
         } else {
@@ -281,6 +293,8 @@ class BatchCompletedCallback
             $siguienteEtapaEjecucion->update([
                 'prospectos_ids' => $mergedProspectos,
                 'prospectos_count' => count($mergedProspectos),
+                'estado' => 'pending',
+                'ejecutado' => false,
             ]);
         }
 
