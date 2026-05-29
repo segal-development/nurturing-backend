@@ -957,15 +957,19 @@ class MetricasService
         // Recibieron: de la cohorte CUMULATIVA, cuántos recibieron al menos un envío exitoso.
         // Excluye:
         //  - Duplicados marcados (race condition arreglada 2026-05-28).
-        //  - Prospectos con email_invalido=true: el envío row puede estar como "enviado" pero
-        //    Athena rebotó y marcó el email como inválido — realmente NO llegó al destinatario.
-        //    Aparecen en "Datos con problemas de envío".
+        //  - Prospectos con email_invalido=true: Athena rebotó (typo dominio, dominio
+        //    inexistente, etc.) — el envío row queda como "enviado" pero NO llegó.
+        //  - Prospectos sin email (NULL o vacío): obvio que no recibieron por email.
+        //  Todos estos aparecen en "Datos con problemas de envío", manteniendo coherencia
+        //  visual: lo que no cuadra en Recibieron sí cuadra en Datos con problemas.
         $recibieron = DB::table('envios as e')
             ->join('prospectos as p', 'p.id', '=', 'e.prospecto_id')
             ->where('e.flujo_id', $flujoId)
             ->whereIn('e.estado', ['enviado', 'entregado', 'abierto', 'clickeado'])
             ->whereRaw("COALESCE(e.metadata->>'razon_fallo', '') != 'duplicado_race_condition'")
             ->where(function ($q) { $q->where('p.email_invalido', false)->orWhereNull('p.email_invalido'); })
+            ->whereNotNull('p.email')
+            ->where('p.email', '!=', '')
             ->whereIn('e.prospecto_id', (clone $cohorte))
             ->distinct()
             ->count('e.prospecto_id');
