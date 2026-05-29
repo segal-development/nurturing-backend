@@ -954,15 +954,21 @@ class MetricasService
             ];
         }
 
-        // Recibieron: de la cohorte CUMULATIVA, cuántos recibieron al menos un envío exitoso
-        // (sin filtro de fecha — un envío hecho ayer cuenta igual). Excluye duplicados marcados.
-        $recibieron = DB::table('envios')
-            ->where('flujo_id', $flujoId)
-            ->whereIn('estado', ['enviado', 'entregado', 'abierto', 'clickeado'])
-            ->whereRaw("COALESCE(metadata->>'razon_fallo', '') != 'duplicado_race_condition'")
-            ->whereIn('prospecto_id', (clone $cohorte))
+        // Recibieron: de la cohorte CUMULATIVA, cuántos recibieron al menos un envío exitoso.
+        // Excluye:
+        //  - Duplicados marcados (race condition arreglada 2026-05-28).
+        //  - Prospectos con email_invalido=true: el envío row puede estar como "enviado" pero
+        //    Athena rebotó y marcó el email como inválido — realmente NO llegó al destinatario.
+        //    Aparecen en "Datos con problemas de envío".
+        $recibieron = DB::table('envios as e')
+            ->join('prospectos as p', 'p.id', '=', 'e.prospecto_id')
+            ->where('e.flujo_id', $flujoId)
+            ->whereIn('e.estado', ['enviado', 'entregado', 'abierto', 'clickeado'])
+            ->whereRaw("COALESCE(e.metadata->>'razon_fallo', '') != 'duplicado_race_condition'")
+            ->where(function ($q) { $q->where('p.email_invalido', false)->orWhereNull('p.email_invalido'); })
+            ->whereIn('e.prospecto_id', (clone $cohorte))
             ->distinct()
-            ->count('prospecto_id');
+            ->count('e.prospecto_id');
 
         // Abrieron: de la cohorte, cuántos abrieron al menos un email del flujo (sin filtro de fecha).
         $abrieron = DB::table('email_aperturas as ea')
