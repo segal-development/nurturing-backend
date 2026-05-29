@@ -1043,23 +1043,24 @@ class MetricasService
     private function getEmbudosPorEtapa(int $dias, int $flujoId, ?string $fechaInicio, ?string $fechaFin): ?array
     {
         $flujo = Flujo::find($flujoId);
-        if (! $flujo || $flujo->origen !== 'Grupo Deudas - Clientes Ingreso') {
+        // Mostrar tabla en flujos perpetuos multi-etapa. Clientes-Ingreso es el caso especial
+        // con anchor en fecha_ingreso (de SYSGAL); los demás flujos perpetuos usan fecha_inicio
+        // como anchor (cuándo entraron al flujo).
+        if (! $flujo || ! $flujo->es_perpetuo) {
             return null;
         }
+
+        $esClientesIngreso = $flujo->origen === 'Grupo Deudas - Clientes Ingreso';
 
         [$desde, $hasta] = $this->resolverRango($dias, $fechaInicio, $fechaFin);
 
         $cfg = $flujo->config_structure ?? [];
         $stages = $cfg['stages'] ?? [];
         $branches = $cfg['branches'] ?? [];
-        if (empty($stages)) {
-            return null;
+        if (count($stages) < 2) {
+            return null; // flujos de un solo nodo no necesitan esta vista
         }
 
-        // Construir orden de stages siguiendo branches desde initial-1. Cada stage agrega
-        // tiempo_espera al offset acumulado. Para Clientes-Ingreso, el baseline es +3 días
-        // (el sync trae al cliente 3 días después del ingreso) — el primer stage tiene
-        // tiempo_espera=0 porque dispara al entrar al flujo (que ya es día+3).
         $stagesPorId = collect($stages)->keyBy('id');
         $nextOf = collect($branches)->keyBy('source_node_id');
 
@@ -1069,8 +1070,11 @@ class MetricasService
             return null;
         }
 
+        // Baseline offset: Clientes-Ingreso usa +3 días (el sync trae al cliente 3 días
+        // después de su fecha_ingreso). Otros flujos arrancan en 0 (la cohorte se cuenta
+        // desde que entraron al flujo).
         $ordenados = [];
-        $offsetDias = 3; // baseline Clientes-Ingreso: email a los 3 días
+        $offsetDias = $esClientesIngreso ? 3 : 0;
         $currentId = $firstStageId;
         $visitados = [];
         while ($currentId && ! in_array($currentId, $visitados, true)) {
@@ -1106,23 +1110,30 @@ class MetricasService
             $offset = $item['offset_dias'];
             $feeIds = $feesPorStage[$stage['id']] ?? [];
 
-            // Cohorte: prospectos en el flujo cuya fecha_ingreso = (período seleccionado) - offset.
+            // Cohorte: prospectos cuyo anchor = (período seleccionado) - offset.
+            // Clientes-Ingreso usa fecha_ingreso (de SYSGAL); otros flujos usan fecha_inicio
+            // (cuándo entraron al flujo).
             $cohorteDesde = Carbon::parse($desde)->subDays($offset)->toDateString();
             $cohorteHasta = Carbon::parse($hasta)->subDays($offset)->toDateString();
 
-            // Cohorte de OPERACIÓN NORMAL: filtramos por gap razonable entre ingreso y
-            // entrada al flujo. Históricamente el sync podía traer entre 1-3 días después
-            // del ingreso (lógica variable), así que aceptamos BETWEEN 0 AND 7 días.
-            // Los recuperados manuales (gap 10-30 días) quedan afuera — esos van a recibir
-            // las etapas en orden secuencial empezando por la 1, no la etapa avanzada que
-            // les correspondería por su fecha_ingreso vieja.
             $cohorte = DB::table('prospecto_en_flujo')
                 ->where('flujo_id', $flujoId)
-                ->where('cancelado', false)
-                ->whereNotNull('fecha_ingreso')
-                ->whereBetween('fecha_ingreso', [$cohorteDesde, $cohorteHasta])
-                ->whereRaw('date(fecha_inicio) - fecha_ingreso BETWEEN 0 AND 7')
-                ->select('prospecto_id');
+                ->where('cancelado', false);
+
+            if ($esClientesIngreso) {
+                // OPERACIÓN NORMAL: filtramos por gap razonable entre ingreso y entrada al
+                // flujo. Históricamente el sync podía traer entre 1-3 días después del
+                // ingreso (lógica variable), así que aceptamos BETWEEN 0 AND 7 días.
+                // Los recuperados manuales (gap 10-30 días) quedan afuera.
+                $cohorte = $cohorte
+                    ->whereNotNull('fecha_ingreso')
+                    ->whereBetween('fecha_ingreso', [$cohorteDesde, $cohorteHasta])
+                    ->whereRaw('date(fecha_inicio) - fecha_ingreso BETWEEN 0 AND 7');
+            } else {
+                $cohorte = $cohorte->whereBetween(DB::raw('date(fecha_inicio)'), [$cohorteDesde, $cohorteHasta]);
+            }
+
+            $cohorte = $cohorte->select('prospecto_id');
             $entraron = (clone $cohorte)->distinct()->count('prospecto_id');
 
             $recibieron = 0;
@@ -1181,6 +1192,7 @@ class MetricasService
                 'tasa_apertura' => $recibieron > 0 ? round($abrieron / $recibieron * 100, 2) : 0,
                 'tasa_ctr' => $abrieron > 0 ? round($clickaron / $abrieron * 100, 2) : 0,
                 'tasa_desuscripcion' => $recibieron > 0 ? round($desuscribieron / $recibieron * 100, 2) : 0,
+                'tiene_anchor_sysgal' => $esClientesIngreso,
             ];
         }
 
