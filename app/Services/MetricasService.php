@@ -1110,17 +1110,18 @@ class MetricasService
             $cohorteDesde = Carbon::parse($desde)->subDays($offset)->toDateString();
             $cohorteHasta = Carbon::parse($hasta)->subDays($offset)->toDateString();
 
-            // Cohorte de OPERACIÓN NORMAL: filtramos a los que entraron al flujo en su día
-            // correcto (≈ fecha_ingreso + 3 días). Los recuperados/atrasados (fecha_inicio
-            // mucho después de fecha_ingreso) se excluyen — su drip arranca desde etapa 1
-            // hoy y NO van a recibir esta etapa avanzada en su día correcto, así que
-            // contarlos como "no recibieron" engañaría la métrica.
+            // Cohorte de OPERACIÓN NORMAL: filtramos por gap razonable entre ingreso y
+            // entrada al flujo. Históricamente el sync podía traer entre 1-3 días después
+            // del ingreso (lógica variable), así que aceptamos BETWEEN 0 AND 7 días.
+            // Los recuperados manuales (gap 10-30 días) quedan afuera — esos van a recibir
+            // las etapas en orden secuencial empezando por la 1, no la etapa avanzada que
+            // les correspondería por su fecha_ingreso vieja.
             $cohorte = DB::table('prospecto_en_flujo')
                 ->where('flujo_id', $flujoId)
                 ->where('cancelado', false)
                 ->whereNotNull('fecha_ingreso')
                 ->whereBetween('fecha_ingreso', [$cohorteDesde, $cohorteHasta])
-                ->whereRaw('date(fecha_inicio) - fecha_ingreso BETWEEN 2 AND 5')
+                ->whereRaw('date(fecha_inicio) - fecha_ingreso BETWEEN 0 AND 7')
                 ->select('prospecto_id');
             $entraron = (clone $cohorte)->distinct()->count('prospecto_id');
 
