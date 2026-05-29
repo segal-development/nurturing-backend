@@ -1336,11 +1336,32 @@ class MetricasService
             $noContactable = $sinTelefono;
         }
 
-        $base = fn () => DB::table('prospecto_en_flujo as pf')
-            ->join('prospectos as p', 'p.id', '=', 'pf.prospecto_id')
-            ->where('pf.cancelado', false)
-            ->whereBetween('pf.fecha_inicio', [$desde, $hasta])
-            ->when($flujoId, fn ($q, $id) => $q->where('pf.flujo_id', $id));
+        // Para flujos SYSGAL alineamos el filtro a la MISMA cohorte que el embudo
+        // (fecha_ingreso shifted), no por fecha_inicio. Sin esto, el panel mostraba prospectos
+        // que entraron HOY al flujo (incluido legacy recuperado) en vez de los de la cohorte
+        // del día seleccionado — generaba contradicción visual con el embudo.
+        $esClientesIngreso = $flujoId !== null && isset($flujo)
+            && $flujo?->origen === 'Grupo Deudas - Clientes Ingreso';
+        $esContratosNuevos = $flujoId !== null && isset($flujo)
+            && $flujo?->origen === 'Grupo Deudas - Contratos Nuevos';
+
+        $base = function () use ($desde, $hasta, $flujoId, $esClientesIngreso, $esContratosNuevos) {
+            $q = DB::table('prospecto_en_flujo as pf')
+                ->join('prospectos as p', 'p.id', '=', 'pf.prospecto_id')
+                ->where('pf.cancelado', false)
+                ->when($flujoId, fn ($q2, $id) => $q2->where('pf.flujo_id', $id));
+
+            if ($esClientesIngreso || $esContratosNuevos) {
+                $shift = $esClientesIngreso ? 3 : 0;
+                $desdeIngreso = \Carbon\Carbon::parse($desde)->subDays($shift)->toDateString();
+                $hastaIngreso = \Carbon\Carbon::parse($hasta)->subDays($shift)->toDateString();
+                $q->whereNotNull('pf.fecha_ingreso')->whereBetween('pf.fecha_ingreso', [$desdeIngreso, $hastaIngreso]);
+            } else {
+                $q->whereBetween('pf.fecha_inicio', [$desde, $hasta]);
+            }
+
+            return $q;
+        };
 
         $stats = $base()->selectRaw("
             COUNT(*) as total_miembros,
