@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Support\Facades\Log;
 
 class FlujoEjecucionEtapa extends Model
 {
@@ -24,6 +25,31 @@ class FlujoEjecucionEtapa extends Model
         static::saving(function (FlujoEjecucionEtapa $etapa) {
             if (empty($etapa->nodo_id) && empty($etapa->node_id)) {
                 throw new \InvalidArgumentException('FlujoEjecucionEtapa requires nodo_id or node_id');
+            }
+
+            // Invariante: cuando una etapa vuelve a 'pending' (típicamente al promoverla
+            // en el siguiente ciclo de un flujo perpetuo), ejecutado DEBE ser false. Si no,
+            // el scheduler la skipea (EjecutarNodosProgramados línea 259) y queda atascada
+            // en pending+ejecutado=true. Centraliza el guard que antes vivía en
+            // BatchCompletedCallback, FlujoEjecucionEtapaObserver y
+            // EjecutarNodosProgramados::actualizarEjecucionDespuesDeRecuperacion.
+            $estadoCambio = $etapa->exists && $etapa->isDirty('estado');
+            if ($estadoCambio && $etapa->estado === 'pending' && $etapa->ejecutado) {
+                $callers = collect(debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 8))
+                    ->slice(2)
+                    ->map(fn ($f) => ($f['class'] ?? '') . ($f['type'] ?? '') . ($f['function'] ?? ''))
+                    ->filter()
+                    ->take(5)
+                    ->values()
+                    ->all();
+
+                Log::warning('FlujoEjecucionEtapa: pending+ejecutado=true forzado a ejecutado=false por guard del modelo', [
+                    'etapa_id' => $etapa->id,
+                    'node_id' => $etapa->node_id,
+                    'callers' => $callers,
+                ]);
+
+                $etapa->ejecutado = false;
             }
         });
 

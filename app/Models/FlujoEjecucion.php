@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Facades\Log;
 
 class FlujoEjecucion extends Model
 {
@@ -23,6 +24,40 @@ class FlujoEjecucion extends Model
                     $model->prospectos()->sync($ids);
                 }
             }
+        });
+
+        // Invariante: una ejecución perpetua NUNCA debe terminar en 'completed'.
+        // Centraliza el guard de es_perpetuo que antes vivía repetido en BatchCompletedCallback,
+        // FlujoEjecucionEtapaObserver, EjecutarNodosProgramados y EnviarEtapaJob. Si alguno
+        // de ellos (o código futuro) intenta marcar completed un flujo perpetuo, lo corregimos
+        // a 'waiting' y logueamos el caller para poder localizar el path defectuoso.
+        static::updating(function (FlujoEjecucion $ejecucion) {
+            if (! $ejecucion->isDirty('estado') || $ejecucion->estado !== 'completed') {
+                return;
+            }
+
+            $esPerpetuo = $ejecucion->es_perpetuo || ($ejecucion->flujo?->es_perpetuo ?? false);
+            if (! $esPerpetuo) {
+                return;
+            }
+
+            $callers = collect(debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 8))
+                ->slice(2)
+                ->map(fn ($f) => ($f['class'] ?? '') . ($f['type'] ?? '') . ($f['function'] ?? ''))
+                ->filter()
+                ->take(5)
+                ->values()
+                ->all();
+
+            Log::warning('FlujoEjecucion: intento de marcar perpetuo como completed bloqueado por guard del modelo', [
+                'ejecucion_id' => $ejecucion->id,
+                'flujo_id' => $ejecucion->flujo_id,
+                'estado_anterior' => $ejecucion->getOriginal('estado'),
+                'callers' => $callers,
+            ]);
+
+            $ejecucion->estado = 'waiting';
+            $ejecucion->fecha_fin = null;
         });
     }
 
