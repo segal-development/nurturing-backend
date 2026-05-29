@@ -12,6 +12,7 @@ on:
       - main
     paths:
       - 'app/Jobs/**'
+      - 'app/Models/**'
       - 'app/Observers/**'
       - 'app/Console/**'
       - 'routes/console.php'

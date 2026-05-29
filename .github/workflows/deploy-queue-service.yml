@@ -20,6 +20,7 @@ on:
       - main
     paths:
       - 'app/Jobs/**'
+      - 'app/Models/**'
       - 'app/Observers/**'
       - 'app/Services/Import/**'
       - 'app/Imports/**'
