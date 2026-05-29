@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Desuscripcion;
 use App\Models\Flujo;
+use App\Models\FlujoEjecucion;
 use App\Models\Prospecto;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Cache;
