@@ -127,6 +127,12 @@ class MetricasService
                 'embudo' => $flujoId !== null
                     ? $this->getEmbudoCohorte($dias, $flujoId, $fechaInicio, $fechaFin)
                     : null,
+                // Embudos por ETAPA: solo para Clientes por Fecha Ingreso (flujo 49). El
+                // flujo tiene 5 etapas con offsets distintos desde el ingreso (3, 4, 5, 10,
+                // 18 días) y gerencia quiere ver el rendimiento de cada email por separado.
+                'embudos_por_etapa' => $flujoId !== null
+                    ? $this->getEmbudosPorEtapa($dias, $flujoId, $fechaInicio, $fechaFin)
+                    : null,
                 'problemas_envio' => $this->getProblemasEnvio($dias, $flujoId, $fechaInicio, $fechaFin),
                 'reconciliacion_sysgal' => $this->getReconciliacionSysgal(),
                 'envios_hoy' => $this->getEnviosHoyConFallback($flujoId),
@@ -1020,6 +1026,157 @@ class MetricasService
             'tasa_ctr' => $abrieron > 0 ? round($clickaron / $abrieron * 100, 2) : 0,
             'tasa_desuscripcion' => $recibieron > 0 ? round($desuscribieron / $recibieron * 100, 2) : 0,
         ];
+    }
+
+    /**
+     * Embudos POR ETAPA del flujo (solo Clientes por Fecha Ingreso).
+     *
+     * Cada etapa del flujo tiene su propio offset desde el ingreso del cliente (3, 4, 5, 10,
+     * 18 días para Clientes-Ingreso). Gerencia quiere ver el rendimiento de cada email por
+     * separado: cohorte de quiénes ingresaron hace N días, cuántos en flujo, cuántos
+     * recibieron específicamente el email de esta etapa, abrieron, etc.
+     *
+     * Retorna array (uno por etapa) o null si el flujo no es Clientes-Ingreso. Devuelve null
+     * para evitar serializar payload extra en flujos donde no aplica.
+     */
+    private function getEmbudosPorEtapa(int $dias, int $flujoId, ?string $fechaInicio, ?string $fechaFin): ?array
+    {
+        $flujo = Flujo::find($flujoId);
+        if (! $flujo || $flujo->origen !== 'Grupo Deudas - Clientes Ingreso') {
+            return null;
+        }
+
+        [$desde, $hasta] = $this->resolverRango($dias, $fechaInicio, $fechaFin);
+
+        $cfg = $flujo->config_structure ?? [];
+        $stages = $cfg['stages'] ?? [];
+        $branches = $cfg['branches'] ?? [];
+        if (empty($stages)) {
+            return null;
+        }
+
+        // Construir orden de stages siguiendo branches desde initial-1. Cada stage agrega
+        // tiempo_espera al offset acumulado. Para Clientes-Ingreso, el baseline es +3 días
+        // (el sync trae al cliente 3 días después del ingreso) — el primer stage tiene
+        // tiempo_espera=0 porque dispara al entrar al flujo (que ya es día+3).
+        $stagesPorId = collect($stages)->keyBy('id');
+        $nextOf = collect($branches)->keyBy('source_node_id');
+
+        // Buscar primer stage (target de initial-*).
+        $firstStageId = $nextOf->filter(fn ($b, $k) => str_starts_with((string) $k, 'initial'))->first()['target_node_id'] ?? null;
+        if (! $firstStageId) {
+            return null;
+        }
+
+        $ordenados = [];
+        $offsetDias = 3; // baseline Clientes-Ingreso: email a los 3 días
+        $currentId = $firstStageId;
+        $visitados = [];
+        while ($currentId && ! in_array($currentId, $visitados, true)) {
+            $visitados[] = $currentId;
+            $stage = $stagesPorId[$currentId] ?? null;
+            if (! $stage) {
+                break;
+            }
+            $offsetDias += (int) ($stage['tiempo_espera'] ?? 0);
+            $ordenados[] = ['stage' => $stage, 'offset_dias' => $offsetDias];
+            $currentId = $nextOf[$currentId]['target_node_id'] ?? null;
+        }
+
+        // Necesitamos los FEEs de la ejecución perpetua para filtrar envíos por etapa.
+        $ejecucion = FlujoEjecucion::where('flujo_id', $flujoId)
+            ->where('es_perpetuo', true)
+            ->whereIn('estado', ['in_progress', 'waiting', 'paused'])
+            ->orderByDesc('id')
+            ->first();
+        if (! $ejecucion) {
+            return null;
+        }
+        $feesPorStage = DB::table('flujo_ejecucion_etapas')
+            ->where('flujo_ejecucion_id', $ejecucion->id)
+            ->get(['id', 'node_id'])
+            ->groupBy('node_id')
+            ->map(fn ($g) => $g->pluck('id')->toArray())
+            ->toArray();
+
+        $resultados = [];
+        foreach ($ordenados as $item) {
+            $stage = $item['stage'];
+            $offset = $item['offset_dias'];
+            $feeIds = $feesPorStage[$stage['id']] ?? [];
+
+            // Cohorte: prospectos en el flujo cuya fecha_ingreso = (período seleccionado) - offset.
+            $cohorteDesde = Carbon::parse($desde)->subDays($offset)->toDateString();
+            $cohorteHasta = Carbon::parse($hasta)->subDays($offset)->toDateString();
+
+            $cohorte = DB::table('prospecto_en_flujo')
+                ->where('flujo_id', $flujoId)
+                ->where('cancelado', false)
+                ->whereNotNull('fecha_ingreso')
+                ->whereBetween('fecha_ingreso', [$cohorteDesde, $cohorteHasta])
+                ->select('prospecto_id');
+            $entraron = (clone $cohorte)->distinct()->count('prospecto_id');
+
+            $recibieron = 0;
+            $abrieron = 0;
+            $clickaron = 0;
+            $desuscribieron = 0;
+            if ($entraron > 0 && ! empty($feeIds)) {
+                $recibieron = DB::table('envios as e')
+                    ->join('prospectos as p', 'p.id', '=', 'e.prospecto_id')
+                    ->where('e.flujo_id', $flujoId)
+                    ->whereIn('e.flujo_ejecucion_etapa_id', $feeIds)
+                    ->whereIn('e.estado', ['enviado', 'entregado', 'abierto', 'clickeado'])
+                    ->whereRaw("COALESCE(e.metadata->>'razon_fallo', '') != 'duplicado_race_condition'")
+                    ->where(function ($q) { $q->where('p.email_invalido', false)->orWhereNull('p.email_invalido'); })
+                    ->whereNotNull('p.email')
+                    ->where('p.email', '!=', '')
+                    ->whereIn('e.prospecto_id', (clone $cohorte))
+                    ->distinct()
+                    ->count('e.prospecto_id');
+
+                $abrieron = DB::table('email_aperturas as ea')
+                    ->join('envios as e', 'e.id', '=', 'ea.envio_id')
+                    ->where('e.flujo_id', $flujoId)
+                    ->whereIn('e.flujo_ejecucion_etapa_id', $feeIds)
+                    ->whereIn('e.prospecto_id', (clone $cohorte))
+                    ->distinct()
+                    ->count('e.prospecto_id');
+
+                $clickaron = DB::table('email_clicks as ec')
+                    ->join('envios as e', 'e.id', '=', 'ec.envio_id')
+                    ->where('e.flujo_id', $flujoId)
+                    ->whereIn('e.flujo_ejecucion_etapa_id', $feeIds)
+                    ->whereIn('e.prospecto_id', (clone $cohorte))
+                    ->distinct()
+                    ->count('e.prospecto_id');
+
+                $desuscribieron = DB::table('desuscripciones')
+                    ->where('flujo_id', $flujoId)
+                    ->whereIn('prospecto_id', (clone $cohorte))
+                    ->distinct()
+                    ->count('prospecto_id');
+            }
+
+            $resultados[] = [
+                'stage_id' => $stage['id'],
+                'label' => $stage['label'] ?? $stage['nombre'] ?? 'Etapa',
+                'offset_dias' => $offset,
+                'desde_ingreso' => $cohorteDesde,
+                'hasta_ingreso' => $cohorteHasta,
+                'entraron' => $entraron,
+                'recibieron' => $recibieron,
+                'abrieron' => $abrieron,
+                'clickaron' => $clickaron,
+                'desuscribieron' => $desuscribieron,
+                'tasa_entrega' => $entraron > 0 ? round($recibieron / $entraron * 100, 2) : 0,
+                'tasa_apertura' => $recibieron > 0 ? round($abrieron / $recibieron * 100, 2) : 0,
+                'tasa_ctr' => $abrieron > 0 ? round($clickaron / $abrieron * 100, 2) : 0,
+                'tasa_desuscripcion' => $recibieron > 0 ? round($desuscribieron / $recibieron * 100, 2) : 0,
+            ];
+        }
+
+        return $resultados;
     }
 
     /**
