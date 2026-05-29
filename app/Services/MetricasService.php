@@ -1110,11 +1110,17 @@ class MetricasService
             $cohorteDesde = Carbon::parse($desde)->subDays($offset)->toDateString();
             $cohorteHasta = Carbon::parse($hasta)->subDays($offset)->toDateString();
 
+            // Cohorte de OPERACIÓN NORMAL: filtramos a los que entraron al flujo en su día
+            // correcto (≈ fecha_ingreso + 3 días). Los recuperados/atrasados (fecha_inicio
+            // mucho después de fecha_ingreso) se excluyen — su drip arranca desde etapa 1
+            // hoy y NO van a recibir esta etapa avanzada en su día correcto, así que
+            // contarlos como "no recibieron" engañaría la métrica.
             $cohorte = DB::table('prospecto_en_flujo')
                 ->where('flujo_id', $flujoId)
                 ->where('cancelado', false)
                 ->whereNotNull('fecha_ingreso')
                 ->whereBetween('fecha_ingreso', [$cohorteDesde, $cohorteHasta])
+                ->whereRaw('date(fecha_inicio) - fecha_ingreso BETWEEN 2 AND 5')
                 ->select('prospecto_id');
             $entraron = (clone $cohorte)->distinct()->count('prospecto_id');
 
