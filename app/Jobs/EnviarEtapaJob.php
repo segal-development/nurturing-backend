@@ -266,11 +266,11 @@ class EnviarEtapaJob implements ShouldQueue
         $conexion = collect($branches)->firstWhere('source_node_id', $stageId);
 
         if (! $conexion) {
-            // No hay siguiente nodo, finalizar
-            $ejecucion->update([
-                'estado' => 'completed',
-                'fecha_fin' => now(),
-            ]);
+            // No hay siguiente nodo: delegar en el modelo. Para flujos perpetuos queda
+            // en 'waiting' esperando nuevos prospectos; para flujos normales pasa a
+            // 'completed'. Antes esto marcaba completed directo y mataba ejecuciones
+            // perpetuas (incidente 2026-05-29 con FEE 507 sin prospectos).
+            $ejecucion->finalizarRespetandoPerpetuo();
 
             return;
         }
@@ -278,10 +278,7 @@ class EnviarEtapaJob implements ShouldQueue
         $targetNodeId = $conexion['target_node_id'];
 
         if (str_starts_with($targetNodeId, 'end-')) {
-            $ejecucion->update([
-                'estado' => 'completed',
-                'fecha_fin' => now(),
-            ]);
+            $ejecucion->finalizarRespetandoPerpetuo();
 
             return;
         }
