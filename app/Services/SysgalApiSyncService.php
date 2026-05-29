@@ -361,9 +361,13 @@ class SysgalApiSyncService
 
                 $email = $prospectoData['email'];
                 $telefono = $prospectoData['telefono'];
+                $rut = $prospectoData['rut'] ?? null;
 
-                // Buscar si ya existe
-                $existingId = $this->cacheService->findExistingProspectoId($email, $telefono);
+                // Buscar primero por RUT (clave canónica). Email/teléfono son fallback.
+                // Sin esto, SYSGAL legacy crea miles de duplicados por sync (observado:
+                // imp 732 creó 4,932 duplicados el 2026-05-29 porque el match por email
+                // fallaba con variantes de formato).
+                $existingId = $this->cacheService->findExistingProspectoIdByRut($rut, $email, $telefono);
 
                 if ($existingId !== null) {
                     // Ya existe - verificar si está en flujo activo
@@ -393,7 +397,7 @@ class SysgalApiSyncService
                     }
 
                     // Registrar en cache para detectar duplicados dentro del mismo sync
-                    $this->cacheService->registerNewProspecto($email, $telefono);
+                    $this->cacheService->registerNewProspecto($email, $telefono, -1, $rut);
                 }
 
                 $exitosos++;

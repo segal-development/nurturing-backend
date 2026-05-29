@@ -256,7 +256,10 @@ final class ProspectoImportService
      */
     private function createOrUpdateProspecto(ProspectoRow $row, int $tipoId): void
     {
-        $existingId = $this->cacheService->findExistingProspectoId($row->email, $row->telefono);
+        // Priorizar RUT (clave canónica). Email/teléfono son fallback. Sin esto, los
+        // imports de informes_comerciales y otros excel creaban duplicados por variantes
+        // de formato (observado: ~200 duplicados nuevos por import de informes).
+        $existingId = $this->cacheService->findExistingProspectoIdByRut($row->rut, $row->email, $row->telefono);
 
         if ($this->shouldUpdate($existingId)) {
             $this->batchWriter->queueUpdate($existingId, $row, $tipoId);
@@ -265,7 +268,7 @@ final class ProspectoImportService
         }
 
         $this->batchWriter->queueCreate($row, $tipoId);
-        $this->cacheService->registerNewProspecto($row->email, $row->telefono);
+        $this->cacheService->registerNewProspecto($row->email, $row->telefono, -1, $row->rut);
     }
 
     private function shouldUpdate(?int $existingId): bool
