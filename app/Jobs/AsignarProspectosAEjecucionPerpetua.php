@@ -114,8 +114,13 @@ class AsignarProspectosAEjecucionPerpetua implements ShouldQueue
         // Update execution's prospectos_ids (ALL nuevos, even if already in prospecto_en_flujo)
         $this->actualizarEjecucion($ejecucionPerpetua, $nuevosProspectoIds);
 
-        // Update ALL pending stages' prospectos_ids (not just the first)
-        $this->actualizarEtapasPendientes($ejecucionPerpetua, $nuevosProspectoIds);
+        // Agregar SOLO a la primera etapa del drip. La progresión a etapas posteriores se
+        // hace via BatchCompletedCallback cuando la etapa actual completa (respeta tiempo_espera
+        // entre stages). Antes esto agregaba a TODAS las etapas pendientes — eso rompía la
+        // secuencia: un prospecto recién entrado se agregaba a la FEE de etapa 2 atascada de
+        // hace días, y cuando esa FEE eventualmente disparaba, el prospecto recibía email 2
+        // sin haber pasado por etapa 1 con su delay.
+        $this->actualizarPrimeraEtapaPendiente($ejecucionPerpetua, $resolver, $flujo, $nuevosProspectoIds);
 
         Log::info('AsignarProspectosAEjecucionPerpetua: Completado', [
             'flujo_id' => $this->flujoId,
@@ -403,46 +408,60 @@ class AsignarProspectosAEjecucionPerpetua implements ShouldQueue
     }
 
     /**
-     * Update ALL pending stages' prospectos_ids with new prospects.
+     * Agrega los nuevos prospectos SOLO a la primera etapa del drip.
      *
-     * New prospects joining a perpetual flow should be added to all
-     * stages that haven't been executed yet, so they will be included
-     * when those stages run.
+     * En flujos perpetuos secuenciales, los prospectos progresan etapa por etapa
+     * (BatchCompletedCallback promueve al siguiente al terminar la actual, respetando
+     * tiempo_espera). Si los agregáramos a TODAS las etapas pendientes, se les enviaría
+     * el email N sin haber pasado por etapas anteriores ni haber esperado los días
+     * correspondientes.
+     *
+     * Para encontrar la "primera etapa": el target del branch initial-* del flujo.
+     * Si la FEE de esa etapa no existe o está completed/executing, no agregamos —
+     * BatchCompletedCallback o el siguiente ciclo del scheduler manejarán la creación.
      */
-    private function actualizarEtapasPendientes(
+    private function actualizarPrimeraEtapaPendiente(
         FlujoEjecucion $ejecucion,
+        StageOrderResolver $resolver,
+        Flujo $flujo,
         array $nuevosProspectoIds
     ): void {
-        $etapasPendientes = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
-            ->where('estado', 'pending')
-            ->get();
-
-        if ($etapasPendientes->isEmpty()) {
-            Log::info('AsignarProspectosAEjecucionPerpetua: No hay etapas pendientes para actualizar', [
+        $firstStageId = $resolver->getFirstStage($flujo);
+        if (! $firstStageId) {
+            Log::warning('AsignarProspectosAEjecucionPerpetua: Sin primera etapa identificable', [
                 'ejecucion_id' => $ejecucion->id,
             ]);
 
             return;
         }
 
-        $etapasActualizadas = 0;
+        $primeraEtapa = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
+            ->where('node_id', $firstStageId)
+            ->where('estado', 'pending')
+            ->first();
 
-        foreach ($etapasPendientes as $etapa) {
-            $etapa->prospectos()->syncWithoutDetaching($nuevosProspectoIds);
-            $mergedIds = $etapa->prospectos()->pluck('prospectos.id')->toArray();
-
-            $etapa->update([
-                'prospectos_ids' => $mergedIds,
-                'prospectos_count' => count($mergedIds),
+        if (! $primeraEtapa) {
+            Log::info('AsignarProspectosAEjecucionPerpetua: Primera etapa no está pendiente, omitiendo', [
+                'ejecucion_id' => $ejecucion->id,
+                'first_stage_id' => $firstStageId,
             ]);
 
-            $etapasActualizadas++;
+            return;
         }
 
-        Log::info('AsignarProspectosAEjecucionPerpetua: Etapas pendientes actualizadas', [
+        $primeraEtapa->prospectos()->syncWithoutDetaching($nuevosProspectoIds);
+        $mergedIds = $primeraEtapa->prospectos()->pluck('prospectos.id')->toArray();
+
+        $primeraEtapa->update([
+            'prospectos_ids' => $mergedIds,
+            'prospectos_count' => count($mergedIds),
+        ]);
+
+        Log::info('AsignarProspectosAEjecucionPerpetua: Primera etapa actualizada', [
             'ejecucion_id' => $ejecucion->id,
-            'etapas_actualizadas' => $etapasActualizadas,
+            'first_etapa_id' => $primeraEtapa->id,
             'nuevos_prospectos' => count($nuevosProspectoIds),
+            'total_en_etapa' => count($mergedIds),
         ]);
     }
 
