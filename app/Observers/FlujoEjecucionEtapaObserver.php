@@ -226,10 +226,15 @@ class FlujoEjecucionEtapaObserver
             $mergedProspectos = $siguienteEtapa->prospectos()->pluck('prospectos.id')->toArray();
 
             FlujoEjecucionEtapa::withoutEvents(function () use ($siguienteEtapa, $mergedProspectos, $tipoNodo, $etapaCompletada) {
+                // En flujos perpetuos la etapa pudo haber sido ejecutada en un ciclo anterior
+                // (estado='completed', ejecutado=true). Reseteamos ambos campos para que vuelva
+                // a ser elegible por el scheduler. Mismo patrón que BatchCompletedCallback y
+                // EjecutarNodosProgramados::actualizarEjecucionDespuesDeRecuperacion.
                 $updateData = [
                     'prospectos_ids' => $mergedProspectos,
                     'prospectos_count' => count($mergedProspectos),
                     'estado' => 'pending',
+                    'ejecutado' => false,
                 ];
 
                 if ($tipoNodo === 'condition') {
