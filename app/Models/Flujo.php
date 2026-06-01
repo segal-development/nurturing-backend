@@ -50,6 +50,31 @@ class Flujo extends Model
     }
 
     /**
+     * Fecha de ingreso REAL del cliente para un nuevo prospecto_en_flujo de este flujo.
+     *
+     * Fuente ÚNICA de verdad (antes esta lógica estaba inline en AsignarNuevosProspectosAFlujoJob
+     * y faltaba en otros caminos de asignación, dejando fecha_ingreso NULL → el embudo, que ancla
+     * en fecha_ingreso, no contaba a esos prospectos aunque estaban en el flujo).
+     *
+     * - Clientes-Ingreso: el sync single-day trae los que ingresaron hace 3 días exactos → hoy − 3.
+     * - Contratos Nuevos: el sync horario trae contratos firmados ~hoy → today.
+     * - Resto de flujos: null (anclan por fecha_inicio, no por fecha_ingreso).
+     *
+     * @param  \Carbon\Carbon|null  $now  Momento de referencia (default: now()). Se pasa para
+     *                                    mantener consistencia con el fecha_inicio del mismo insert.
+     */
+    public function fechaIngresoInicial(?\Carbon\Carbon $now = null): ?string
+    {
+        $now = $now ?? now();
+
+        return match ($this->origen) {
+            'Grupo Deudas - Clientes Ingreso' => $now->copy()->subDays(3)->toDateString(),
+            'Grupo Deudas - Contratos Nuevos' => $now->toDateString(),
+            default => null,
+        };
+    }
+
+    /**
      * Check if the flow should filter prospects by specific lote IDs.
      */
     public function usarFiltroLotesIds(): bool

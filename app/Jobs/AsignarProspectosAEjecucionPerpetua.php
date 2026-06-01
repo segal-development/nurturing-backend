@@ -347,6 +347,10 @@ class AsignarProspectosAEjecucionPerpetua implements ShouldQueue
         $asignados = 0;
         $now = now();
 
+        // fecha_ingreso: criterio centralizado (NULL para flujos que anclan por fecha_inicio).
+        // Evita dejar la columna NULL → invisible en el embudo por cohorte.
+        $fechaIngreso = $flujo->fechaIngresoInicial($now);
+
         // Process in batches
         $chunks = array_chunk($prospectoIds, self::BATCH_SIZE);
 
@@ -362,6 +366,7 @@ class AsignarProspectosAEjecucionPerpetua implements ShouldQueue
                     'etapa_actual_id' => null,
                     'ultima_etapa_node_id' => null, // New prospects start fresh
                     'fecha_inicio' => $now,
+                    'fecha_ingreso' => $fechaIngreso,
                     'completado' => false,
                     'cancelado' => false,
                     'created_at' => $now,

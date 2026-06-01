@@ -414,6 +414,11 @@ class AsignarProspectosSysgalJob implements ShouldQueue
         $asignados = 0;
         $now = now();
 
+        // fecha_ingreso debe poblarse igual que en AsignarNuevosProspectosAFlujoJob: el embudo
+        // se ancla en esta columna. Si queda NULL (como pasaba antes), el prospecto entra al
+        // flujo pero no aparece en la cohorte por día. Lógica centralizada en el modelo.
+        $fechaIngreso = $flujo->fechaIngresoInicial($now);
+
         // Procesar en batches para evitar memory issues
         $chunks = array_chunk($prospectos, self::BATCH_SIZE);
 
@@ -428,6 +433,7 @@ class AsignarProspectosSysgalJob implements ShouldQueue
                     'estado' => 'pendiente',
                     'etapa_actual_id' => null,
                     'fecha_inicio' => $now,
+                    'fecha_ingreso' => $fechaIngreso,
                     'completado' => false,
                     'cancelado' => false,
                     'created_at' => $now,

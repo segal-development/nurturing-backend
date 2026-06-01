@@ -342,17 +342,8 @@ class AsignarNuevosProspectosAFlujoJob implements ShouldQueue
         $now = now();
 
         // Fecha de ingreso REAL del cliente (la que coincide con SYSGAL). El embudo se ancla en
-        // esto, no en fecha_inicio, para que "Entraron" cuadre con SYSGAL por día de ingreso.
-        // - Clientes-Ingreso: sync single-day trae los que ingresaron hace 3 días exactos → hoy − 3.
-        // - Contratos Nuevos: sync horario trae contratos recientes (firmados ~hoy) → today.
-        // - Resto de flujos: null (anclan por fecha_inicio).
-        if ($flujo->origen === 'Grupo Deudas - Clientes Ingreso') {
-            $fechaIngreso = $now->copy()->subDays(3)->toDateString();
-        } elseif ($flujo->origen === 'Grupo Deudas - Contratos Nuevos') {
-            $fechaIngreso = $now->toDateString();
-        } else {
-            $fechaIngreso = null;
-        }
+        // esto, no en fecha_inicio. Lógica centralizada en Flujo::fechaIngresoInicial().
+        $fechaIngreso = $flujo->fechaIngresoInicial($now);
 
         $inserts = [];
 
