@@ -6,6 +6,7 @@ use App\Models\FlujoEjecucion;
 use App\Models\FlujoEjecucionEtapa;
 use App\Models\FlujoEtapa;
 use App\Models\ProspectoEnFlujo;
+use App\Services\EnvioService;
 use App\Services\StageOrderResolver;
 use Illuminate\Bus\Batch;
 use Illuminate\Bus\Queueable;
@@ -90,10 +91,18 @@ class EnviarEtapaChunkJob implements ShouldQueue
         // Pre-resolve email provider at chunk level to avoid N+1 queries
         $chunkProviderName = $this->preResolveChunkProvider($prospectosEnFlujo);
 
+        // Load blocking (prospecto_id, canal) pairs scoped to this chunk's window.
+        // Prevents dispatching leaf jobs for already-sent/pending envíos (idempotency).
+        $prospectosChunkIds = $prospectosEnFlujo->pluck('prospecto_id')->toArray();
+        $enviados = app(EnvioService::class)->cargarEnviosBloqueantes(
+            $this->etapaEjecucionId,
+            $prospectosChunkIds
+        );
+
         // Crear jobs para este chunk
         $jobs = [];
         foreach ($prospectosEnFlujo as $prospectoEnFlujo) {
-            $job = $this->createJobForProspecto($prospectoEnFlujo, $contenidoData, $tipoMensaje, $chunkProviderName);
+            $job = $this->createJobForProspecto($prospectoEnFlujo, $contenidoData, $tipoMensaje, $chunkProviderName, $enviados);
             if ($job) {
                 $jobs[] = $job;
             }
@@ -271,20 +280,35 @@ class EnviarEtapaChunkJob implements ShouldQueue
 
     /**
      * @param  string|null  $providerName  Pre-resolved provider name for batch optimization
+     * @param  array<string, true>  $enviados  Set de pares "{prospecto_id}:{canal}" ya enviados (idempotencia)
      */
     private function createJobForProspecto(
         ProspectoEnFlujo $prospectoEnFlujo,
         array $contenidoData,
         string $tipoMensaje,
-        ?string $providerName = null
+        ?string $providerName = null,
+        array $enviados = [],
     ): ?ShouldQueue {
+        $pid = $prospectoEnFlujo->prospecto_id;
+
         if ($tipoMensaje === 'sms') {
+            // Skip if SMS already sent/pending for this etapa
+            if (isset($enviados["{$pid}:sms"])) {
+                return null;
+            }
+
             return new EnviarSmsEtapaProspectoJob(
                 prospectoEnFlujoId: $prospectoEnFlujo->id,
                 contenido: $contenidoData['contenido'],
                 flujoId: $this->flujoId,
                 etapaEjecucionId: $this->etapaEjecucionId
             );
+        }
+
+        // For 'email' and 'ambos' (which falls through to email in ChunkJob),
+        // skip if email already sent/pending for this etapa.
+        if (isset($enviados["{$pid}:email"])) {
+            return null;
         }
 
         return new EnviarEmailEtapaProspectoJob(

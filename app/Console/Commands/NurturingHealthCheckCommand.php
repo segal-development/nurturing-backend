@@ -30,7 +30,8 @@ class NurturingHealthCheckCommand extends Command
     protected $description = 'Check nurturing queue health and alert if thresholds exceeded';
 
     private const QUEUE_ENVIOS_THRESHOLD = 500_000;
-    private const QUEUE_EMAILS_THRESHOLD = 100_000;
+    private const QUEUE_EMAILS_THRESHOLD = 50_000;
+    private const QUEUE_EMAILS_CRITICAL_THRESHOLD = 200_000;
     private const FAILED_TOTAL_THRESHOLD = 5_000;
     private const FAILED_LAST_HOUR_THRESHOLD = 100;
     private const ZERO_OUTPUT_MINUTES = 60;
@@ -39,8 +40,8 @@ class NurturingHealthCheckCommand extends Command
     {
         $issues = [];
 
-        $envios = DB::table('jobs')->where('queue', 'envios')->count();
-        $emails = DB::table('jobs')->where('queue', 'emails')->count();
+        $envios = $this->getQueueDepth('envios');
+        $emails = $this->getQueueDepth('emails');
         $failedTotal = DB::table('failed_jobs')->count();
         $failedLastHour = DB::table('failed_jobs')
             ->where('failed_at', '>=', now()->subHour())
@@ -61,6 +62,9 @@ class NurturingHealthCheckCommand extends Command
         }
         if ($emails > self::QUEUE_EMAILS_THRESHOLD) {
             $issues[] = ['key' => 'queue-emails', 'severity' => 'warning', 'msg' => "Cola 'emails' saturada: ".number_format($emails)." jobs (umbral: ".number_format(self::QUEUE_EMAILS_THRESHOLD).')'];
+        }
+        if ($emails > self::QUEUE_EMAILS_CRITICAL_THRESHOLD) {
+            $issues[] = ['key' => 'queue-emails-critical', 'severity' => 'error', 'msg' => "Cola 'emails' en nivel CRÍTICO: ".number_format($emails)." jobs (umbral: ".number_format(self::QUEUE_EMAILS_CRITICAL_THRESHOLD).')'];
         }
         if ($failedTotal > self::FAILED_TOTAL_THRESHOLD) {
             $issues[] = ['key' => 'failed-total', 'severity' => 'warning', 'msg' => "Failed jobs acumulados: ".number_format($failedTotal)." (umbral: ".number_format(self::FAILED_TOTAL_THRESHOLD).')'];
@@ -120,6 +124,16 @@ class NurturingHealthCheckCommand extends Command
         }
 
         return Command::SUCCESS;
+    }
+
+    /**
+     * Returns the number of pending jobs for the given queue name.
+     * Extracted to a protected method to allow test overrides without
+     * inserting large numbers of rows into the database.
+     */
+    protected function getQueueDepth(string $queueName): int
+    {
+        return DB::table('jobs')->where('queue', $queueName)->count();
     }
 
     private function sendMail(array $issues, array $snapshot): void
