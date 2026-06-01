@@ -24,9 +24,20 @@ class ProspectoEnFlujoFactory extends Factory
             'etapa_actual_id' => null,
             'fecha_inicio' => now(),
             'fecha_proxima_etapa' => null,
+            'fecha_ingreso' => null,
             'completado' => false,
             'cancelado' => false,
         ];
+    }
+
+    /**
+     * State para asignar una fecha_ingreso específica (o today si no se pasa).
+     */
+    public function conFechaIngreso(?string $fecha = null): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'fecha_ingreso' => $fecha ?? now()->toDateString(),
+        ]);
     }
 
     public function porEmail(): static
