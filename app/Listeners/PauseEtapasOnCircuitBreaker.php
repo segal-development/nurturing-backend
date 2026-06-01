@@ -5,6 +5,7 @@ namespace App\Listeners;
 use App\Events\CircuitBreakerOpened;
 use App\Models\FlujoEjecucionEtapa;
 use App\Services\AthenaCampaignService;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -125,6 +126,20 @@ class PauseEtapasOnCircuitBreaker
         if (empty($smsNumbers)) {
             return;
         }
+
+        // Dedup por canal: el circuit breaker puede flapear (abrir/cerrar) decenas de veces
+        // mientras la API está caída (recovery_time es de solo 60s). Sin throttle, cada
+        // apertura mandaba un SMS — 314 aperturas el 2026-06-01 generaron 37 SMS al mismo
+        // número. Limitamos a 1 SMS por canal por hora, igual que NurturingHealthCheckCommand.
+        $dedupKey = "cb-alert-sms:{$event->channel}";
+        if (Cache::has($dedupKey)) {
+            Log::info('PauseEtapasOnCircuitBreaker: alerta SMS deduplicada (ya se avisó en la última hora)', [
+                'channel' => $event->channel,
+            ]);
+
+            return;
+        }
+        Cache::put($dedupKey, true, now()->addHour());
 
         try {
             $mensaje = sprintf(
