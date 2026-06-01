@@ -641,31 +641,10 @@ class EnviarEtapaJob implements ShouldQueue
         // Crear los nuevos en batch
         if (! empty($idsToCreate)) {
             $now = now();
-            $chunks = array_chunk($idsToCreate, 1000);
-
-            // canal_asignado en pef solo admite 'email' o 'sms' (constraint en DB).
-            // Para stages tipo_mensaje='ambos' normalizamos a 'email' (canal primario).
-            $canalAsignado = $tipoMensaje === 'ambos' ? 'email' : $tipoMensaje;
-            // fecha_ingreso: mismo criterio centralizado, para no dejar NULL (invisible en embudo).
-            $fechaIngreso = $ejecucion->flujo?->fechaIngresoInicial($now);
-
-            foreach ($chunks as $chunk) {
-                $insertData = array_map(function ($prospectoId) use ($flujoId, $canalAsignado, $now, $fechaIngreso) {
-                    return [
-                        'prospecto_id' => $prospectoId,
-                        'flujo_id' => $flujoId,
-                        'canal_asignado' => $canalAsignado,
-                        'estado' => 'en_proceso',
-                        'fecha_inicio' => $now,
-                        'fecha_ingreso' => $fechaIngreso,
-                        'completado' => false,
-                        'cancelado' => false,
-                        'created_at' => $now,
-                        'updated_at' => $now,
-                    ];
-                }, $chunk);
-
-                ProspectoEnFlujo::insert($insertData);
+            // crearBatch normaliza 'ambos'→'email' internamente y calcula fecha_ingreso según origen.
+            // Null-safe: si el flujo fue eliminado, se omite la creación (mismo comportamiento previo).
+            if ($flujo = $ejecucion->flujo) {
+                ProspectoEnFlujo::crearBatch($flujo, array_values($idsToCreate), $tipoMensaje, $now, estado: 'en_proceso');
             }
         }
 

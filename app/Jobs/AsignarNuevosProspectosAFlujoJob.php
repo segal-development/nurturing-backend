@@ -6,6 +6,7 @@ use App\Models\Flujo;
 use App\Models\FlujoEjecucion;
 use App\Models\FlujoEjecucionEtapa;
 use App\Models\Prospecto;
+use App\Models\ProspectoEnFlujo;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\DB;
@@ -338,55 +339,10 @@ class AsignarNuevosProspectosAFlujoJob implements ShouldQueue
      */
     private function asignarBatch(Flujo $flujo, $batch, string $canalAsignado): int
     {
-        $asignados = 0;
         $now = now();
+        $prospectoIds = collect($batch)->pluck('id')->map(fn ($id) => (int) $id)->values()->toArray();
 
-        // Fecha de ingreso REAL del cliente (la que coincide con SYSGAL). El embudo se ancla en
-        // esto, no en fecha_inicio. Lógica centralizada en Flujo::fechaIngresoInicial().
-        $fechaIngreso = $flujo->fechaIngresoInicial($now);
-
-        $inserts = [];
-
-        foreach ($batch as $prospecto) {
-            $inserts[] = [
-                'flujo_id' => $flujo->id,
-                'prospecto_id' => $prospecto->id,
-                'canal_asignado' => $canalAsignado,
-                'estado' => 'pendiente',
-                'etapa_actual_id' => null, // Flow Builder no usa esto
-                'fecha_inicio' => $now,
-                'fecha_ingreso' => $fechaIngreso,
-                'completado' => false,
-                'cancelado' => false,
-                'created_at' => $now,
-                'updated_at' => $now,
-            ];
-        }
-
-        try {
-            DB::table('prospecto_en_flujo')->insert($inserts);
-            $asignados += count($inserts);
-        } catch (\Exception $e) {
-            Log::error('Error insertando batch de prospectos', [
-                'flujo_id' => $flujo->id,
-                'error' => $e->getMessage(),
-            ]);
-
-            // Insertar uno por uno si falla el batch (duplicados, etc)
-            foreach ($inserts as $insert) {
-                try {
-                    DB::table('prospecto_en_flujo')->insert($insert);
-                    $asignados++;
-                } catch (\Exception $individualError) {
-                    Log::debug('Error insertando prospecto individual', [
-                        'prospecto_id' => $insert['prospecto_id'],
-                        'error' => $individualError->getMessage(),
-                    ]);
-                }
-            }
-        }
-
-        return $asignados;
+        return ProspectoEnFlujo::crearBatch($flujo, $prospectoIds, $canalAsignado, $now);
     }
 
     /**

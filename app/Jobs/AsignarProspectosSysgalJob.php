@@ -6,9 +6,9 @@ use App\Models\Flujo;
 use App\Models\FlujoEjecucion;
 use App\Models\FlujoEjecucionEtapa;
 use App\Models\Prospecto;
+use App\Models\ProspectoEnFlujo;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -411,61 +411,10 @@ class AsignarProspectosSysgalJob implements ShouldQueue
      */
     private function asignarProspectos(Flujo $flujo, array $prospectos, string $canalAsignado): int
     {
-        $asignados = 0;
         $now = now();
+        $prospectoIds = array_map(fn ($p) => (int) $p->id, $prospectos);
 
-        // fecha_ingreso debe poblarse igual que en AsignarNuevosProspectosAFlujoJob: el embudo
-        // se ancla en esta columna. Si queda NULL (como pasaba antes), el prospecto entra al
-        // flujo pero no aparece en la cohorte por día. Lógica centralizada en el modelo.
-        $fechaIngreso = $flujo->fechaIngresoInicial($now);
-
-        // Procesar en batches para evitar memory issues
-        $chunks = array_chunk($prospectos, self::BATCH_SIZE);
-
-        foreach ($chunks as $batch) {
-            $inserts = [];
-
-            foreach ($batch as $prospecto) {
-                $inserts[] = [
-                    'flujo_id' => $flujo->id,
-                    'prospecto_id' => $prospecto->id,
-                    'canal_asignado' => $canalAsignado,
-                    'estado' => 'pendiente',
-                    'etapa_actual_id' => null,
-                    'fecha_inicio' => $now,
-                    'fecha_ingreso' => $fechaIngreso,
-                    'completado' => false,
-                    'cancelado' => false,
-                    'created_at' => $now,
-                    'updated_at' => $now,
-                ];
-            }
-
-            try {
-                DB::table('prospecto_en_flujo')->insert($inserts);
-                $asignados += count($inserts);
-            } catch (\Exception $e) {
-                Log::error('Error insertando batch de prospectos', [
-                    'flujo_id' => $flujo->id,
-                    'error' => $e->getMessage(),
-                ]);
-
-                // Insertar uno por uno si falla el batch (duplicados, etc)
-                foreach ($inserts as $insert) {
-                    try {
-                        DB::table('prospecto_en_flujo')->insert($insert);
-                        $asignados++;
-                    } catch (\Exception $individualError) {
-                        Log::debug('Prospecto ya existe en flujo o error', [
-                            'prospecto_id' => $insert['prospecto_id'],
-                            'error' => $individualError->getMessage(),
-                        ]);
-                    }
-                }
-            }
-        }
-
-        return $asignados;
+        return ProspectoEnFlujo::crearBatch($flujo, $prospectoIds, $canalAsignado, $now);
     }
 
     /**

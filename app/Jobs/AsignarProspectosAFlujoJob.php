@@ -259,22 +259,7 @@ class AsignarProspectosAFlujoJob implements ShouldBeUniqueUntilProcessing, Shoul
                     sleep(1);
                 }
 
-                // fecha_ingreso: criterio centralizado (NULL para flujos que anclan por fecha_inicio).
-                $fechaIngreso = $this->flujo->fechaIngresoInicial($inicio);
-
-                $data = array_map(fn ($prospectoId) => [
-                    'flujo_id' => $this->flujo->id,
-                    'prospecto_id' => $prospectoId,
-                    'canal_asignado' => $this->canalAsignado,
-                    'estado' => 'pendiente',
-                    'etapa_actual_id' => null,
-                    'fecha_inicio' => $inicio,
-                    'fecha_ingreso' => $fechaIngreso,
-                    'created_at' => $inicio,
-                    'updated_at' => $inicio,
-                ], $prospectoIds);
-
-                ProspectoEnFlujo::insertOrIgnore($data);
+                ProspectoEnFlujo::crearBatch($this->flujo, $prospectoIds, $this->canalAsignado, $inicio);
                 $exito = true;
 
             } catch (\Throwable $e) {

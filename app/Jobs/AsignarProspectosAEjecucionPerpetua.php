@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Models\Flujo;
 use App\Models\FlujoEjecucion;
 use App\Models\FlujoEjecucionEtapa;
+use App\Models\ProspectoEnFlujo;
 use App\Services\StageOrderResolver;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -344,58 +345,15 @@ class AsignarProspectosAEjecucionPerpetua implements ShouldQueue
      */
     private function asignarProspectos(Flujo $flujo, array $prospectoIds): int
     {
-        $asignados = 0;
         $now = now();
 
-        // fecha_ingreso: criterio centralizado (NULL para flujos que anclan por fecha_inicio).
-        // Evita dejar la columna NULL → invisible en el embudo por cohorte.
-        $fechaIngreso = $flujo->fechaIngresoInicial($now);
-
-        // Process in batches
-        $chunks = array_chunk($prospectoIds, self::BATCH_SIZE);
-
-        foreach ($chunks as $chunk) {
-            $inserts = [];
-
-            foreach ($chunk as $prospectoId) {
-                $inserts[] = [
-                    'flujo_id' => $flujo->id,
-                    'prospecto_id' => $prospectoId,
-                    'canal_asignado' => $this->determinarCanal($flujo),
-                    'estado' => 'pendiente',
-                    'etapa_actual_id' => null,
-                    'ultima_etapa_node_id' => null, // New prospects start fresh
-                    'fecha_inicio' => $now,
-                    'fecha_ingreso' => $fechaIngreso,
-                    'completado' => false,
-                    'cancelado' => false,
-                    'created_at' => $now,
-                    'updated_at' => $now,
-                ];
-            }
-
-            try {
-                DB::table('prospecto_en_flujo')->insert($inserts);
-                $asignados += count($inserts);
-            } catch (\Exception $e) {
-                Log::warning('AsignarProspectosAEjecucionPerpetua: Error en batch insert, reintentando uno por uno', [
-                    'flujo_id' => $flujo->id,
-                    'error' => $e->getMessage(),
-                ]);
-
-                // Insert one by one on batch failure
-                foreach ($inserts as $insert) {
-                    try {
-                        DB::table('prospecto_en_flujo')->insert($insert);
-                        $asignados++;
-                    } catch (\Exception $individualError) {
-                        // Silently skip duplicates
-                    }
-                }
-            }
-        }
-
-        return $asignados;
+        return ProspectoEnFlujo::crearBatch(
+            $flujo,
+            $prospectoIds,
+            $this->determinarCanal($flujo),
+            $now,
+            ultimaEtapaNodeId: null,
+        );
     }
 
     /**
