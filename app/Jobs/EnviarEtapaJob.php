@@ -9,6 +9,7 @@ use App\Models\FlujoEjecucion;
 use App\Models\FlujoEjecucionEtapa;
 use App\Models\FlujoJob;
 use App\Models\ProspectoEnFlujo;
+use App\Services\EnvioService;
 use App\Services\StageOrderResolver;
 use Illuminate\Bus\Batch;
 use Illuminate\Bus\Queueable;
@@ -305,6 +306,10 @@ class EnviarEtapaJob implements ShouldQueue
         // All prospectos in same batch typically use same provider (same lote)
         $batchProviderName = $this->preResolveBatchProvider($prospectosEnFlujo);
 
+        // Load blocking (prospecto_id, canal) pairs once for the entire batch.
+        // This prevents dispatching leaf jobs for already-sent/pending envíos.
+        $enviados = app(EnvioService::class)->cargarEnviosBloqueantes($this->etapaEjecucionId);
+
         foreach ($prospectosEnFlujo as $prospectoEnFlujo) {
             $createdJobs = $this->createJobsForProspecto(
                 prospectoEnFlujo: $prospectoEnFlujo,
@@ -312,7 +317,8 @@ class EnviarEtapaJob implements ShouldQueue
                 contenidoSms: $contenidoSms,
                 tipoMensaje: $tipoMensaje,
                 flujoId: $ejecucion->flujo_id,
-                providerName: $batchProviderName
+                providerName: $batchProviderName,
+                enviados: $enviados,
             );
 
             foreach ($createdJobs as $job) {
@@ -333,6 +339,7 @@ class EnviarEtapaJob implements ShouldQueue
      * Crea los jobs necesarios para un prospecto según el tipo de mensaje.
      *
      * @param  string|null  $providerName  Pre-resolved provider name for batch optimization
+     * @param  array<string, true>  $enviados  Set de pares "{prospecto_id}:{canal}" ya enviados (idempotencia)
      * @return array<ShouldQueue>
      */
     private function createJobsForProspecto(
@@ -341,12 +348,19 @@ class EnviarEtapaJob implements ShouldQueue
         ?array $contenidoSms,
         string $tipoMensaje,
         int $flujoId,
-        ?string $providerName = null
+        ?string $providerName = null,
+        array $enviados = [],
     ): array {
         $jobs = [];
+        $pid = $prospectoEnFlujo->prospecto_id;
 
         // SMS only
         if ($tipoMensaje === 'sms') {
+            // Skip if SMS already sent/pending for this etapa
+            if (isset($enviados["{$pid}:sms"])) {
+                return $jobs;
+            }
+
             $jobs[] = new EnviarSmsEtapaProspectoJob(
                 prospectoEnFlujoId: $prospectoEnFlujo->id,
                 contenido: $contenidoEmail['contenido'], // En este caso contenidoEmail tiene el SMS
@@ -364,8 +378,8 @@ class EnviarEtapaJob implements ShouldQueue
         $tieneEmail = ! empty($prospecto?->email) && ! ($prospecto->email_invalido ?? false);
         $tieneTelefono = ! empty($prospecto?->telefono);
 
-        // Email (para 'email' o 'ambos', solo si tiene email válido)
-        if ($tieneEmail) {
+        // Email (para 'email' o 'ambos', solo si tiene email válido y no bloqueado)
+        if ($tieneEmail && ! isset($enviados["{$pid}:email"])) {
             $jobs[] = new EnviarEmailEtapaProspectoJob(
                 prospectoEnFlujoId: $prospectoEnFlujo->id,
                 contenido: $contenidoEmail['contenido'],
@@ -377,8 +391,8 @@ class EnviarEtapaJob implements ShouldQueue
             );
         }
 
-        // SMS adicional para tipo 'ambos' (solo si tiene teléfono)
-        if ($tipoMensaje === 'ambos' && $contenidoSms !== null && $tieneTelefono) {
+        // SMS adicional para tipo 'ambos' (solo si tiene teléfono y no bloqueado)
+        if ($tipoMensaje === 'ambos' && $contenidoSms !== null && $tieneTelefono && ! isset($enviados["{$pid}:sms"])) {
             $jobs[] = new EnviarSmsEtapaProspectoJob(
                 prospectoEnFlujoId: $prospectoEnFlujo->id,
                 contenido: $contenidoSms['contenido'],

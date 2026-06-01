@@ -12,12 +12,47 @@ use Illuminate\Support\Str;
 
 class EnvioService
 {
+    /**
+     * Estados que bloquean el re-envío de un prospecto para la misma etapa y canal.
+     * 'fallido' NO está incluido — los envíos fallidos deben reintentarse.
+     */
+    public const ESTADOS_BLOQUEANTES = ['enviado', 'abierto', 'clickeado', 'pendiente'];
+
     public function __construct(
         private AthenaCampaignService $athenaService,
         private DesuscripcionService $desuscripcionService,
         private EmailValidationService $emailValidationService,
         private EmailProviderResolver $emailProviderResolver,
     ) {}
+
+    /**
+     * Carga el Set de pares (prospecto_id, canal) que ya tienen un envío en estado bloqueante
+     * para la etapa dada. Usado por los orquestadores (EnviarEtapaJob / EnviarEtapaChunkJob)
+     * para evitar encolar leaf jobs duplicados antes de despacharlos.
+     *
+     * @param  int       $etapaEjecucionId  ID de la FlujoEjecucionEtapa
+     * @param  int[]|null $prospectoIds     Si se especifica, acota el DISTINCT a solo esos IDs (útil para chunks)
+     * @return array<string, true>          Set con claves "{prospecto_id}:{canal}" => true
+     */
+    public function cargarEnviosBloqueantes(int $etapaEjecucionId, ?array $prospectoIds = null): array
+    {
+        $query = Envio::query()
+            ->select(['prospecto_id', 'canal'])
+            ->distinct()
+            ->where('flujo_ejecucion_etapa_id', $etapaEjecucionId)
+            ->whereIn('estado', self::ESTADOS_BLOQUEANTES);
+
+        if ($prospectoIds !== null) {
+            $query->whereIn('prospecto_id', $prospectoIds);
+        }
+
+        $set = [];
+        foreach ($query->cursor() as $row) {
+            $set["{$row->prospecto_id}:{$row->canal}"] = true;
+        }
+
+        return $set;
+    }
 
     /**
      * Genera un token único para tracking de emails
@@ -313,7 +348,7 @@ class EnvioService
             $envioExistente = Envio::where('prospecto_id', $prospecto->id)
                 ->where('flujo_ejecucion_etapa_id', $etapaEjecucionId)
                 ->where('canal', 'email')
-                ->whereIn('estado', ['enviado', 'abierto', 'clickeado', 'pendiente'])
+                ->whereIn('estado', self::ESTADOS_BLOQUEANTES)
                 ->first();
 
             if ($envioExistente) {
@@ -641,7 +676,7 @@ class EnvioService
             $envioExistente = Envio::where('prospecto_id', $prospecto->id)
                 ->where('flujo_ejecucion_etapa_id', $etapaEjecucionId)
                 ->where('canal', 'sms')
-                ->whereIn('estado', ['enviado', 'abierto', 'clickeado', 'pendiente'])
+                ->whereIn('estado', self::ESTADOS_BLOQUEANTES)
                 ->first();
 
             if ($envioExistente) {
