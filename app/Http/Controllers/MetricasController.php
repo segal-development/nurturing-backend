@@ -52,6 +52,35 @@ class MetricasController extends Controller
     }
 
     /**
+     * Detalle de los que entraron al flujo pero NO recibieron el email, con la razón.
+     * Responde "¿a dónde se fueron los que no recibieron?" (paso Entraron → Recibieron).
+     *
+     * GET /api/metricas/no-recibieron?flujo_id=&dias=&fecha_inicio=&fecha_fin=
+     */
+    public function noRecibieron(Request $request): JsonResponse
+    {
+        $dias = (int) $request->input('dias', 30);
+        $dias = min(max($dias, 1), 365);
+
+        $flujoId = $request->input('flujo_id');
+        $flujoId = $flujoId !== null && $flujoId !== '' ? (int) $flujoId : null;
+
+        if (! $flujoId) {
+            return response()->json(['success' => false, 'error' => 'flujo_id requerido'], 422);
+        }
+
+        $fechaInicio = $request->input('fecha_inicio');
+        $fechaFin = $request->input('fecha_fin');
+
+        $detalle = $this->metricasService->getNoRecibieronDetalle($dias, $flujoId, $fechaInicio, $fechaFin);
+
+        return response()->json([
+            'success' => true,
+            'data' => $detalle,
+        ]);
+    }
+
+    /**
      * Resumen de KPIs principales
      *
      * GET /api/metricas/resumen

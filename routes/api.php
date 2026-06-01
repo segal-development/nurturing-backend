@@ -214,6 +214,7 @@ Route::middleware(['auth:sanctum', 'throttle:api'])->group(function () {
     // Rutas de Métricas y Analytics (rate limited: 10/min - operaciones pesadas)
     Route::prefix('metricas')->middleware('throttle:heavy')->group(function () {
         Route::get('/dashboard', [MetricasController::class, 'dashboard']);
+        Route::get('/no-recibieron', [MetricasController::class, 'noRecibieron']);
         Route::get('/resumen', [MetricasController::class, 'resumen']);
         Route::get('/aperturas', [MetricasController::class, 'aperturas']);
         Route::get('/clicks', [MetricasController::class, 'clicks']);

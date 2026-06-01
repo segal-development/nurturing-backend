@@ -1063,6 +1063,84 @@ class MetricasService
     }
 
     /**
+     * Detalle de los prospectos que ENTRARON al flujo pero NO recibieron el email
+     * (paso Entraron → Recibieron del embudo), clasificados por razón. Responde la
+     * pregunta de gerencia "¿a dónde se fueron los que no recibieron?".
+     *
+     * Razones: sin_email | email_invalido | fallido_envio | pendiente_huerfano |
+     *          en_cola | sin_envio.
+     *
+     * @return array<int, array{rut: string, nombre: string, email: string, razon: string}>
+     */
+    public function getNoRecibieronDetalle(int $dias, int $flujoId, ?string $fechaInicio, ?string $fechaFin): array
+    {
+        [$desde, $hasta] = $this->resolverRango($dias, $fechaInicio, $fechaFin);
+
+        $flujo = Flujo::find($flujoId);
+        $esClientesIngreso = $flujo && $flujo->origen === 'Grupo Deudas - Clientes Ingreso';
+        $esContratosNuevos = $flujo && $flujo->origen === 'Grupo Deudas - Contratos Nuevos';
+        $porFechaIngreso = $esClientesIngreso || $esContratosNuevos;
+
+        // Misma cohorte que getEmbudoCohorte (person-anchored): los que ENTRARON.
+        $cohorteQuery = DB::table('prospecto_en_flujo as pef')
+            ->join('prospectos as p', 'p.id', '=', 'pef.prospecto_id')
+            ->where('pef.flujo_id', $flujoId)
+            ->where('pef.cancelado', false);
+
+        if ($porFechaIngreso) {
+            $shift = $esClientesIngreso ? 3 : 0;
+            $desdeIngreso = Carbon::parse($desde)->subDays($shift)->toDateString();
+            $hastaIngreso = Carbon::parse($hasta)->subDays($shift)->toDateString();
+            $cohorteQuery->whereNotNull('pef.fecha_ingreso')
+                ->whereBetween('pef.fecha_ingreso', [$desdeIngreso, $hastaIngreso]);
+        } else {
+            $cohorteQuery->whereBetween('pef.fecha_inicio', [$desde, $hasta]);
+        }
+
+        // Dedup por persona (RUT normalizado) — quedarnos con un prospecto por persona.
+        $prospectos = $cohorteQuery->get(['p.id', 'p.rut', 'p.nombre', 'p.email', 'p.email_invalido'])
+            ->unique(fn ($p) => $p->rut ? str_replace('.', '', trim($p->rut)) : 'pid:'.$p->id);
+
+        $detalle = [];
+        foreach ($prospectos as $p) {
+            $env = DB::table('envios')
+                ->where('flujo_id', $flujoId)
+                ->where('prospecto_id', $p->id)
+                ->where('canal', 'email')
+                ->orderByDesc('id')
+                ->first(['estado', 'external_message_id', 'email_provider']);
+
+            // Recibió OK → no es parte del detalle.
+            if ($env && in_array($env->estado, ['enviado', 'entregado', 'abierto', 'clickeado'], true)) {
+                continue;
+            }
+
+            if (empty($p->email)) {
+                $razon = 'sin_email';
+            } elseif ($p->email_invalido) {
+                $razon = 'email_invalido';
+            } elseif (! $env) {
+                $razon = 'sin_envio';
+            } elseif ($env->estado === 'fallido') {
+                $razon = 'fallido_envio';
+            } elseif ($env->estado === 'pendiente' && empty($env->external_message_id) && empty($env->email_provider)) {
+                $razon = 'pendiente_huerfano';
+            } else {
+                $razon = 'en_cola';
+            }
+
+            $detalle[] = [
+                'rut' => (string) ($p->rut ?? ''),
+                'nombre' => (string) ($p->nombre ?? ''),
+                'email' => (string) ($p->email ?? ''),
+                'razon' => $razon,
+            ];
+        }
+
+        return array_values($detalle);
+    }
+
+    /**
      * Embudos POR ETAPA del flujo (solo Clientes por Fecha Ingreso).
      *
      * Cada etapa del flujo tiene su propio offset desde el ingreso del cliente (3, 4, 5, 10,
