@@ -501,24 +501,10 @@ class FlujoController extends Controller
             $nuevosIds = array_diff($prospectoIds, $existentes);
             $agregados = count($nuevosIds);
 
-            // 3. Bulk insert de los nuevos (si hay)
+            // 3. Bulk insert de los nuevos (si hay), vía crearBatch para poblar fecha_ingreso
             if (! empty($nuevosIds)) {
                 $now = now();
-                $registros = array_map(fn ($id) => [
-                    'flujo_id' => $flujo->id,
-                    'prospecto_id' => $id,
-                    'canal_asignado' => $canalAsignado,
-                    'estado' => 'pendiente',
-                    'etapa_actual_id' => null,
-                    'fecha_inicio' => $now,
-                    'created_at' => $now,
-                    'updated_at' => $now,
-                ], $nuevosIds);
-
-                // Insertar en chunks para evitar límites de MySQL/PostgreSQL
-                foreach (array_chunk($registros, 1000) as $chunk) {
-                    ProspectoEnFlujo::insert($chunk);
-                }
+                ProspectoEnFlujo::crearBatch($flujo, array_values($nuevosIds), $canalAsignado, $now);
             }
 
             $flujo->update(['estado_procesamiento' => 'completado']);
@@ -1179,20 +1165,8 @@ class FlujoController extends Controller
         $totalProspectos = count($prospectoIds);
         $now = now();
 
-        // Bulk insert: 1 query en lugar de N queries
-        $registros = array_map(fn ($prospectoId) => [
-            'flujo_id' => $flujo->id,
-            'prospecto_id' => $prospectoId,
-            'canal_asignado' => $canalAsignado,
-            'estado' => 'pendiente',
-            'etapa_actual_id' => null,
-            'fecha_inicio' => $now,
-            'created_at' => $now,
-            'updated_at' => $now,
-        ], $prospectoIds);
-
-        // insertOrIgnore evita duplicados sin fallar
-        ProspectoEnFlujo::insertOrIgnore($registros);
+        // crearBatch centraliza insert + fecha_ingreso por origen + normalización canal
+        ProspectoEnFlujo::crearBatch($flujo, $prospectoIds, $canalAsignado, $now);
 
         $flujo->update(['estado_procesamiento' => 'completado']);
 
