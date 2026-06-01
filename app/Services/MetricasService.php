@@ -969,17 +969,35 @@ class MetricasService
         //  - Prospectos sin email (NULL o vacío): obvio que no recibieron por email.
         //  Todos estos aparecen en "Datos con problemas de envío", manteniendo coherencia
         //  visual: lo que no cuadra en Recibieron sí cuadra en Datos con problemas.
-        $recibieron = DB::table('envios as e')
-            ->join('prospectos as p', 'p.id', '=', 'e.prospecto_id')
-            ->where('e.flujo_id', $flujoId)
-            ->whereIn('e.estado', ['enviado', 'entregado', 'abierto', 'clickeado'])
-            ->whereRaw("COALESCE(e.metadata->>'razon_fallo', '') != 'duplicado_race_condition'")
-            ->where(function ($q) { $q->where('p.email_invalido', false)->orWhereNull('p.email_invalido'); })
-            ->whereNotNull('p.email')
-            ->where('p.email', '!=', '')
-            ->whereIn('e.prospecto_id', (clone $cohorte))
-            ->distinct()
-            ->count('e.prospecto_id');
+        // Query base de "recibieron": de la cohorte, prospectos con al menos un envío exitoso.
+        // El filtro de email_invalido/email-nulo aplica solo al canal email (un prospecto sin
+        // email válido igual puede recibir el SMS). Se parametriza por canal para no tapar el
+        // problema de un canal con el otro (ej: emails caídos por Athena pero SMS OK).
+        $recibieronQuery = function (?string $canal) use ($flujoId, $cohorte) {
+            $q = DB::table('envios as e')
+                ->join('prospectos as p', 'p.id', '=', 'e.prospecto_id')
+                ->where('e.flujo_id', $flujoId)
+                ->whereIn('e.estado', ['enviado', 'entregado', 'abierto', 'clickeado'])
+                ->whereRaw("COALESCE(e.metadata->>'razon_fallo', '') != 'duplicado_race_condition'")
+                ->whereIn('e.prospecto_id', (clone $cohorte));
+
+            if ($canal === 'email' || $canal === null) {
+                // El filtro de dato malo de email solo tiene sentido para el canal email.
+                $q->where(function ($qq) { $qq->where('p.email_invalido', false)->orWhereNull('p.email_invalido'); })
+                    ->whereNotNull('p.email')
+                    ->where('p.email', '!=', '');
+            }
+            if ($canal !== null) {
+                $q->where('e.canal', $canal);
+            }
+
+            return $q->distinct()->count('e.prospecto_id');
+        };
+
+        // recibieron = cualquier canal (mantiene el embudo monótono histórico).
+        $recibieron = $recibieronQuery(null);
+        $recibieronEmail = $recibieronQuery('email');
+        $recibieronSms = $recibieronQuery('sms');
 
         // Abrieron: de la cohorte, cuántos abrieron al menos un email del flujo (sin filtro de fecha).
         $abrieron = DB::table('email_aperturas as ea')
@@ -1018,6 +1036,8 @@ class MetricasService
         return [
             'entraron' => $entraron,
             'recibieron' => $recibieron,
+            'recibieron_email' => $recibieronEmail,
+            'recibieron_sms' => $recibieronSms,
             'abrieron' => $abrieron,
             'clickaron' => $clickaron,
             'desuscribieron' => $desuscribieron,
