@@ -951,7 +951,16 @@ class MetricasService
                 ->select('prospecto_id');
         }
 
-        $entraron = (clone $cohorte)->distinct()->count('prospecto_id');
+        // Contamos por PERSONA, no por fila. La BD tiene prospectos duplicados (mismo RUT en
+        // varias filas — deuda legacy). Sin esto el embudo cuenta filas y "Entraron" supera a
+        // SYSGAL (que cuenta personas). Clave: RUT normalizado (sin puntos); si no hay RUT, cae
+        // al prospecto_id para no descontar registros sin RUT. Requiere join a prospectos (p).
+        $personaKeyExpr = fn (string $pidCol) => "COALESCE(NULLIF(REPLACE(TRIM(p.rut), '.', ''), ''), CONCAT('pid:', $pidCol))";
+
+        $entraron = (clone $cohorte)
+            ->join('prospectos as p', 'p.id', '=', 'prospecto_en_flujo.prospecto_id')
+            ->distinct()
+            ->count(DB::raw($personaKeyExpr('prospecto_en_flujo.prospecto_id')));
 
         if ($entraron === 0) {
             return [
@@ -973,7 +982,7 @@ class MetricasService
         // El filtro de email_invalido/email-nulo aplica solo al canal email (un prospecto sin
         // email válido igual puede recibir el SMS). Se parametriza por canal para no tapar el
         // problema de un canal con el otro (ej: emails caídos por Athena pero SMS OK).
-        $recibieronQuery = function (?string $canal) use ($flujoId, $cohorte) {
+        $recibieronQuery = function (?string $canal) use ($flujoId, $cohorte, $personaKeyExpr) {
             $q = DB::table('envios as e')
                 ->join('prospectos as p', 'p.id', '=', 'e.prospecto_id')
                 ->where('e.flujo_id', $flujoId)
@@ -991,7 +1000,7 @@ class MetricasService
                 $q->where('e.canal', $canal);
             }
 
-            return $q->distinct()->count('e.prospecto_id');
+            return $q->distinct()->count(DB::raw($personaKeyExpr('e.prospecto_id')));
         };
 
         // recibieron = cualquier canal (mantiene el embudo monótono histórico).
@@ -1002,35 +1011,39 @@ class MetricasService
         // Abrieron: de la cohorte, cuántos abrieron al menos un email del flujo (sin filtro de fecha).
         $abrieron = DB::table('email_aperturas as ea')
             ->join('envios as e', 'e.id', '=', 'ea.envio_id')
+            ->join('prospectos as p', 'p.id', '=', 'e.prospecto_id')
             ->where('e.flujo_id', $flujoId)
             ->whereIn('e.prospecto_id', (clone $cohorte))
             ->distinct()
-            ->count('e.prospecto_id');
+            ->count(DB::raw($personaKeyExpr('e.prospecto_id')));
 
         // Clickaron: de la cohorte, cuántos clickearon al menos un email (sin filtro de fecha).
         $clickaron = DB::table('email_clicks as ec')
             ->join('envios as e', 'e.id', '=', 'ec.envio_id')
+            ->join('prospectos as p', 'p.id', '=', 'e.prospecto_id')
             ->where('e.flujo_id', $flujoId)
             ->whereIn('e.prospecto_id', (clone $cohorte))
             ->distinct()
-            ->count('e.prospecto_id');
+            ->count(DB::raw($personaKeyExpr('e.prospecto_id')));
 
         // Desuscribieron: de la cohorte cumulativa.
-        $desuscribieron = DB::table('desuscripciones')
-            ->where('flujo_id', $flujoId)
-            ->whereIn('prospecto_id', (clone $cohorte))
+        $desuscribieron = DB::table('desuscripciones as d')
+            ->join('prospectos as p', 'p.id', '=', 'd.prospecto_id')
+            ->where('d.flujo_id', $flujoId)
+            ->whereIn('d.prospecto_id', (clone $cohorte))
             ->distinct()
-            ->count('prospecto_id');
+            ->count(DB::raw($personaKeyExpr('d.prospecto_id')));
 
-        // Con problema de dato: de la cohorte, cuántos NO pueden recibir (email inválido o sin email).
-        $conProblema = DB::table('prospectos')
-            ->whereIn('id', (clone $cohorte))
+        // Con problema de dato: de la cohorte, cuántas PERSONAS NO pueden recibir (email inválido o sin email).
+        $conProblema = DB::table('prospectos as p')
+            ->whereIn('p.id', (clone $cohorte))
             ->where(function ($q) {
-                $q->where('email_invalido', true)
-                    ->orWhereNull('email')
-                    ->orWhere('email', '');
+                $q->where('p.email_invalido', true)
+                    ->orWhereNull('p.email')
+                    ->orWhere('p.email', '');
             })
-            ->count();
+            ->distinct()
+            ->count(DB::raw($personaKeyExpr('p.id')));
 
         // Tasas de COHORTE (no de período): por eso cuadran con el embudo de arriba.
         return [
@@ -1124,6 +1137,10 @@ class MetricasService
             ->map(fn ($g) => $g->pluck('id')->toArray())
             ->toArray();
 
+        // Contamos por PERSONA (RUT normalizado, fallback prospecto_id), igual que el embudo
+        // resumen — para que la tabla por etapa no cuente filas duplicadas y cuadre con SYSGAL.
+        $personaKeyExpr = fn (string $pidCol) => "COALESCE(NULLIF(REPLACE(TRIM(p.rut), '.', ''), ''), CONCAT('pid:', $pidCol))";
+
         $resultados = [];
         foreach ($ordenados as $item) {
             $stage = $item['stage'];
@@ -1154,7 +1171,10 @@ class MetricasService
             }
 
             $cohorte = $cohorte->select('prospecto_id');
-            $entraron = (clone $cohorte)->distinct()->count('prospecto_id');
+            $entraron = (clone $cohorte)
+                ->join('prospectos as p', 'p.id', '=', 'prospecto_en_flujo.prospecto_id')
+                ->distinct()
+                ->count(DB::raw($personaKeyExpr('prospecto_en_flujo.prospecto_id')));
 
             $recibieron = 0;
             $abrieron = 0;
@@ -1172,29 +1192,32 @@ class MetricasService
                     ->where('p.email', '!=', '')
                     ->whereIn('e.prospecto_id', (clone $cohorte))
                     ->distinct()
-                    ->count('e.prospecto_id');
+                    ->count(DB::raw($personaKeyExpr('e.prospecto_id')));
 
                 $abrieron = DB::table('email_aperturas as ea')
                     ->join('envios as e', 'e.id', '=', 'ea.envio_id')
+                    ->join('prospectos as p', 'p.id', '=', 'e.prospecto_id')
                     ->where('e.flujo_id', $flujoId)
                     ->whereIn('e.flujo_ejecucion_etapa_id', $feeIds)
                     ->whereIn('e.prospecto_id', (clone $cohorte))
                     ->distinct()
-                    ->count('e.prospecto_id');
+                    ->count(DB::raw($personaKeyExpr('e.prospecto_id')));
 
                 $clickaron = DB::table('email_clicks as ec')
                     ->join('envios as e', 'e.id', '=', 'ec.envio_id')
+                    ->join('prospectos as p', 'p.id', '=', 'e.prospecto_id')
                     ->where('e.flujo_id', $flujoId)
                     ->whereIn('e.flujo_ejecucion_etapa_id', $feeIds)
                     ->whereIn('e.prospecto_id', (clone $cohorte))
                     ->distinct()
-                    ->count('e.prospecto_id');
+                    ->count(DB::raw($personaKeyExpr('e.prospecto_id')));
 
-                $desuscribieron = DB::table('desuscripciones')
-                    ->where('flujo_id', $flujoId)
-                    ->whereIn('prospecto_id', (clone $cohorte))
+                $desuscribieron = DB::table('desuscripciones as d')
+                    ->join('prospectos as p', 'p.id', '=', 'd.prospecto_id')
+                    ->where('d.flujo_id', $flujoId)
+                    ->whereIn('d.prospecto_id', (clone $cohorte))
                     ->distinct()
-                    ->count('prospecto_id');
+                    ->count(DB::raw($personaKeyExpr('d.prospecto_id')));
             }
 
             $resultados[] = [
