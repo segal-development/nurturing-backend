@@ -476,6 +476,25 @@ class EnvioService
             ];
 
         } catch (\Exception $e) {
+            // Unique violation (SQLSTATE 23505) en envios = otro job concurrente ya registró el
+            // envío para este (prospecto, etapa, canal). Es la idempotencia a nivel DB haciendo
+            // su trabajo, NO un fallo de envío: no marcamos fallido, no analizamos como error SMTP
+            // (evita el falso positivo que marcaba el email inválido y disparaba el circuit breaker),
+            // no contamos como fallo. Se trata como skip idempotente.
+            if ($this->esUniqueViolationEnvio($e)) {
+                Log::info('EnvioService: Envío ya registrado por job concurrente (unique violation) — skip idempotente', [
+                    'prospecto_id' => $prospecto->id,
+                    'etapa_ejecucion_id' => $etapaEjecucionId,
+                ]);
+
+                return [
+                    'success' => true,
+                    'envio_id' => null,
+                    'error' => null,
+                    'skipped' => true,
+                ];
+            }
+
             if ($envio) {
                 $envio->marcarComoFallido($e->getMessage());
             }
@@ -498,6 +517,21 @@ class EnvioService
                 'email_invalido' => $emailMarcado,
             ];
         }
+    }
+
+    /**
+     * ¿La excepción es una unique violation (SQLSTATE 23505) de la tabla envios?
+     * Indica que un job concurrente ya registró el envío (idempotencia a nivel DB),
+     * no un fallo real de envío.
+     */
+    private function esUniqueViolationEnvio(\Throwable $e): bool
+    {
+        if (! $e instanceof \Illuminate\Database\QueryException) {
+            return false;
+        }
+
+        // PDO SQLSTATE 23505 = unique_violation en PostgreSQL.
+        return (string) $e->getCode() === '23505';
     }
 
     /**

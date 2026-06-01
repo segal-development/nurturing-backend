@@ -189,8 +189,24 @@ class EmailValidationService
     {
         $errorLower = strtolower($errorMessage);
 
+        // Un error de base de datos (ej. unique violation de envios cuando un job concurrente
+        // ya registró el envío) NO es un error SMTP. Antes caía acá y un dígito como '552' dentro
+        // de 'SQLSTATE[23505]' o de un id lo malclasificaba como rebote permanente → marcaba el
+        // email inválido en falso y disparaba el circuit breaker. Lo descartamos explícitamente.
+        if (preg_match('/sqlstate|violates|constraint|duplicate key|deadlock|pdoexception|queryexception/i', $errorLower)) {
+            return ['es_invalido' => false, 'motivo' => null];
+        }
+
         foreach (self::PATRONES_ERROR_PERMANENTE as $patron) {
-            if (str_contains($errorLower, strtolower($patron))) {
+            // Códigos SMTP numéricos (550-554): match con límite de palabra para no pegar con
+            // '552' embebido en números más grandes (ids, SQLSTATE, etc.). Patrones de texto:
+            // substring como antes.
+            $esCodigoNumerico = ctype_digit($patron);
+            $match = $esCodigoNumerico
+                ? (bool) preg_match('/\b'.preg_quote($patron, '/').'\b/', $errorLower)
+                : str_contains($errorLower, strtolower($patron));
+
+            if ($match) {
                 return [
                     'es_invalido' => true,
                     'motivo' => "smtp_error:{$patron}",
