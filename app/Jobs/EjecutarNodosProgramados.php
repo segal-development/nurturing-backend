@@ -358,8 +358,20 @@ class EjecutarNodosProgramados implements ShouldQueue
 
         $prospectoIds = $etapa->prospectos()->pluck('prospectos.id')->toArray();
         $usaProspectosEtapa = ! empty($prospectoIds);
+
+        // FAIL-SAFE: Si el pivote de la FEE está vacío, NO se dumpea la población completa de
+        // la ejecución. AsignarProspectosAEjecucionPerpetua puebla explícitamente el pivote
+        // de la primera etapa via syncWithoutDetaching; un pivote vacío aquí es un dato corrupto,
+        // no un estado legítimo de primera etapa. Dumpear toda la población causaría over-dispatch
+        // (la misma clase de bug eliminada del FlujoEjecucionEtapaObserver en Fase 1).
+        // @transition-authority-ok — fallback suprimido intencionalmente
         if (empty($prospectoIds)) {
-            $prospectoIds = $ejecucion->prospectos()->pluck('prospectos.id')->toArray();
+            Log::warning('EjecutarNodosProgramados: empty_pivot_fee_scheduler — FEE sin prospectos en pivote; dispatch con lista vacía (fail-safe)', [
+                'reason'       => 'empty_pivot_fee_scheduler',
+                'ejecucion_id' => $ejecucion->id,
+                'etapa_id'     => $etapa->id,
+                'node_id'      => $stage['id'] ?? 'unknown',
+            ]);
         }
 
         Log::debug('EjecutarNodosProgramados: Despachando EnviarEtapaJob', [
@@ -917,8 +929,19 @@ class EjecutarNodosProgramados implements ShouldQueue
         $tipoNodo = $siguienteNodo['type'] ?? (str_starts_with($siguienteNodoId, 'condition') ? 'condition' : 'stage');
 
         $prospectoIds = $etapa->prospectos()->pluck('prospectos.id')->toArray();
+
+        // FAIL-SAFE: Si el pivote de la FEE origen está vacío, NO se propaga la población
+        // completa de la ejecución a la siguiente etapa. El pivote siempre debe estar poblado
+        // explícitamente (AsignarProspectosAEjecucionPerpetua / BatchCompletedCallback).
+        // Propagar la población completa causaría over-dispatch en la siguiente FEE.
+        // @transition-authority-ok — fallback suprimido intencionalmente
         if (empty($prospectoIds)) {
-            $prospectoIds = $ejecucion->prospectos()->pluck('prospectos.id')->toArray();
+            Log::warning('EjecutarNodosProgramados: empty_pivot_fee_scheduler — FEE origen sin prospectos en pivote; avance con lista vacía (fail-safe)', [
+                'reason'           => 'empty_pivot_fee_scheduler',
+                'ejecucion_id'     => $ejecucion->id,
+                'etapa_id'         => $etapa->id,
+                'siguiente_nodo_id' => $siguienteNodoId,
+            ]);
         }
 
         // Buscar la etapa siguiente (puede ya existir desde la creación del flujo)

@@ -101,6 +101,33 @@ class RepairPosicionPerpetuoTest extends TestCase
 
         // Debe haberse corregido a stage-30 (la stage con offset 30d <= 40d)
         $this->assertEquals('stage-30', $pef->fresh()->ultima_etapa_node_id);
+
+        // SUGGESTION 2: verificar que el pivote etapa_prospecto guarda Prospecto IDs
+        // (no PEF IDs). La siguiente etapa del prospecto es stage-60 (next after stage-30).
+        // prospectos()->pluck('prospectos.id') debe contener el Prospecto ID del PEF,
+        // NO su PEF ID. Esto fija el WARNING 1 (repair pivot guardaba PEF IDs).
+        $feeStage60 = $fees['stage-60'];
+        $pivotProspectoIds = $feeStage60->fresh()->prospectos()->pluck('prospectos.id')->toArray();
+
+        // El pivote debe contener el Prospecto ID real del prospecto reparado
+        $this->assertContains(
+            $pef->prospecto_id,
+            $pivotProspectoIds,
+            'El pivote etapa_prospecto debe contener el Prospecto ID (no el PEF ID) del prospecto reparado'
+        );
+
+        // Verificar que el registro en etapa_prospecto referencia prospectos.id,
+        // no prospecto_en_flujo.id. Si el PEF ID difiere del Prospecto ID, el PEF ID
+        // no debe estar en el pivote. Solo comprobamos esta condición cuando son distintos
+        // (en IDs bajos de test pueden coincidir fortuitamente, lo que sería OK igualmente:
+        // significa que el Prospecto ID == PEF ID, y el Prospecto ID correcto está guardado).
+        if ($pef->id !== $pef->prospecto_id) {
+            $this->assertNotContains(
+                $pef->id,
+                $pivotProspectoIds,
+                'El pivote etapa_prospecto NO debe contener el PEF ID (solo Prospecto IDs)'
+            );
+        }
     }
 
     // ============================================================
