@@ -731,6 +731,25 @@ class EnviarEtapaJob implements ShouldQueue
             ]);
         }
 
+        // Gate temporal — Decision 4 (design): un prospecto es elegible para la etapa N solo si
+        // now() >= fecha_inicio + offset_acumulado(N). Mismo criterio que EnviarEtapaChunkJob.
+        // Cierra el gap detectado en verify: el path normal (<=5000) no tenia el gate, asi que
+        // flujo 39 en carga baja mandaba mails prematuros. NULL fecha_inicio: pasa (sin anchor no
+        // hay gate). offset -1 (nodo no hallado en la cadena): se omite, sin lanzar.
+        if ($currentNodeId) {
+            $flujoGate = $ejecucion->flujo ?? \App\Models\Flujo::find($this->flujoId);
+            if ($flujoGate) {
+                $offsetDias = app(\App\Services\GuardedTransition::class)->offsetAcumulado($flujoGate, $currentNodeId);
+                if ($offsetDias >= 0) {
+                    $fechaCorte = now()->subDays($offsetDias);
+                    $query->where(function ($q) use ($fechaCorte) {
+                        $q->whereNull('fecha_inicio')
+                            ->orWhere('fecha_inicio', '<=', $fechaCorte);
+                    });
+                }
+            }
+        }
+
         return $query->cursor()->collect();
     }
 
