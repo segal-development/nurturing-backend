@@ -107,7 +107,10 @@ class ResendHuerfanosCommand extends Command
             // Resolver el contenido del email desde la plantilla del stage (modo componentes).
             // Leaf-direct: despachamos EnviarEmailEtapaProspectoJob por prospecto, salteando el
             // gate del orquestador (que filtra por ultima_etapa_node_id = "ya pasó la etapa").
-            $plantillaId = $stage['plantilla_id'] ?? null;
+            // En stages 'ambos', plantilla_id es la SMS y la de email está en plantilla_id_email.
+            // En stages 'email', plantilla_id es la de email (no hay plantilla_id_email). Preferimos
+            // plantilla_id_email si existe — mismo criterio que FlujoEtapa::obtenerContenidoParaEnvio.
+            $plantillaId = $stage['plantilla_id_email'] ?? $stage['plantilla_id'] ?? null;
             $plantilla = $plantillaId ? Plantilla::find($plantillaId) : null;
             if (! $plantilla || ! $plantilla->esEmail()) {
                 $this->warn("  FEE {$feeId} (\"".($stage['label'] ?? $fee->node_id)."\"): sin plantilla de email (plantilla_id={$plantillaId}), skip.");
