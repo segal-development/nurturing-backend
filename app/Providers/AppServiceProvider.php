@@ -10,6 +10,7 @@ use App\Models\ProspectoEnFlujo;
 use App\Observers\FlujoEjecucionEtapaObserver;
 use App\Observers\FlujoEjecucionObserver;
 use App\Observers\ProspectoEnFlujoObserver;
+use App\Services\GuardedTransition;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Database\Events\ConnectionEstablished;
 use Illuminate\Http\Request;
@@ -25,7 +26,10 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        // GuardedTransition es la autoridad central para avance y completitud.
+        // Registrado como singleton para evitar re-construcción por llamada
+        // (puede ser invocado desde observers, jobs y servicios).
+        $this->app->singleton(GuardedTransition::class);
     }
 
     /**

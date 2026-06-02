@@ -4,6 +4,7 @@ namespace App\Observers;
 
 use App\Models\FlujoEjecucion;
 use App\Models\FlujoEjecucionEtapa;
+use App\Services\GuardedTransition;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -135,45 +136,28 @@ class FlujoEjecucionEtapaObserver
     /**
      * Verifica si la ejecución debe completarse después de esta etapa.
      *
-     * Para flujos NO perpetuos: cuando ya no hay etapas pending/executing, marca la
-     * ejecución como `completed` (el flujo terminó).
+     * Delega a GuardedTransition::finalizarSiAlcanzoEndNode que verifica si
+     * el nodoFinal es un end_node real antes de marcar la ejecución completada.
      *
      * Para flujos PERPETUOS: NUNCA marca la ejecución como `completed` automáticamente,
-     * porque la ejecución sigue viva esperando nuevos prospectos. La transicion correcta
+     * porque la ejecución sigue viva esperando nuevos prospectos. La transición correcta
      * es a `waiting` y la maneja `BatchCompletedCallback::finalizarFlujo`.
      */
     private function verificarCompletarEjecucion(FlujoEjecucion $ejecucion, FlujoEjecucionEtapa $etapa, ?string $nodoFinal = null): void
     {
-        // En flujos perpetuos, no se completan automáticamente: BatchCompletedCallback
-        // las pone en `waiting` y CatchUp las re-activa con cada nuevo prospecto.
+        // En flujos perpetuos, no se completan automáticamente.
         $esPerpetuo = $ejecucion->es_perpetuo || ($ejecucion->flujo?->es_perpetuo ?? false);
         if ($esPerpetuo) {
             return;
         }
 
-        // Solo completar si todas las etapas activas están completadas o failed
-        $etapasActivas = FlujoEjecucionEtapa::where('flujo_ejecucion_id', $ejecucion->id)
-            ->whereIn('estado', ['pending', 'executing'])
-            ->count();
-
-        if ($etapasActivas === 0) {
-            // Si la ejecución no está ya completada, actualizarla
-            if ($ejecucion->estado !== 'completed') {
-                FlujoEjecucion::withoutEvents(function () use ($ejecucion) {
-                    $ejecucion->update([
-                        'estado' => 'completed',
-                        'fecha_fin' => now(),
-                        'proximo_nodo' => null,
-                        'fecha_proximo_nodo' => null,
-                    ]);
-                });
-
-                Log::info('FlujoEjecucionEtapaObserver: Ejecución completada', [
-                    'ejecucion_id' => $ejecucion->id,
-                    'nodo_final' => $nodoFinal,
-                ]);
-            }
+        if ($ejecucion->estado === 'completed') {
+            return;
         }
+
+        /** @var GuardedTransition $guard */
+        $guard = app(GuardedTransition::class);
+        $guard->finalizarSiAlcanzoEndNode($ejecucion, $nodoFinal, 'FlujoEjecucionEtapaObserver');
     }
 
     /**
@@ -195,10 +179,18 @@ class FlujoEjecucionEtapaObserver
 
         $tipoNodo = $siguienteNodo['type'] ?? (str_starts_with($siguienteNodoId, 'condition') ? 'condition' : 'stage');
 
-        // Obtener prospectos de la etapa completada
+        // Obtener prospectos de la etapa completada (SOLO del pivote — sin fallback poblacional).
+        // El fallback que antes sustituía el pivote vacío por ejecucion->prospectos() fue la
+        // raíz del sobre-avance en flujos perpetuos (bug corregido en PR-1 finalizacion-por-endnode).
+        // Si el pivote está vacío, loguear y continuar sin sincronizar prospectos fantasma.
         $prospectoIds = $etapaCompletada->prospectos()->pluck('prospectos.id')->toArray();
         if (empty($prospectoIds)) {
-            $prospectoIds = $ejecucion->prospectos()->pluck('prospectos.id')->toArray();
+            Log::warning('FlujoEjecucionEtapaObserver: pivote vacío — fallback poblacional suprimido', [
+                'reason'              => 'empty_pivot_fallback_suppressed',
+                'etapa_completada_id' => $etapaCompletada->id,
+                'node_id'             => $etapaCompletada->node_id,
+                'ejecucion_id'        => $ejecucion->id,
+            ]);
         }
 
         // Buscar si ya existe la etapa siguiente
