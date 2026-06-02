@@ -2,9 +2,10 @@
 
 namespace App\Console\Commands;
 
-use App\Jobs\EnviarEtapaJob;
+use App\Jobs\EnviarEmailEtapaProspectoJob;
 use App\Models\Flujo;
 use App\Models\FlujoEjecucionEtapa;
+use App\Models\Plantilla;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 
@@ -52,7 +53,6 @@ class ResendHuerfanosCommand extends Command
 
         $cfg = $flujo->config_structure ?? [];
         $stagesPorId = collect($cfg['stages'] ?? [])->keyBy('id');
-        $branches = $cfg['branches'] ?? [];
 
         // Base: huérfanos email (pendiente, sin provider y sin message_id) del flujo.
         $base = DB::table('envios')
@@ -71,7 +71,8 @@ class ResendHuerfanosCommand extends Command
         // Huérfanos CON etapa, agrupados por FEE.
         $huerfanos = (clone $base)
             ->whereNotNull('flujo_ejecucion_etapa_id')
-            ->get(['id', 'prospecto_id', 'flujo_ejecucion_etapa_id'])
+            ->whereNotNull('prospecto_en_flujo_id')
+            ->get(['id', 'prospecto_id', 'prospecto_en_flujo_id', 'flujo_ejecucion_etapa_id'])
             ->groupBy('flujo_ejecucion_etapa_id');
 
         if ($huerfanos->isEmpty()) {
@@ -103,33 +104,53 @@ class ResendHuerfanosCommand extends Command
                 continue;
             }
 
+            // Resolver el contenido del email desde la plantilla del stage (modo componentes).
+            // Leaf-direct: despachamos EnviarEmailEtapaProspectoJob por prospecto, salteando el
+            // gate del orquestador (que filtra por ultima_etapa_node_id = "ya pasó la etapa").
+            $plantillaId = $stage['plantilla_id'] ?? null;
+            $plantilla = $plantillaId ? Plantilla::find($plantillaId) : null;
+            if (! $plantilla || ! $plantilla->esEmail()) {
+                $this->warn("  FEE {$feeId} (\"".($stage['label'] ?? $fee->node_id)."\"): sin plantilla de email (plantilla_id={$plantillaId}), skip.");
+
+                continue;
+            }
+            $contenido = (string) ($plantilla->generarPreview() ?? '');
+            $asunto = (string) ($plantilla->asunto ?? '');
+            if ($contenido === '') {
+                $this->warn("  FEE {$feeId}: plantilla {$plantillaId} sin contenido renderizable, skip.");
+
+                continue;
+            }
+
             // Aplicar límite global repartido.
             $rowsSlice = $restante < $rows->count() ? $rows->take($restante) : $rows;
-            $envioIds = $rowsSlice->pluck('id')->all();
-            $prospectoIds = $rowsSlice->pluck('prospecto_id')->unique()->values()->all();
-            $restante -= count($prospectoIds);
+            $restante -= $rowsSlice->count();
 
             $label = $stage['label'] ?? $fee->node_id;
             $this->line(sprintf('  Etapa "%s" (FEE %d): %d huérfanos%s',
-                $label, $feeId, count($prospectoIds), $dryRun ? '' : ' → borrando placeholder + despachando'));
+                $label, $feeId, $rowsSlice->count(), $dryRun ? '' : ' → borrando placeholder + despachando leaf'));
 
             if ($dryRun) {
                 continue;
             }
 
-            // Borrar placeholders (libera el slot del unique constraint para que el reenvío inserte fresco).
-            DB::table('envios')->whereIn('id', $envioIds)->delete();
+            // 1) Borrar placeholders ANTES de despachar: libera el slot del unique constraint y
+            //    quita el estado bloqueante para que la idempotencia de la hoja NO saltee el reenvío.
+            DB::table('envios')->whereIn('id', $rowsSlice->pluck('id')->all())->delete();
 
-            // Despachar el reenvío (idempotencia filtra a los que ya recibieron; estos no recibieron).
-            EnviarEtapaJob::dispatch(
-                flujoEjecucionId: $fee->flujo_ejecucion_id,
-                etapaEjecucionId: $fee->id,
-                stage: (array) $stage,
-                prospectoIds: $prospectoIds,
-                branches: $branches,
-            );
+            // 2) Despachar el leaf job por prospecto, directo a la cola 'emails'.
+            foreach ($rowsSlice as $row) {
+                EnviarEmailEtapaProspectoJob::dispatch(
+                    prospectoEnFlujoId: $row->prospecto_en_flujo_id,
+                    contenido: $contenido,
+                    asunto: $asunto,
+                    flujoId: $flujoId,
+                    etapaEjecucionId: $fee->id,
+                    esHtml: true,
+                )->onQueue('emails');
+            }
 
-            $totalReenviados += count($prospectoIds);
+            $totalReenviados += $rowsSlice->count();
         }
 
         $this->newLine();

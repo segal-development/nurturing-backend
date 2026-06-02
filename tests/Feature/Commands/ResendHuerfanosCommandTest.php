@@ -2,11 +2,12 @@
 
 namespace Tests\Feature\Commands;
 
-use App\Jobs\EnviarEtapaJob;
+use App\Jobs\EnviarEmailEtapaProspectoJob;
 use App\Models\Envio;
 use App\Models\Flujo;
 use App\Models\FlujoEjecucion;
 use App\Models\FlujoEjecucionEtapa;
+use App\Models\Plantilla;
 use App\Models\Prospecto;
 use App\Models\ProspectoEnFlujo;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -20,9 +21,19 @@ class ResendHuerfanosCommandTest extends TestCase
 
     private function escenario(): array
     {
+        // Plantilla de email con contenido renderizable (modo html_personalizado para que
+        // generarPreview devuelva algo sin acoplarse al schema de componentes).
+        $plantilla = Plantilla::factory()->create([
+            'tipo' => 'email',
+            'modo' => 'html_personalizado',
+            'contenido' => '<p>Hola, este es el email de la etapa.</p>',
+            'asunto' => 'Asunto de prueba',
+            'componentes' => null,
+        ]);
+
         $flujo = Flujo::factory()->create([
             'config_structure' => [
-                'stages' => [['id' => 'stage-1', 'label' => 'dia 60', 'tipo_mensaje' => 'email']],
+                'stages' => [['id' => 'stage-1', 'label' => 'dia 60', 'tipo_mensaje' => 'email', 'plantilla_id' => $plantilla->id, 'plantilla_type' => 'reference']],
                 'branches' => [],
             ],
         ]);
@@ -66,10 +77,8 @@ class ResendHuerfanosCommandTest extends TestCase
 
         // Placeholders borrados
         $this->assertSame(0, Envio::where('flujo_id', $flujo->id)->where('estado', 'pendiente')->count());
-        // Despachó EnviarEtapaJob con los 2 prospectos huérfanos
-        Bus::assertDispatched(EnviarEtapaJob::class, function ($job) use ($ids) {
-            return count(array_intersect($job->prospectoIds, $ids)) === count($ids);
-        });
+        // Despachó 1 leaf job por huérfano (2), directo a la cola emails
+        Bus::assertDispatchedTimes(EnviarEmailEtapaProspectoJob::class, 2);
     }
 
     #[Test]
@@ -81,7 +90,7 @@ class ResendHuerfanosCommandTest extends TestCase
         $this->artisan('nurturing:resend-huerfanos', ['--flujo' => $flujo->id, '--dry-run' => true])->assertSuccessful();
 
         $this->assertSame(2, Envio::where('flujo_id', $flujo->id)->where('estado', 'pendiente')->count(), 'dry-run no debe borrar');
-        Bus::assertNotDispatched(EnviarEtapaJob::class);
+        Bus::assertNotDispatched(EnviarEmailEtapaProspectoJob::class);
     }
 
     #[Test]
