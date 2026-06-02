@@ -2,11 +2,13 @@
 
 namespace App\Jobs;
 
+use App\Models\Flujo;
 use App\Models\FlujoEjecucion;
 use App\Models\FlujoEjecucionEtapa;
 use App\Models\FlujoEtapa;
 use App\Models\ProspectoEnFlujo;
 use App\Services\EnvioService;
+use App\Services\GuardedTransition;
 use App\Services\StageOrderResolver;
 use Illuminate\Bus\Batch;
 use Illuminate\Bus\Queueable;
@@ -198,6 +200,37 @@ class EnviarEtapaChunkJob implements ShouldQueue
                 'previous_node_id' => $previousStageNodeId,
                 'is_first_stage' => $previousStageNodeId === null,
             ]);
+        }
+
+        // Gate temporal — Decision 4 (design): aplicar en el WHERE ANTES de skip/take
+        // para que la paginación no se desincronice entre chunks.
+        // Criterio: now() >= fecha_inicio + offset_acumulado(currentStage)
+        // Equivalente SQL: fecha_inicio <= now() - INTERVAL 'N days'
+        // Si el flujo no se carga (null), o el offset = -1 (nodo no encontrado), se omite el gate.
+        if ($currentNodeId) {
+            $flujo = $ejecucion?->flujo ?? Flujo::find($this->flujoId);
+            if ($flujo) {
+                /** @var GuardedTransition $guard */
+                $guard = app(GuardedTransition::class);
+                $offsetDias = $guard->offsetAcumulado($flujo, $currentNodeId);
+
+                if ($offsetDias >= 0) {
+                    // Prospectos cuya fecha_inicio ya superó el offset acumulado de esta etapa.
+                    // NULL fecha_inicio: se deja pasar (sin anchor no hay gate temporal).
+                    $fechaCorte = now()->subDays($offsetDias);
+                    $baseQuery->where(function ($q) use ($fechaCorte) {
+                        $q->whereNull('fecha_inicio')
+                            ->orWhere('fecha_inicio', '<=', $fechaCorte);
+                    });
+
+                    Log::debug('EnviarEtapaChunkJob: Gate temporal aplicado', [
+                        'chunk_index' => $this->chunkIndex,
+                        'current_node_id' => $currentNodeId,
+                        'offset_dias' => $offsetDias,
+                        'fecha_corte' => $fechaCorte->toDateTimeString(),
+                    ]);
+                }
+            }
         }
 
         // Get prospect IDs for this chunk with filtering applied
