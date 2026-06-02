@@ -152,6 +152,24 @@ class GuardedTransition
             return false;
         }
 
+        // Guard de prospectos varados (solo aplica a ejecuciones NO-perpetuas).
+        // Los perpetuos salen vía finalizarRespetandoPerpetuo → 'waiting', nunca 'completed'.
+        $esPerpetuo = $ejecucion->es_perpetuo || ($flujo?->es_perpetuo ?? false);
+        if (! $esPerpetuo && $flujo !== null) {
+            $varadosCount = $this->contarProspectosVaradosMidFlow($flujo);
+            if ($varadosCount > 0) {
+                Log::warning('GuardedTransition: completitud bloqueada — prospectos activos varados mid-flow', [
+                    'reason'        => 'completion_blocked_prospectos_stranded',
+                    'ejecucion_id'  => $ejecucion->id,
+                    'flujo_id'      => $flujo->id,
+                    'varados_count' => $varadosCount,
+                    'caller'        => $reason,
+                ]);
+
+                return false;
+            }
+        }
+
         // Delegar la escritura al método de dominio del modelo (único writer físico)
         $ejecucion->finalizarRespetandoPerpetuo();
 
@@ -263,6 +281,80 @@ class GuardedTransition
         }
 
         return false;
+    }
+
+    /**
+     * Cuenta prospectos activos varados mid-flow para un flujo dado.
+     *
+     * Un prospecto está "varado mid-flow" si:
+     *   - completado=false AND cancelado=false (activo)
+     *   - su ultima_etapa_node_id tiene una arista saliente en config_structure.branches
+     *     hacia un nodo que ES un stage real:
+     *       * target NO empieza con 'end-'
+     *       * target NO está en config_structure.end_nodes
+     *       * target existe como stage en config_structure.stages
+     *
+     * Se usa para bloquear la completitud prematura de ejecuciones no-perpetuas
+     * cuando la ejecución fast-forwardea al end_node pero una cohorte quedó atrás.
+     */
+    private function contarProspectosVaradosMidFlow(Flujo $flujo): int
+    {
+        $cfg      = $flujo->config_structure ?? [];
+        $stages   = $cfg['stages']    ?? [];
+        $branches = $cfg['branches']  ?? [];
+        $endNodes = $cfg['end_nodes'] ?? [];
+
+        if (empty($stages) || empty($branches)) {
+            return 0;
+        }
+
+        // Construir lookup: node_id → es stage real
+        $stageIds = collect($stages)
+            ->filter(fn ($s) => ! in_array($s['type'] ?? '', ['end', 'start'], true))
+            ->pluck('id')
+            ->flip()   // para O(1) lookup
+            ->all();
+
+        // Construir mapa source_node_id → target_node_id (primer branch, asume lineal o toma el primero)
+        $branchTarget = collect($branches)->keyBy('source_node_id');
+
+        // Recopilar los node_ids cuya siguiente arista apunta a un stage real
+        $nodeIdsVarables = [];
+        foreach ($branches as $branch) {
+            $target = $branch['target_node_id'] ?? null;
+            if ($target === null) {
+                continue;
+            }
+
+            // El target debe ser un stage real (no end)
+            if (str_starts_with($target, 'end-')) {
+                continue;
+            }
+            if (in_array($target, $endNodes, true)) {
+                continue;
+            }
+            if (! isset($stageIds[$target])) {
+                continue;
+            }
+
+            // El source de esta arista es un nodo desde el que se puede quedar varado
+            $source = $branch['source_node_id'] ?? null;
+            if ($source !== null) {
+                $nodeIdsVarables[] = $source;
+            }
+        }
+
+        if (empty($nodeIdsVarables)) {
+            return 0;
+        }
+
+        $nodeIdsVarables = array_unique($nodeIdsVarables);
+
+        return ProspectoEnFlujo::where('flujo_id', $flujo->id)
+            ->where('completado', false)
+            ->where('cancelado', false)
+            ->whereIn('ultima_etapa_node_id', $nodeIdsVarables)
+            ->count();
     }
 
     /**
