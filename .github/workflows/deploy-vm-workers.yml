@@ -133,9 +133,19 @@ jobs:
               echo ''
               
               echo '[5/5] Restarting workers...'
-              sudo supervisorctl restart all
-              sleep 3
+              # restart all puede devolver no-cero por un ERROR transitorio de un proceso
+              # que el propio supervisor auto-reinicia segundos despues (race del restart).
+              # Toleramos ese hipo, esperamos a que estabilice, y fallamos SOLO si algun
+              # proceso queda genuinamente muerto (FATAL/BACKOFF) tras la ventana de settle.
+              sudo supervisorctl restart all || true
+              echo 'Waiting for supervisor to stabilize...'
+              sleep 10
               sudo supervisorctl status
+              if sudo supervisorctl status | grep -qE 'FATAL|BACKOFF'; then
+                echo 'ERROR: worker(s) en FATAL/BACKOFF tras la ventana de estabilizacion.'
+                exit 1
+              fi
+              echo 'Todos los workers estabilizados.'
               echo ''
               
               echo '=============================================='
