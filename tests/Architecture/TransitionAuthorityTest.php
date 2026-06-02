@@ -64,6 +64,12 @@ class TransitionAuthorityTest extends TestCase
             // Its use of the column is a legitimate data-repair backfill, not a
             // transition decision. Whitelisted per design decision (Fase 2 PR-2).
             realpath(__DIR__ . '/../../app/Console/Commands/BackfillUltimaEtapaCommand.php'),
+            // RepairPosicionPerpetuoCommand is the data-repair command for Fase 3.
+            // It recalculates ultima_etapa_node_id from fecha_inicio + offsetAcumulado
+            // (NOT from historical envios — that's the corruption vector). The command
+            // requires the execution to be 'paused' (frozen), is idempotent, and operates
+            // as an authorized repair tool. Whitelisted per design Decision 5.
+            realpath(__DIR__ . '/../../app/Console/Commands/RepairPosicionPerpetuoCommand.php'),
         ]);
     }
 
