@@ -173,7 +173,7 @@ class VerificarCondicionJob implements ShouldQueue
 
             // 7. Actualizar etapa de condición como completada
             $etapaEjecucion->update([
-                'estado' => 'completed',
+                'estado' => 'completed', // @transition-authority-ok: FlujoEjecucionCondicion, not FlujoEjecucion
                 'ejecutado' => true,
                 'fecha_ejecucion' => now(),
             ]);
@@ -191,7 +191,7 @@ class VerificarCondicionJob implements ShouldQueue
                     'rama_si' => $resultado['estadisticas']['si'],
                     'rama_no' => $resultado['estadisticas']['no'],
                 ],
-                'estado' => 'completed',
+                'estado' => 'completed', // @transition-authority-ok: FlujoJob
                 'fecha_queued' => now(),
                 'fecha_procesado' => now(),
             ]);

@@ -40,7 +40,7 @@ class BatchCompletedCallback
 
         $etapaEjecucion->update([
             'message_id' => $messageId,
-            'estado' => 'completed',
+            'estado' => 'completed', // @transition-authority-ok: FlujoEjecucionEtapa
             'ejecutado' => true,
             'fecha_ejecucion' => now(),
             'response_athenacampaign' => [
@@ -55,7 +55,7 @@ class BatchCompletedCallback
         FlujoJob::where('job_id', $batch->id)
             ->where('job_type', 'enviar_etapa_batch')
             ->update([
-                'estado' => 'completed',
+                'estado' => 'completed', // @transition-authority-ok: FlujoJob
                 'fecha_procesado' => now(),
             ]);
 
@@ -74,7 +74,7 @@ class BatchCompletedCallback
         });
 
         if ($conexionesDesdeEsta->isEmpty()) {
-            $this->finalizarFlujo($ejecucion);
+            $this->finalizarFlujo($ejecucion, null);
 
             return;
         }
@@ -83,7 +83,7 @@ class BatchCompletedCallback
         $targetNodeId = $primeraConexion['target_node_id'];
 
         if (str_starts_with($targetNodeId, 'end-')) {
-            $this->finalizarFlujo($ejecucion);
+            $this->finalizarFlujo($ejecucion, $targetNodeId);
 
             return;
         }
@@ -96,19 +96,17 @@ class BatchCompletedCallback
         $this->procesarNodoSiguiente($ejecucion, $etapaEjecucion, $targetNode, $targetNodeId, $primeraConexion, $messageId, $prospectoIds, $branches);
     }
 
-    private function finalizarFlujo(FlujoEjecucion $ejecucion): void
+    private function finalizarFlujo(FlujoEjecucion $ejecucion, ?string $nextNodeId): void
     {
-        // Delega en el modelo (única fuente de verdad): para flujos perpetuos
-        // la ejecución queda 'waiting' esperando nuevos prospectos que CatchUp
-        // procesa; marcarla 'completed' la dejaría muerta y a los nuevos
-        // prospectos sin nutrir. Los flujos normales sí se completan.
         Log::info('BatchCompletedCallback: Finalizando ciclo', [
             'ejecucion_id' => $ejecucion->id,
             'flujo_id' => $ejecucion->flujo_id,
-            'es_perpetuo' => $ejecucion->flujo?->es_perpetuo ?? false,
+            'next_node_id' => $nextNodeId,
         ]);
 
-        $ejecucion->finalizarRespetandoPerpetuo();
+        /** @var \App\Services\GuardedTransition $guard */
+        $guard = app(\App\Services\GuardedTransition::class);
+        $guard->finalizarSiAlcanzoEndNode($ejecucion, $nextNodeId, 'BatchCompletedCallback');
     }
 
     private function findTargetNode(FlujoEjecucion $ejecucion, string $targetNodeId): ?array
@@ -141,7 +139,7 @@ class BatchCompletedCallback
         match ($tipoNodoSiguiente) {
             'condition' => $this->programarVerificacionCondicion($ejecucion, $etapaEjecucion, $targetNodeId, $primeraConexion, $messageId, $prospectoIds),
             'stage' => $this->programarSiguienteEtapa($ejecucion, $targetNode, $targetNodeId, $prospectoIds),
-            'end' => $this->finalizarFlujo($ejecucion),
+            'end' => $this->finalizarFlujo($ejecucion, $targetNodeId),
             default => Log::warning('BatchCompletedCallback: Tipo de nodo desconocido', ['tipo' => $tipoNodoSiguiente]),
         };
     }

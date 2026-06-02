@@ -551,12 +551,12 @@ class EjecutarNodosProgramados implements ShouldQueue
     private function ejecutarNodoFin(FlujoEjecucion $ejecucion, FlujoEjecucionEtapa $etapa): void
     {
         $etapa->update([
-            'estado' => 'completed',
+            'estado' => 'completed', // @transition-authority-ok: FlujoEjecucionEtapa, not FlujoEjecucion
             'ejecutado' => true,
             'fecha_ejecucion' => now(),
         ]);
 
-        $this->finalizarEjecucion($ejecucion);
+        $this->finalizarEjecucion($ejecucion, null);
     }
 
     /**
@@ -571,13 +571,15 @@ class EjecutarNodosProgramados implements ShouldQueue
      * job (ejecutarNodoFin, recuperación, programarSiguienteNodo): 4 de los 5
      * caminos NO respetaban es_perpetuo y re-mataban la ejecución perpetua.
      */
-    private function finalizarEjecucion(FlujoEjecucion $ejecucion): void
+    private function finalizarEjecucion(FlujoEjecucion $ejecucion, ?string $nextNodeId): void
     {
-        $ejecucion->finalizarRespetandoPerpetuo();
+        /** @var \App\Services\GuardedTransition $guard */
+        $guard = app(\App\Services\GuardedTransition::class);
+        $guard->finalizarSiAlcanzoEndNode($ejecucion, $nextNodeId, 'EjecutarNodosProgramados');
 
         Log::info('EjecutarNodosProgramados: Ejecución finalizada', [
             'ejecucion_id' => $ejecucion->id,
-            'estado' => $ejecucion->estado,
+            'next_node_id' => $nextNodeId,
         ]);
     }
 
@@ -629,7 +631,7 @@ class EjecutarNodosProgramados implements ShouldQueue
                         $messageId = rand(10000, 99999);
 
                         $etapa->update([
-                            'estado' => 'completed',
+                            'estado' => 'completed', // @transition-authority-ok: FlujoEjecucionEtapa
                             'ejecutado' => true,
                             'message_id' => $messageId,
                             'fecha_ejecucion' => now(),
@@ -741,7 +743,7 @@ class EjecutarNodosProgramados implements ShouldQueue
             $messageId = rand(10000, 99999);
 
             $etapa->update([
-                'estado' => 'completed',
+                'estado' => 'completed', // @transition-authority-ok: FlujoEjecucionEtapa
                 'ejecutado' => true,
                 'message_id' => $messageId,
                 'fecha_ejecucion' => now(),
@@ -810,7 +812,7 @@ class EjecutarNodosProgramados implements ShouldQueue
             $messageId = rand(10000, 99999);
 
             $etapa->update([
-                'estado' => 'completed',
+                'estado' => 'completed', // @transition-authority-ok: FlujoEjecucionEtapa
                 'ejecutado' => true,
                 'message_id' => $messageId,
                 'fecha_ejecucion' => now(),
@@ -892,7 +894,7 @@ class EjecutarNodosProgramados implements ShouldQueue
 
         if (! $siguienteConexion) {
             // No hay siguiente nodo - completar ejecución
-            $this->finalizarEjecucion($ejecucion);
+            $this->finalizarEjecucion($ejecucion, null);
 
             return;
         }
@@ -901,7 +903,7 @@ class EjecutarNodosProgramados implements ShouldQueue
 
         // Si es nodo final, completar
         if (str_starts_with($siguienteNodoId, 'end-')) {
-            $this->finalizarEjecucion($ejecucion);
+            $this->finalizarEjecucion($ejecucion, $siguienteNodoId);
 
             return;
         }
@@ -1037,7 +1039,7 @@ class EjecutarNodosProgramados implements ShouldQueue
 
         if (! $siguienteConexion) {
             // No hay siguiente nodo, marcar como completado
-            $this->finalizarEjecucion($ejecucion);
+            $this->finalizarEjecucion($ejecucion, null);
 
             return;
         }
@@ -1046,9 +1048,6 @@ class EjecutarNodosProgramados implements ShouldQueue
 
         // ✅ VERIFICAR SI ES UN NODO FINAL (end-*)
         if (str_starts_with($siguienteNodoId, 'end-')) {
-            $flujo = $ejecucion->flujo;
-            $esPerpetuo = $flujo->es_perpetuo ?? false;
-
             // Marcar los prospectos de ESTA ejecución como completados
             $prospectosCompletados = \App\Models\ProspectoEnFlujo::where('flujo_id', $ejecucion->flujo_id)
                 ->whereIn('prospecto_id', $ejecucion->prospectos()->pluck('prospectos.id'))
@@ -1061,34 +1060,10 @@ class EjecutarNodosProgramados implements ShouldQueue
             Log::debug('EjecutarNodosProgramados: Prospectos de cohorte completados', [
                 'ejecucion_id' => $ejecucion->id,
                 'prospectos_completados' => $prospectosCompletados,
-                'es_perpetuo' => $esPerpetuo,
             ]);
 
-            if ($esPerpetuo) {
-                // Flujo perpetuo: la ejecución queda "waiting" esperando nuevos prospectos
-                $ejecucion->update([
-                    'estado' => 'waiting',
-                    'proximo_nodo' => null,
-                    'fecha_proximo_nodo' => null,
-                ]);
-
-                Log::debug('EjecutarNodosProgramados: Flujo perpetuo en espera', [
-                    'ejecucion_id' => $ejecucion->id,
-                    'flujo_id' => $flujo->id,
-                ]);
-            } else {
-                // Flujo normal: marcar como completado
-                $ejecucion->update([
-                    'estado' => 'completed',
-                    'fecha_fin' => now(),
-                    'proximo_nodo' => null,
-                    'fecha_proximo_nodo' => null,
-                ]);
-
-                Log::info('EjecutarNodosProgramados: Ejecución completada', [
-                    'ejecucion_id' => $ejecucion->id,
-                ]);
-            }
+            // Delegar en GuardedTransition: respeta perpetuo y valida end_node real
+            $this->finalizarEjecucion($ejecucion, $siguienteNodoId);
 
             return;
         }

@@ -233,7 +233,7 @@ class EnviarEtapaJob implements ShouldQueue
         ]);
 
         $etapaEjecucion->update([
-            'estado' => 'completed',
+            'estado' => 'completed', // @transition-authority-ok: FlujoEjecucionEtapa
             'fecha_ejecucion' => now(),
             'response_athenacampaign' => ['mensaje' => 'No hay prospectos'],
         ]);
@@ -267,11 +267,13 @@ class EnviarEtapaJob implements ShouldQueue
         $conexion = collect($branches)->firstWhere('source_node_id', $stageId);
 
         if (! $conexion) {
-            // No hay siguiente nodo: delegar en el modelo. Para flujos perpetuos queda
+            // No hay siguiente nodo: delegar en GuardedTransition. Para flujos perpetuos queda
             // en 'waiting' esperando nuevos prospectos; para flujos normales pasa a
             // 'completed'. Antes esto marcaba completed directo y mataba ejecuciones
             // perpetuas (incidente 2026-05-29 con FEE 507 sin prospectos).
-            $ejecucion->finalizarRespetandoPerpetuo();
+            /** @var \App\Services\GuardedTransition $guard */
+            $guard = app(\App\Services\GuardedTransition::class);
+            $guard->finalizarSiAlcanzoEndNode($ejecucion, null, 'EnviarEtapaJob:noConnection');
 
             return;
         }
@@ -279,7 +281,9 @@ class EnviarEtapaJob implements ShouldQueue
         $targetNodeId = $conexion['target_node_id'];
 
         if (str_starts_with($targetNodeId, 'end-')) {
-            $ejecucion->finalizarRespetandoPerpetuo();
+            /** @var \App\Services\GuardedTransition $guard */
+            $guard = app(\App\Services\GuardedTransition::class);
+            $guard->finalizarSiAlcanzoEndNode($ejecucion, $targetNodeId, 'EnviarEtapaJob:endNode');
 
             return;
         }

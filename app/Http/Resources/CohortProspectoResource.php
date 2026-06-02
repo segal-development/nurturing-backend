@@ -19,7 +19,7 @@ class CohortProspectoResource extends JsonResource
             'nombre' => $this->nombre,
             'email' => $this->email,
             'telefono' => $this->telefono,
-            'ultima_etapa_node_id' => $this->ultima_etapa_node_id ?? null,
+            'ultima_etapa_node_id' => $this->ultima_etapa_node_id ?? null, // @transition-authority-ok: read-only (API resource)
             'envios_resumen' => $this->envios_resumen ?? [
                 'total' => 0,
                 'enviados' => 0,

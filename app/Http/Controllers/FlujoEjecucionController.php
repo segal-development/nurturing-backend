@@ -1378,7 +1378,7 @@ class FlujoEjecucionController extends Controller
                     'nombre' => $prospecto->nombre,
                     'email' => $prospecto->email,
                     'telefono' => $prospecto->telefono,
-                    'ultima_etapa_node_id' => $ultimasEtapas->get($prospectoId)?->ultima_etapa_node_id,
+                    'ultima_etapa_node_id' => $ultimasEtapas->get($prospectoId)?->ultima_etapa_node_id, // @transition-authority-ok: read-only (API response)
                     'envios_resumen' => $enviosResumen[$prospectoId] ?? [
                         'total' => 0,
                         'enviados' => 0,

@@ -59,6 +59,11 @@ class TransitionAuthorityTest extends TestCase
             realpath(__DIR__ . '/../../app/Services/GuardedTransition.php'),
             realpath(__DIR__ . '/../../app/Models/FlujoEjecucion.php'),
             realpath(__DIR__ . '/../../app/Models/ProspectoEnFlujo.php'), // crearBatch sets ultima_etapa
+            // BackfillUltimaEtapaCommand is a one-time repair command that derives
+            // ultima_etapa_node_id from historical envios (not from flow logic).
+            // Its use of the column is a legitimate data-repair backfill, not a
+            // transition decision. Whitelisted per design decision (Fase 2 PR-2).
+            realpath(__DIR__ . '/../../app/Console/Commands/BackfillUltimaEtapaCommand.php'),
         ]);
     }
 
@@ -94,6 +99,14 @@ class TransitionAuthorityTest extends TestCase
                 // Skip pure single-line comments
                 $trimmed = ltrim($lineContent);
                 if (str_starts_with($trimmed, '//') || str_starts_with($trimmed, '#')) {
+                    continue;
+                }
+
+                // Skip lines explicitly suppressed with @transition-authority-ok
+                // Use this ONLY for writes to FlujoEjecucionEtapa or FlujoJob (NOT FlujoEjecucion).
+                // Example: FlujoEjecucionEtapa::update(['estado' => 'completed']) is legitimate —
+                // only FlujoEjecucion::estado and ProspectoEnFlujo::ultima_etapa_node_id are guarded.
+                if (str_contains($lineContent, '@transition-authority-ok')) {
                     continue;
                 }
 

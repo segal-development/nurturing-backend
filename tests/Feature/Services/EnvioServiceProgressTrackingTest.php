@@ -62,6 +62,7 @@ class EnvioServiceProgressTrackingTest extends TestCase
             $desuscripcionService,
             $emailValidationService,
             $emailProviderResolver,
+            $this->app->make(\App\Services\GuardedTransition::class),
         );
 
         $this->tipoProspecto = TipoProspecto::factory()->create();

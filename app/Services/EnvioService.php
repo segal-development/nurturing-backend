@@ -7,6 +7,7 @@ use App\Models\FlujoEjecucionEtapa;
 use App\Models\Prospecto;
 use App\Models\ProspectoEnFlujo;
 use App\Services\Email\EmailProviderResolver;
+use App\Services\GuardedTransition;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
@@ -23,6 +24,7 @@ class EnvioService
         private DesuscripcionService $desuscripcionService,
         private EmailValidationService $emailValidationService,
         private EmailProviderResolver $emailProviderResolver,
+        private GuardedTransition $guardedTransition,
     ) {}
 
     /**
@@ -1190,15 +1192,32 @@ class EnvioService
             return;
         }
 
-        // Update the prospect's progress to this stage
-        $prospectoEnFlujo->update([
-            'ultima_etapa_node_id' => $etapaEjecucion->node_id,
-        ]);
+        // Update the prospect's progress to this stage via GuardedTransition (autoridad central).
+        // We call avanzarProspectos post-send: at this point the temporal and position guards
+        // should always pass because the FEE was scheduled correctly. If they fail, it means
+        // the prospect's state is inconsistent and the guard correctly suppresses the update.
+        $ejecucion = $etapaEjecucion->ejecucion;
 
-        Log::debug('EnvioService: Progreso de prospecto actualizado', [
+        if (! $ejecucion) {
+            Log::debug('EnvioService: No se pudo cargar ejecucion para actualizar progreso', [
+                'prospecto_en_flujo_id' => $prospectoEnFlujo->id,
+                'etapa_ejecucion_id' => $etapaEjecucionId,
+            ]);
+
+            return;
+        }
+
+        $avanzados = $this->guardedTransition->avanzarProspectos(
+            $ejecucion,
+            $etapaEjecucion->node_id,
+            [$prospectoEnFlujo->id]
+        );
+
+        Log::debug('EnvioService: Progreso de prospecto actualizado via GuardedTransition', [
             'prospecto_id' => $prospectoEnFlujo->prospecto_id,
             'flujo_id' => $prospectoEnFlujo->flujo_id,
-            'ultima_etapa_node_id' => $etapaEjecucion->node_id,
+            'node_id' => $etapaEjecucion->node_id,
+            'avanzado' => ! empty($avanzados),
         ]);
     }
 }

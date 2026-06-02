@@ -182,7 +182,7 @@ class RecoverStuckEtapas extends Command
 
         // Marcar etapa como completada con toda la info necesaria
         $etapa->update([
-            'estado' => 'completed',
+            'estado' => 'completed', // @transition-authority-ok: FlujoEjecucionEtapa
             'ejecutado' => true,
             'fecha_ejecucion' => now(),
             'message_id' => $messageId,
@@ -225,14 +225,13 @@ class RecoverStuckEtapas extends Command
         });
 
         if ($conexiones->isEmpty()) {
-            // No hay siguiente nodo - finalizar flujo
+            // No hay siguiente nodo - finalizar flujo vía GuardedTransition
             Log::info('RecoverStuckEtapas: No hay siguiente nodo, finalizando flujo', [
                 'flujo_ejecucion_id' => $ejecucion->id,
             ]);
-            $ejecucion->update([
-                'estado' => 'completed',
-                'fecha_fin' => now(),
-            ]);
+            /** @var \App\Services\GuardedTransition $guard */
+            $guard = app(\App\Services\GuardedTransition::class);
+            $guard->finalizarSiAlcanzoEndNode($ejecucion, null, 'RecoverStuckEtapas:noNextNode');
 
             return;
         }
@@ -245,10 +244,9 @@ class RecoverStuckEtapas extends Command
             Log::info('RecoverStuckEtapas: Siguiente es nodo fin, finalizando flujo', [
                 'flujo_ejecucion_id' => $ejecucion->id,
             ]);
-            $ejecucion->update([
-                'estado' => 'completed',
-                'fecha_fin' => now(),
-            ]);
+            /** @var \App\Services\GuardedTransition $guard */
+            $guard = app(\App\Services\GuardedTransition::class);
+            $guard->finalizarSiAlcanzoEndNode($ejecucion, $targetNodeId, 'RecoverStuckEtapas:endNode');
 
             return;
         }
