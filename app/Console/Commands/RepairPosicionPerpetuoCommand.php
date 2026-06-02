@@ -404,11 +404,10 @@ class RepairPosicionPerpetuoCommand extends Command
         // Insertar los nuevos pivotes y actualizar prospectos_ids en cada FEE
         foreach ($fees as $nodeId => $fee) {
             $pefIds = $prospectosParaFee[$nodeId] ?? [];
+            $prospectoIds = [];
 
             if (! empty($pefIds)) {
-                // Insertar en pivote etapa_prospecto
-                // La tabla usa prospecto_id, no prospecto_en_flujo_id
-                // Necesitamos obtener prospecto_id de los pef
+                // El pivote etapa_prospecto usa prospecto_id (no prospecto_en_flujo_id).
                 $prospectoIds = ProspectoEnFlujo::whereIn('id', $pefIds)
                     ->pluck('prospecto_id')
                     ->all();
@@ -423,10 +422,13 @@ class RepairPosicionPerpetuoCommand extends Command
                 }
             }
 
-            // Actualizar prospectos_ids y prospectos_count en la FEE
+            // prospectos_ids DEBE guardar Prospecto IDs (no PEF IDs): el observer `saved` de
+            // FlujoEjecucionEtapa hace prospectos()->sync(prospectos_ids) tratándolos como
+            // Prospecto IDs. Guardar PEF IDs acá corrompía el pivote recién insertado y
+            // re-disparaba el over-dispatch al reanudar (WARNING 1 del verify final).
             $fee->update([
-                'prospectos_ids'   => $pefIds,
-                'prospectos_count' => count($pefIds),
+                'prospectos_ids'   => $prospectoIds,
+                'prospectos_count' => count($prospectoIds),
             ]);
         }
     }

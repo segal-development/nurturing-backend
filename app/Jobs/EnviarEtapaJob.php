@@ -737,7 +737,7 @@ class EnviarEtapaJob implements ShouldQueue
         // flujo 39 en carga baja mandaba mails prematuros. NULL fecha_inicio: pasa (sin anchor no
         // hay gate). offset -1 (nodo no hallado en la cadena): se omite, sin lanzar.
         if ($currentNodeId) {
-            $flujoGate = $ejecucion->flujo ?? \App\Models\Flujo::find($this->flujoId);
+            $flujoGate = $ejecucion->flujo;
             if ($flujoGate) {
                 $offsetDias = app(\App\Services\GuardedTransition::class)->offsetAcumulado($flujoGate, $currentNodeId);
                 if ($offsetDias >= 0) {
