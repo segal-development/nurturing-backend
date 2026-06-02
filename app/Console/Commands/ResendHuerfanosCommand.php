@@ -54,13 +54,23 @@ class ResendHuerfanosCommand extends Command
         $stagesPorId = collect($cfg['stages'] ?? [])->keyBy('id');
         $branches = $cfg['branches'] ?? [];
 
-        // Huérfanos: pendiente, sin provider y sin message_id, agrupados por etapa (FEE).
-        $huerfanos = DB::table('envios')
+        // Base: huérfanos email (pendiente, sin provider y sin message_id) del flujo.
+        $base = DB::table('envios')
             ->where('flujo_id', $flujoId)
             ->where('canal', 'email')
             ->where('estado', 'pendiente')
             ->where(fn ($q) => $q->whereNull('external_message_id')->orWhere('external_message_id', ''))
-            ->where(fn ($q) => $q->whereNull('email_provider')->orWhere('email_provider', ''))
+            ->where(fn ($q) => $q->whereNull('email_provider')->orWhere('email_provider', ''));
+
+        // Sin FEE no se pueden re-disparar vía EnviarEtapaJob (no hay etapa) → los reportamos y skip.
+        $sinFee = (clone $base)->whereNull('flujo_ejecucion_etapa_id')->count();
+        if ($sinFee > 0) {
+            $this->warn("  ⚠ {$sinFee} huérfanos SIN etapa asociada — no reenviables por este comando (revisar aparte).");
+        }
+
+        // Huérfanos CON etapa, agrupados por FEE.
+        $huerfanos = (clone $base)
+            ->whereNotNull('flujo_ejecucion_etapa_id')
             ->get(['id', 'prospecto_id', 'flujo_ejecucion_etapa_id'])
             ->groupBy('flujo_ejecucion_etapa_id');
 
