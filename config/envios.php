@@ -119,7 +119,9 @@ return [
     |
     */
     'sending_window' => [
-        'enabled'    => (bool) env('SENDING_WINDOW_ENABLED', true),
+        // Default OFF: se deploya inerte y se activa explícitamente con SENDING_WINDOW_ENABLED=true
+        // cuando negocio confirme horario/canales. Sin el env, el middleware deja pasar todo (no difiere).
+        'enabled'    => (bool) env('SENDING_WINDOW_ENABLED', false),
         'start_hour' => (int) env('SENDING_WINDOW_START', 8),   // inclusivo
         'end_hour'   => (int) env('SENDING_WINDOW_END', 21),    // exclusivo
         'weekdays'   => [1, 2, 3, 4, 5],                         // ISO: 1=lunes..5=viernes
