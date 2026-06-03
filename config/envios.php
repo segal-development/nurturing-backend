@@ -109,6 +109,33 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Sending Window (Ventana Horaria de Envíos)
+    |--------------------------------------------------------------------------
+    |
+    | Restringe el HANDOFF al proveedor a horario hábil (Chile). Fuera de
+    | ventana, SendingWindowMiddleware difiere el job con release() hasta la
+    | próxima apertura. Resolución por-canal: email ON, sms opt-in.
+    | NUNCA usa SQL now() (UTC); usa Carbon::now() (app.timezone Chile).
+    |
+    */
+    'sending_window' => [
+        'enabled'    => (bool) env('SENDING_WINDOW_ENABLED', true),
+        'start_hour' => (int) env('SENDING_WINDOW_START', 8),   // inclusivo
+        'end_hour'   => (int) env('SENDING_WINDOW_END', 21),    // exclusivo
+        'weekdays'   => [1, 2, 3, 4, 5],                         // ISO: 1=lunes..5=viernes
+        'timezone'   => env('SENDING_WINDOW_TZ', 'America/Santiago'),
+        'channels'   => [
+            'email' => (bool) env('SENDING_WINDOW_EMAIL', true),
+            'sms'   => (bool) env('SENDING_WINDOW_SMS', false), // opt-in
+        ],
+        'backlog' => [
+            'strategy'   => env('SENDING_WINDOW_BACKLOG', 'jitter'), // 'jitter' | 'burst'
+            'jitter_max' => (int) env('SENDING_WINDOW_JITTER_MAX', 300),
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Queue Configuration
     |--------------------------------------------------------------------------
     |

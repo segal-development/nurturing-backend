@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Jobs\Middleware\RateLimitedMiddleware;
+use App\Jobs\Middleware\SendingWindowMiddleware;
 use App\Models\ProspectoEnFlujo;
 use App\Services\EnvioService;
 use Illuminate\Bus\Batchable;
@@ -25,6 +26,11 @@ use Illuminate\Support\Facades\Log;
  * - Incluye tracking de aperturas (pixel) y clicks (URL rewrite)
  * - Reintentos automáticos con backoff exponencial
  * - Idempotencia: ShouldBeUnique previene jobs duplicados en cola
+ *
+ * @todo TODO_CANAL Toda nueva hoja de envío DEBE componer
+ *       SendingWindowMiddleware('canal') ANTES de RateLimitedMiddleware('canal')
+ *       en su método middleware(). Sin esto, los envíos de ese canal no tienen
+ *       restricción horaria y pueden llegar a proveedores fuera de horario hábil.
  */
 class EnviarEmailEtapaProspectoJob implements ShouldBeUnique, ShouldQueue
 {
@@ -92,6 +98,7 @@ class EnviarEmailEtapaProspectoJob implements ShouldBeUnique, ShouldQueue
     public function middleware(): array
     {
         return [
+            new SendingWindowMiddleware('email'), // guard de ventana horaria PRIMERO
             new RateLimitedMiddleware('email'),
         ];
     }
