@@ -209,8 +209,6 @@ class GuardedTransition
             return -1;
         }
 
-        $esClientesIngreso = $flujo->origen === 'Grupo Deudas - Clientes Ingreso';
-
         // Encontrar el primer stage ejecutable (después del nodo start)
         $firstStageId = $this->findFirstExecutableStageId($cfg);
         if (! $firstStageId) {
@@ -220,8 +218,10 @@ class GuardedTransition
         $stagesPorId = collect($stages)->keyBy('id');
         $nextOf = collect($branches)->keyBy('source_node_id');
 
-        // Baseline: Clientes-Ingreso +3, resto 0
-        $offsetDias = $esClientesIngreso ? 3 : 0;
+        // Baseline: siempre 0. Para flujos Clientes-Ingreso, el +3 ya está absorbido
+        // en fecha_inicio (= fecha_ingreso + 3 días, asignado por el sync/job de entrada).
+        // Añadir otro +3 aquí generaba doble conteo que bloqueaba el onboarding 3 días de más.
+        $offsetDias = 0;
         $currentId = $firstStageId;
         $visitados = [];
 
