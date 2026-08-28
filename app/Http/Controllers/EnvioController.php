@@ -98,7 +98,7 @@ class EnvioController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
-        $query = Envio::with(['prospecto', 'flujo']);
+        $query = Envio::with(['prospecto', 'flujo', 'etapaFlujo']);
 
         // Filtrar por estado
         if ($request->filled('estado')) {
@@ -131,26 +131,9 @@ class EnvioController extends Controller
         $envios = $query->orderBy('created_at', 'desc')
             ->paginate($porPagina, ['*'], 'page', $pagina);
 
-        // Transformar envíos para incluir metadata.destinatario
-        $enviosTransformados = collect($envios->items())->map(function ($envio) {
-            return [
-                'id' => $envio->id,
-                'flujo_id' => $envio->flujo_id,
-                'prospecto_id' => $envio->prospecto_id,
-                'estado' => $envio->estado,
-                'canal' => $envio->canal ?? 'email',
-                'fecha_creacion' => $envio->created_at?->toISOString(),
-                'fecha_enviado' => $envio->fecha_enviado,
-                'contenido' => $envio->contenido ?? '',
-                'metadata' => [
-                    'destinatario' => $envio->prospecto?->email ?? $envio->prospecto?->celular ?? 'Sin destinatario',
-                    'asunto' => $envio->asunto ?? null,
-                    'error' => $envio->error_mensaje ?? null,
-                ],
-                'prospecto' => $envio->prospecto,
-                'flujo' => $envio->flujo,
-            ];
-        });
+        // Transformar cada envío al formato que espera el frontend
+        $enviosTransformados = collect($envios->items())
+            ->map(fn (Envio $envio) => $this->transformEnvio($envio));
 
         return response()->json([
             'data' => $enviosTransformados,
@@ -172,10 +155,39 @@ class EnvioController extends Controller
     {
         $envio->load(['prospecto', 'flujo', 'etapaFlujo']);
 
-        return response()->json([
-            'error' => false,
-            'data' => $envio,
-        ]);
+        // El frontend espera el envío plano, sin envoltorio error/data
+        return response()->json($this->transformEnvio($envio));
+    }
+
+    /**
+     * Transforma un envío al contrato JSON que consume el frontend
+     *
+     * Expone contenido_enviado como "contenido", created_at como
+     * "fecha_creacion" y agrupa destinatario/asunto/error en "metadata".
+     * El destinatario del envío tiene prioridad (para SMS guarda el
+     * teléfono real usado); si está vacío se usa el contacto del prospecto.
+     */
+    private function transformEnvio(Envio $envio): array
+    {
+        return [
+            'id' => $envio->id,
+            'flujo_id' => $envio->flujo_id,
+            'prospecto_id' => $envio->prospecto_id,
+            'estado' => $envio->estado,
+            'canal' => $envio->canal ?? 'email',
+            'fecha_creacion' => $envio->created_at?->toISOString(),
+            'fecha_enviado' => $envio->fecha_enviado,
+            'contenido' => $envio->contenido_enviado ?? '',
+            'metadata' => [
+                'destinatario' => $envio->destinatario
+                    ?: ($envio->prospecto?->email ?? $envio->prospecto?->telefono ?? 'Sin destinatario'),
+                'asunto' => $envio->asunto ?? null,
+                'error' => $envio->metadata['error'] ?? null,
+            ],
+            'prospecto' => $envio->prospecto,
+            'flujo' => $envio->flujo,
+            'etapa' => $envio->etapaFlujo,
+        ];
     }
 
     /**
