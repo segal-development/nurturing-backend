@@ -122,6 +122,12 @@ class RateLimitedMiddleware
      */
     private function isProviderError(\Throwable $e): bool
     {
+        // Local database errors (unique violations, deadlocks, lost DB connection, ...) are never
+        // provider failures, even if the message happens to contain "connection" or ids like "500".
+        if ($e instanceof \Illuminate\Database\QueryException || $e instanceof \PDOException) {
+            return false;
+        }
+
         $message = strtolower($e->getMessage());
 
         // Errores de validación/configuración que NO deben contar para circuit breaker

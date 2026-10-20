@@ -5,6 +5,7 @@ namespace App\Listeners;
 use App\Events\CircuitBreakerClosed;
 use App\Models\FlujoEjecucionEtapa;
 use App\Services\AthenaCampaignService;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -73,6 +74,18 @@ class ResumeEtapasOnCircuitClose
         if (empty($smsNumbers)) {
             return;
         }
+
+        // At most 1 recovery SMS per channel per hour: the breaker can flap many times while the
+        // provider is unstable and each close would otherwise text the on-call phone.
+        $dedupKey = "cb-recovery-sms:{$event->channel}";
+        if (Cache::has($dedupKey)) {
+            Log::info('ResumeEtapasOnCircuitClose: recovery SMS deduplicated (already sent in the last hour)', [
+                'channel' => $event->channel,
+            ]);
+
+            return;
+        }
+        Cache::put($dedupKey, true, now()->addHour());
 
         try {
             $mensaje = sprintf(

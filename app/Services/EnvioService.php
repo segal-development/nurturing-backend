@@ -781,6 +781,23 @@ class EnvioService
             ];
 
         } catch (\Exception $e) {
+            // Unique violation (SQLSTATE 23505) = an Envio already exists for this (prospecto, etapa, canal),
+            // e.g. a prior failed attempt. A failed Envio is terminal and SMS is at-most-once, so this is an
+            // idempotent skip: not a send failure, and it must not be retried nor mark anything as failed.
+            if ($this->esUniqueViolationEnvio($e)) {
+                Log::info('EnvioService: SMS ya registrado para este prospecto y etapa (unique violation) — skip idempotente', [
+                    'prospecto_id' => $prospecto->id,
+                    'etapa_ejecucion_id' => $etapaEjecucionId,
+                ]);
+
+                return [
+                    'success' => true,
+                    'envio_id' => null,
+                    'error' => null,
+                    'skipped' => true,
+                ];
+            }
+
             if ($envio) {
                 $envio->marcarComoFallido($e->getMessage());
             }
