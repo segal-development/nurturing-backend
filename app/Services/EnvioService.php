@@ -790,6 +790,19 @@ class EnvioService
                     'etapa_ejecucion_id' => $etapaEjecucionId,
                 ]);
 
+                // The failed Envio is terminal, so the prospect must still move past this stage;
+                // otherwise catch-up keeps re-selecting it forever. GuardedTransition keeps the
+                // advance to exactly one position.
+                try {
+                    $this->actualizarProgresoProspecto($prospectoEnFlujo, $etapaEjecucionId);
+                } catch (\Throwable $progressError) {
+                    Log::warning('EnvioService: No se pudo avanzar el progreso tras skip idempotente de SMS', [
+                        'prospecto_id' => $prospecto->id,
+                        'etapa_ejecucion_id' => $etapaEjecucionId,
+                        'error' => $progressError->getMessage(),
+                    ]);
+                }
+
                 return [
                     'success' => true,
                     'envio_id' => null,
