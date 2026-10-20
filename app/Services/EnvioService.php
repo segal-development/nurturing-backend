@@ -740,7 +740,10 @@ class EnvioService
             // Truncar SMS si excede 160 caracteres (después de personalización)
             $contenidoPersonalizado = $this->truncarSmsSimesNecesario($contenidoPersonalizado, $prospecto->id);
 
-            $envio = Envio::create([
+            // A row that failed before reaching the provider may be re-claimed instead of inserting a new one.
+            $envio = $this->reclamarEnvioSmsReintentable($prospecto->id, $etapaEjecucionId);
+
+            $envio ??= Envio::create([
                 'prospecto_id' => $prospecto->id,
                 'prospecto_en_flujo_id' => $prospectoEnFlujo->id,
                 'flujo_id' => $flujoId,
@@ -790,6 +793,17 @@ class EnvioService
                     'etapa_ejecucion_id' => $etapaEjecucionId,
                 ]);
 
+                // A retryable row (in flight under the claim winner, or failed before reaching the provider)
+                // may still be re-sent, so the prospect must not move past this stage yet.
+                if ($this->existeEnvioSmsReintentable($prospecto->id, $etapaEjecucionId)) {
+                    return [
+                        'success' => true,
+                        'envio_id' => null,
+                        'error' => null,
+                        'skipped' => true,
+                    ];
+                }
+
                 // The failed Envio is terminal, so the prospect must still move past this stage;
                 // otherwise catch-up keeps re-selecting it forever. GuardedTransition keeps the
                 // advance to exactly one position.
@@ -813,6 +827,7 @@ class EnvioService
 
             if ($envio) {
                 $envio->marcarComoFallido($e->getMessage());
+                $this->registrarReintentoSms($envio, $e);
             }
 
             Log::error('EnvioService: Error al enviar SMS', [
@@ -827,6 +842,103 @@ class EnvioService
                 'error' => $e->getMessage(),
             ];
         }
+    }
+
+    /**
+     * Whether the failure provably happened before the request reached the provider, so the SMS cannot
+     * have been sent. Whitelist only: DNS failure (cURL 6), connection refused/failed (cURL 7), connect or
+     * resolve timeout (cURL 28 "Connection timed out" / "Resolving timed out"). Anything else is ambiguous.
+     *
+     * Residual assumption: the request target does not redirect. Guzzle follows redirects by default, so a
+     * cURL 7 on a redirect hop would not prove that nothing was sent.
+     */
+    private function esFalloPrevioAlEnvio(\Throwable $e): bool
+    {
+        if (! $e instanceof \Illuminate\Http\Client\ConnectionException) {
+            return false;
+        }
+
+        $message = $e->getMessage();
+
+        // Anchored: Guzzle appends the request URL (with the user-controlled SMS body) after the cURL text.
+        return preg_match('/^cURL error (6|7):/i', $message) === 1
+            || preg_match('/^cURL error 28: (Connection|Resolving) timed out/i', $message) === 1;
+    }
+
+    /**
+     * Flags a just-failed SMS Envio as retryable when the failure was provably pre-send. If the failure is
+     * ambiguous, a row that was previously retryable becomes terminal. No-op when the feature is disabled.
+     */
+    private function registrarReintentoSms(Envio $envio, \Throwable $e): void
+    {
+        if (! config('envios.sms_retry.enabled')) {
+            return;
+        }
+
+        $metadata = $envio->metadata ?? [];
+
+        if (! $this->esFalloPrevioAlEnvio($e)) {
+            if (array_key_exists('reintentable', $metadata)) {
+                $metadata['reintentable'] = false;
+                $envio->update(['metadata' => $metadata]);
+            }
+
+            return;
+        }
+
+        $intentos = (int) ($metadata['intentos'] ?? 0) + 1;
+        $metadata['intentos'] = $intentos;
+        $metadata['ultimo_error'] = $e->getMessage();
+        $metadata['reintentable'] = $intentos < (int) config('envios.sms_retry.max_attempts');
+
+        $envio->update(['metadata' => $metadata]);
+    }
+
+    /**
+     * Whether the SMS Envio for this (prospecto, etapa) is flagged retryable, in any estado. Always false
+     * when the feature is disabled, so the legacy skip behaviour is untouched.
+     */
+    private function existeEnvioSmsReintentable(int $prospectoId, ?int $etapaEjecucionId): bool
+    {
+        if (! config('envios.sms_retry.enabled') || ! $etapaEjecucionId) {
+            return false;
+        }
+
+        return Envio::where('prospecto_id', $prospectoId)
+            ->where('flujo_ejecucion_etapa_id', $etapaEjecucionId)
+            ->where('canal', 'sms')
+            ->whereRaw("metadata->>'reintentable' = 'true'")
+            ->exists();
+    }
+
+    /**
+     * Atomically claims a retryable failed SMS Envio (single UPDATE; the affected-row count decides the
+     * winner). Returns the claimed row, or null when disabled or nothing was claimed.
+     */
+    private function reclamarEnvioSmsReintentable(int $prospectoId, ?int $etapaEjecucionId): ?Envio
+    {
+        if (! config('envios.sms_retry.enabled') || ! $etapaEjecucionId) {
+            return null;
+        }
+
+        $query = Envio::where('prospecto_id', $prospectoId)
+            ->where('flujo_ejecucion_etapa_id', $etapaEjecucionId)
+            ->where('canal', 'sms')
+            ->where('estado', 'fallido')
+            ->whereRaw("metadata->>'reintentable' = 'true'")
+            ->whereRaw("COALESCE((metadata->>'intentos')::int, 0) < ?", [(int) config('envios.sms_retry.max_attempts')])
+            ->where('created_at', '>=', now()->subMinutes((int) config('envios.sms_retry.window_minutes')));
+
+        $envioId = (clone $query)->value('id');
+
+        if (! $envioId) {
+            return null;
+        }
+
+        // Re-check the conditions in the UPDATE: only one concurrent worker gets an affected row.
+        $claimed = $query->where('id', $envioId)->update(['estado' => 'pendiente']);
+
+        return $claimed === 1 ? Envio::find($envioId) : null;
     }
 
     /**

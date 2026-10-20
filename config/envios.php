@@ -138,6 +138,24 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | SMS Safe Retry
+    |--------------------------------------------------------------------------
+    |
+    | SMS is at-most-once: a failed Envio is terminal. The only exception is a
+    | transport failure that provably happened BEFORE the request reached the
+    | provider (DNS failure, connection refused, connect timeout). Such a row is
+    | flagged retryable and re-claimed by the next attempt instead of inserting
+    | a new one. Default OFF so the deploy is inert.
+    |
+    */
+    'sms_retry' => [
+        'enabled'        => (bool) env('SMS_SAFE_RETRY_ENABLED', false),
+        'max_attempts'   => (int) env('SMS_SAFE_RETRY_MAX_ATTEMPTS', 5),
+        'window_minutes' => (int) env('SMS_SAFE_RETRY_WINDOW_MINUTES', 180),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Queue Configuration
     |--------------------------------------------------------------------------
     |
