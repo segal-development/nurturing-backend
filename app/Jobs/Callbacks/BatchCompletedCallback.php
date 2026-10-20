@@ -140,6 +140,14 @@ class BatchCompletedCallback
             'condition' => $this->programarVerificacionCondicion($ejecucion, $etapaEjecucion, $targetNodeId, $primeraConexion, $messageId, $prospectoIds),
             'stage' => $this->programarSiguienteEtapa($ejecucion, $targetNode, $targetNodeId, $prospectoIds),
             'end' => $this->finalizarFlujo($ejecucion, $targetNodeId),
+            // Real flow stages carry type sms/email/ambos. The callback must NOT schedule them:
+            // FlujoEjecucionEtapaObserver does it when this etapa is marked 'completed'.
+            // Scheduling here too would double-schedule the next node.
+            'sms', 'email', 'ambos' => Log::debug('BatchCompletedCallback: Next node scheduled by FlujoEjecucionEtapaObserver', [
+                'tipo' => $tipoNodoSiguiente,
+                'node_id' => $targetNodeId,
+                'ejecucion_id' => $ejecucion->id,
+            ]),
             default => Log::warning('BatchCompletedCallback: Tipo de nodo desconocido', ['tipo' => $tipoNodoSiguiente]),
         };
     }
